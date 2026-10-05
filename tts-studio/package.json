@@ -1,0 +1,33 @@
+{
+  "name": "tts-studio",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local dashboard: drop a text script, get an MP3 from the Kokoro model running on your Mac, keep a searchable library.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "setup": "sh scripts/setup.sh",
+    "setup:japanese": "sh scripts/setup.sh --japanese",
+    "dev": "concurrently -k -n api,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "node --watch server/index.js",
+    "dev:client": "vite",
+    "build": "vite build",
+    "start": "node server/index.js",
+    "app": "vite build && node server/index.js",
+    "test": "node --test server/test/*.test.js && python3 -m unittest discover -s engine"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "dotenv": "^18.0.5",
+    "express": "^5.2.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.7.0",
+    "concurrently": "^10.0.5",
+    "vite": "^6.4.3"
+  }
+}
