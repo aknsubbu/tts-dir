@@ -32,11 +32,12 @@ class BuildError(Exception):
 
 # ---------- steps ----------
 
-def run(cmd, **kw):
+def run(cmd, failed=None, **kw):
     print("$ " + " ".join(str(c) for c in cmd), file=sys.stderr, flush=True)
-    code = subprocess.call([str(c) for c in cmd], **kw)
+    # No stdin: given a scene name it does not know, manimgl would otherwise wait for one to be typed.
+    code = subprocess.call([str(c) for c in cmd], stdin=subprocess.DEVNULL, **kw)
     if code:
-        raise BuildError(f"{Path(str(cmd[0])).name} failed (exit {code})")
+        raise BuildError(failed or f"{Path(str(cmd[0])).name} failed (exit {code})")
 
 
 def narrate(root):
@@ -60,7 +61,12 @@ def render(root, config, scene, quality):
     }
     started = time.time()
     # Never -n or -s: manim drops add_sound() while skipping, so a partial render loses audio.
-    run([MANIMGL, root / config["scenes_file"], scene, "-w", *QUALITY[quality], "--video_dir", build / "scenes"], cwd=root, env=env)
+    run(
+        [MANIMGL, root / config["scenes_file"], scene, "-w", *QUALITY[quality], "--video_dir", build / "scenes"],
+        failed=f"rendering {scene} failed; see the manimgl output above",
+        cwd=root,
+        env=env,
+    )
     found = [p for p in (build / "scenes").rglob(f"{scene}.mp4") if p.stat().st_mtime >= started - 1]
     if not found:
         raise BuildError(f"manimgl finished but wrote no {scene}.mp4 under {build / 'scenes'}")
