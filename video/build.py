@@ -35,7 +35,8 @@ class BuildError(Exception):
 def run(cmd, failed=None, **kw):
     print("$ " + " ".join(str(c) for c in cmd), file=sys.stderr, flush=True)
     # No stdin: given a scene name it does not know, manimgl would otherwise wait for one to be typed.
-    code = subprocess.call([str(c) for c in cmd], stdin=subprocess.DEVNULL, **kw)
+    # Their output goes to stderr, so stdout carries only the paths this command prints at the end.
+    code = subprocess.call([str(c) for c in cmd], stdin=subprocess.DEVNULL, stdout=sys.stderr, **kw)
     if code:
         raise BuildError(failed or f"{Path(str(cmd[0])).name} failed (exit {code})")
 
