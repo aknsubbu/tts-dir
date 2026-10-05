@@ -1,0 +1,4 @@
+# Python 3.10 to 3.12. Kept apart from tts-studio/.venv so torch never loads while rendering.
+# Pinned: PyPI's manimgl is stale, and this commit is the one checked on this Mac.
+manimgl @ git+https://github.com/3b1b/manim@fafa083
+av  # VideoMobject needs it; manim lists it in requirements.txt but not in its package metadata
