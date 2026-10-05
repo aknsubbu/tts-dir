@@ -38,6 +38,7 @@ server.on('error', (e) => {
 
 const shutdown = () => {
   engine.stop(); // otherwise the Python process outlives every restart
+  runner.stop(); // and so would a video build
   server.close(() => {
     store.close();
     process.exit(0);
@@ -46,4 +47,7 @@ const shutdown = () => {
 };
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
-process.on('exit', () => engine.stop());
+process.on('exit', () => {
+  engine.stop();
+  runner.stop();
+});

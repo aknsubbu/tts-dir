@@ -10,6 +10,7 @@ export function createRunner({ store, engine, video }) {
   const queue = [];
   const controllers = new Map();
   const cancelled = new Set();
+  const builds = new Set(); // ids of running video builds
   let active = null;
 
   function enqueue(id) {
@@ -90,6 +91,7 @@ export function createRunner({ store, engine, video }) {
     const settings = JSON.parse(row.settings_json);
     const controller = new AbortController();
     controllers.set(id, controller);
+    builds.add(id);
     store.update(id, { status: 'processing', progress_done: 0, progress_total: 0, error: null });
     const outputs = ['mp4', 'srt', 'vtt'].map((ext) => store.videoPath(id, ext));
     try {
@@ -121,7 +123,18 @@ export function createRunner({ store, engine, video }) {
       } else {
         store.update(id, { status: 'error', error: e.message, finished_at: Date.now() });
       }
+    } finally {
+      builds.delete(id);
     }
+  }
+
+  /**
+   * The server is going away. A video build runs in its own process group, so it would
+   * outlive the server (and `node --watch` restarts on every save); kill it now.
+   * The engine's worker is stopped by the engine itself.
+   */
+  function stop() {
+    for (const id of builds) controllers.get(id)?.abort();
   }
 
   /** Cancel a queued or running job. Returns true if there was something to cancel. */
@@ -143,6 +156,7 @@ export function createRunner({ store, engine, video }) {
   return {
     enqueue,
     cancel,
+    stop,
     isActive: (id) => active === id || queue.includes(id),
     get queued() {
       return queue.length + (active ? 1 : 0);

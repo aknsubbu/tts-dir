@@ -8,7 +8,7 @@ import { createRunner } from '../runner.js';
 import { createApp } from '../app.js';
 import { createVideoBuilder } from '../video.js';
 
-let dataDir, videoDir, store, server, base;
+let dataDir, videoDir, store, server, base, runner;
 
 /** Stands in for video/build.py: same arguments, same output, nothing rendered. */
 const FAKE_BUILD = `#!/usr/bin/env node
@@ -96,7 +96,7 @@ before(async () => {
 
   store = createStore(path.join(dataDir, 'data'));
   const getConfig = () => ({ defaultVoiceId: 'af_zed', envFile: null, videoDir, videoBuild: [fake] });
-  const runner = createRunner({ store, engine, video: createVideoBuilder({ getConfig }) });
+  runner = createRunner({ store, engine, video: createVideoBuilder({ getConfig }) });
   const app = createApp({ getConfig, store, runner, engine });
   server = await new Promise((r) => {
     const s = app.listen(0, '127.0.0.1', () => r(s));
@@ -179,6 +179,22 @@ test('cancelling a build kills everything it started', async () => {
   const t1 = Date.now();
   while (alive(pid) && Date.now() - t1 < 2000) await new Promise((r) => setTimeout(r, 20));
   assert.equal(alive(pid), false);
+});
+
+test('stopping the runner (server shutdown) kills a running build', async () => {
+  const pidFile = path.join(videoDir, 'projects', 'slow', 'build', 'grandchild.pid');
+  fs.rmSync(pidFile, { force: true });
+  const { data } = await j('POST', '/api/videos', { project: 'slow' });
+  const t0 = Date.now();
+  while (!fs.existsSync(pidFile) && Date.now() - t0 < 5000) await new Promise((r) => setTimeout(r, 20));
+  await new Promise((r) => setTimeout(r, 50));
+  const pid = Number(fs.readFileSync(pidFile, 'utf8'));
+  assert.ok(alive(pid));
+  runner.stop();
+  const t1 = Date.now();
+  while (alive(pid) && Date.now() - t1 < 2000) await new Promise((r) => setTimeout(r, 20));
+  assert.equal(alive(pid), false);
+  await waitFor(data.generation.id);
 });
 
 test('rejects unknown, unsafe and empty projects', async () => {
