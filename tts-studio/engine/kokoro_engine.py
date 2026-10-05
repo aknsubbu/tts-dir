@@ -6,6 +6,7 @@ Command line:
     kokoro_engine.py script.txt -o out.wav      # .mp3, .wav, .flac or .ogg
     kokoro_engine.py - -o out.mp3 < script.txt  # read text from stdin
     kokoro_engine.py script.txt --voice bm_george --speed 1.1
+    kokoro_engine.py script.txt -o out.wav --timings out.json   # also save word start/end times
     kokoro_engine.py --list-voices
 
 Other modes:
@@ -209,6 +210,42 @@ def list_voices():
 
 # ---------- synthesis ----------
 
+def speak_segments(pipeline, segments, voice, speed, write, pad, on_progress=None):
+    """Run each (segment, pause) through the pipeline, handing audio to `write` and silence
+    lengths to `pad`. Returns (samples, truncated, words).
+
+    `words` is [{text, start, end}] in seconds from the start of the output. Kokoro times
+    each token against its own result's audio, so each is offset by the samples written
+    before that result, pauses included. Voices without word timing (anything but
+    English) give an empty list.
+    """
+    samples = truncated = 0
+    words = []
+    for n, (segment, pause) in enumerate(segments, 1):
+        for result in pipeline(segment, voice=voice, speed=speed, split_pattern=None):
+            if result.audio is None:
+                continue
+            truncated += len(result.phonemes or "") >= MAX_PHONEMES
+            offset = samples / SAMPLE_RATE
+            for token in getattr(result, "tokens", None) or []:
+                if token.start_ts is None or token.end_ts is None:
+                    continue
+                words.append({
+                    "text": token.text,
+                    "start": round(offset + token.start_ts, 4),
+                    "end": round(offset + token.end_ts, 4),
+                })
+            audio = result.audio.detach().cpu().numpy()
+            write(audio)
+            samples += len(audio)
+        if pause and samples:
+            silence = int(pause * SAMPLE_RATE)
+            pad(silence)
+            samples += silence
+        if on_progress:
+            on_progress(n, len(segments))
+    return samples, truncated, words
+
 class Engine:
     def __init__(self, device=None):
         # "auto" uses the Apple GPU when there is one (about twice as fast), else the CPU.
@@ -267,7 +304,7 @@ class Engine:
         return self.pipelines[lang]
 
     def synthesize(self, text, out, voice=DEFAULT_VOICE, speed=1.0, fmt=None, on_progress=None):
-        """Speak `text` into the file `out`. Returns duration, size and segment count."""
+        """Speak `text` into the file `out`. Returns duration, size, segment count and word timings."""
         import numpy as np
         import soundfile as sf
 
@@ -285,22 +322,16 @@ class Engine:
         out = Path(out)
         fmt = (fmt or FORMATS.get(out.suffix.lower()) or "MP3").upper()
         kwargs = {"bitrate_mode": "CONSTANT", "compression_level": 0.5} if fmt == "MP3" else {}
-        samples = truncated = 0
         with sf.SoundFile(str(out), "w", samplerate=SAMPLE_RATE, channels=1, format=fmt, **kwargs) as f:
-            for n, (segment, pause) in enumerate(segments, 1):
-                for result in pipeline(segment, voice=voice, speed=speed, split_pattern=None):
-                    if result.audio is None:
-                        continue
-                    truncated += len(result.phonemes or "") >= MAX_PHONEMES
-                    audio = result.audio.detach().cpu().numpy()
-                    f.write(audio)
-                    samples += len(audio)
-                if pause and samples:
-                    silence = int(pause * SAMPLE_RATE)
-                    f.write(np.zeros(silence, dtype="float32"))
-                    samples += silence
-                if on_progress:
-                    on_progress(n, len(segments))
+            samples, truncated, words = speak_segments(
+                pipeline,
+                segments,
+                voice,
+                speed,
+                write=f.write,
+                pad=lambda n: f.write(np.zeros(n, dtype="float32")),
+                on_progress=on_progress,
+            )
         if not samples:
             out.unlink(missing_ok=True)
             raise EngineError("Kokoro produced no audio for this text.")
@@ -310,6 +341,7 @@ class Engine:
             "durationSec": samples / SAMPLE_RATE,
             "bytes": out.stat().st_size,
             "segments": len(segments),
+            "words": words,
         }
 
 
@@ -354,6 +386,9 @@ def worker():
                 fmt=req.get("format"),
                 on_progress=lambda done, total: send(id=rid, event="progress", done=done, total=total),
             )
+            words = result.pop("words")
+            if req.get("timings"):  # opt-in, so long jobs do not send a huge line nobody reads
+                result["words"] = words
             send(id=rid, event="done", **result)
         except Exception as e:
             try:
@@ -416,6 +451,7 @@ def speak(argv):
     ap.add_argument("--voice", default=os.environ.get("TTS_VOICE") or DEFAULT_VOICE, help=f"voice id (default {DEFAULT_VOICE})")
     ap.add_argument("--speed", type=float, default=1.0, help="speaking rate, 0.5 to 2.0 (default 1.0)")
     ap.add_argument("--raw", action="store_true", help="skip markdown cleanup")
+    ap.add_argument("--timings", metavar="JSON", help="also write word start/end times (English voices only) to this file")
     ap.add_argument("--list-voices", action="store_true", help="show the available voices and exit")
     args = ap.parse_args(argv)
 
@@ -458,6 +494,10 @@ def speak(argv):
         tmp.unlink(missing_ok=True)
         raise
     tmp.replace(out)
+    if args.timings:
+        timings = Path(args.timings).expanduser()
+        timings.parent.mkdir(parents=True, exist_ok=True)
+        timings.write_text(json.dumps({"durationSec": result["durationSec"], "words": result["words"]}, indent=1), encoding="utf-8")
     print(f"\r{result['durationSec']:.1f}s of audio in {time.time() - t0:.1f}s.   ", file=sys.stderr)
     print(str(out.resolve()))
     return 0
