@@ -5,8 +5,10 @@ import express from 'express';
 import { toApi } from './db.js';
 import { cleanText, countWords, slugify } from './text.js';
 import { EngineError, MODEL_ID } from './kokoro.js';
+import { listProjects, readProject } from './video.js';
 
 export const MAX_CHARS = 200_000;
+export const VIDEO_QUALITIES = ['default', 'low', 'medium', 'hd', '4k'];
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 const clamp = (v, min, max, fallback) => {
@@ -177,6 +179,65 @@ export function createApp({ getConfig, store, runner, engine, distDir }) {
     res.status(201).json({ duplicate: false, generation: store.get(id) });
   });
 
+  // Narrated videos: video/projects/<name>, built by video/build.py through the same queue.
+  api.get('/video/projects', (req, res) => {
+    const { videoDir } = getConfig();
+    const projects = videoDir ? listProjects(videoDir) : [];
+    res.json({ projects: projects.map(({ name, voice, speed, scenes }) => ({ name, voice, speed, scenes })) });
+  });
+
+  api.post('/videos', (req, res) => {
+    const b = req.body || {};
+    const { videoDir } = getConfig();
+    const project = videoDir ? readProject(videoDir, String(b.project || '')) : null;
+    if (!project) throw httpError(404, `No video project called “${b.project}”.`);
+    if (!project.scenes.length) throw httpError(400, `Project “${project.name}” lists no scenes in project.json.`);
+    const quality = VIDEO_QUALITIES.includes(b.quality) ? b.quality : 'default';
+    const id = crypto.randomUUID();
+    store.insert({
+      id,
+      kind: 'video',
+      title: String(b.title || '').trim().slice(0, 120) || `${project.name} (video)`,
+      source_name: `video/projects/${project.name}`,
+      text: project.script,
+      text_hash: sha(project.script),
+      config_hash: sha(`video:${id}`), // every build is new: the scenes may have changed
+      char_count: project.script.length,
+      word_count: countWords(project.script),
+      voice_id: project.voice,
+      voice_name: engine.catalog().voices.find((v) => v.voiceId === project.voice)?.name || null,
+      model_id: MODEL_ID,
+      settings_json: JSON.stringify({ project: project.name, quality, speed: project.speed, scenes: project.scenes }),
+      status: 'queued',
+      tags: normalizeTags(b.tags ?? ['video']).join(','),
+      created_at: Date.now(),
+    });
+    runner.enqueue(id);
+    res.status(201).json({ generation: store.get(id) });
+  });
+
+  api.get('/generations/:id/video', (req, res) => {
+    const row = store.getRaw(req.params.id);
+    if (!row || row.kind !== 'video' || row.status !== 'done') throw httpError(404, 'Video not available');
+    const file = store.videoPath(row.id);
+    if (!fs.existsSync(file)) throw httpError(404, 'Video file is missing on disk');
+    if (req.query.download) res.attachment(`${slugify(row.title)}.mp4`);
+    res.type('video/mp4');
+    res.set('Cache-Control', 'private, max-age=3600');
+    res.sendFile(file, { dotfiles: 'allow' });
+  });
+
+  api.get('/generations/:id/captions.:ext', (req, res) => {
+    const row = store.getRaw(req.params.id);
+    const ext = req.params.ext;
+    if (!row || row.kind !== 'video' || row.status !== 'done' || !['srt', 'vtt'].includes(ext)) throw httpError(404, 'Captions not available');
+    const file = store.videoPath(row.id, ext);
+    if (!fs.existsSync(file)) throw httpError(404, 'Captions file is missing on disk');
+    if (req.query.download) res.attachment(`${slugify(row.title)}.${ext}`);
+    res.type(ext === 'vtt' ? 'text/vtt; charset=utf-8' : 'application/x-subrip; charset=utf-8');
+    res.sendFile(file, { dotfiles: 'allow' });
+  });
+
   api.patch('/generations/:id', (req, res) => {
     if (!store.getRaw(req.params.id)) throw httpError(404, 'Not found');
     const b = req.body || {};
@@ -196,7 +257,7 @@ export function createApp({ getConfig, store, runner, engine, distDir }) {
     const row = store.getRaw(req.params.id);
     if (!row) throw httpError(404, 'Not found');
     if (!['error', 'cancelled'].includes(row.status)) throw httpError(409, 'Only failed or cancelled items can be retried.');
-    checkVoice(row.voice_id);
+    if (row.kind !== 'video') checkVoice(row.voice_id); // a video's voice is checked by its build
     store.update(row.id, { status: 'queued', error: null, progress_done: 0, finished_at: null });
     runner.enqueue(row.id);
     res.json(store.get(row.id));
@@ -213,7 +274,8 @@ export function createApp({ getConfig, store, runner, engine, distDir }) {
     if (!row) throw httpError(404, 'Not found');
     runner.cancel(row.id);
     store.remove(row.id);
-    for (const f of [store.audioPath(row.id), `${store.audioPath(row.id)}.tmp`]) {
+    const files = [store.audioPath(row.id), `${store.audioPath(row.id)}.tmp`, ...['mp4', 'srt', 'vtt'].map((e) => store.videoPath(row.id, e))];
+    for (const f of files) {
       try {
         fs.unlinkSync(f);
       } catch {
@@ -225,7 +287,7 @@ export function createApp({ getConfig, store, runner, engine, distDir }) {
 
   api.get('/generations/:id/audio', (req, res) => {
     const row = store.getRaw(req.params.id);
-    if (!row || row.status !== 'done') throw httpError(404, 'Audio not available');
+    if (!row || row.status !== 'done' || row.kind === 'video') throw httpError(404, 'Audio not available');
     const file = store.audioPath(row.id);
     if (!fs.existsSync(file)) throw httpError(404, 'Audio file is missing on disk');
     if (req.query.download) {

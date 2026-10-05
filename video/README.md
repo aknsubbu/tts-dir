@@ -52,6 +52,8 @@ The build does four things:
 3. **Join.** Concatenates the scene videos in the listed order with ffmpeg. Each scene's audio is padded or cut to its picture's length, so sound cannot drift.
 4. **Caption.** Writes SRT and VTT from the word timings. Each caption is placed at the start time its scene recorded for the block, plus the real lengths of the earlier scenes as reported by ffprobe.
 
+The TTS Studio dashboard can run builds too: open **Narrated video** in its left column, pick a project and a quality, and the finished video lands in the library with its captions. Builds share the dashboard's queue, so audio jobs wait while one runs.
+
 Use `--no-narrate` to reuse the manifest as it is. `$KOKORO_PYTHON` and `$MANIMGL` override where the two environments are.
 
 ## A project

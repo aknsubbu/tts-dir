@@ -181,6 +181,7 @@ input[type='range'] { width: 100%; accent-color: var(--accent); }
 .card-error { color: var(--err); font-size: 13px; word-break: break-word; }
 .card-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--muted); font-size: 12.5px; }
 .card-meta span + span::before { content: '·'; margin-right: 14px; opacity: 0.6; }
+.card-meta .kind { color: var(--accent); font-weight: 600; }
 .card-actions { display: flex; gap: 2px; flex: none; }
 
 .badge { flex: none; border-radius: 999px; padding: 1px 10px; font-size: 12px; font-weight: 600; }
@@ -211,6 +212,7 @@ input[type='range'] { width: 100%; accent-color: var(--accent); }
 .drawer-head .title-input { font-size: 19px; }
 .player { background: var(--panel-2); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
 .player audio { width: 100%; }
+.player video { width: 100%; border-radius: 8px; background: #000; }
 .player-controls { flex-wrap: wrap; }
 .status-box { background: var(--panel-2); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }

@@ -120,7 +120,7 @@ function Drafts({ drafts, setDrafts }) {
 
 export default function Composer({
   health, voices, languages, voicesError, settings, setSettings, defaults,
-  autoGenerate, setAutoGenerate, drafts, setDrafts, dragging, onFiles, onPaste, onGenerate,
+  autoGenerate, setAutoGenerate, drafts, setDrafts, dragging, onFiles, onPaste, onGenerate, children,
 }) {
   const [tab, setTab] = useState('files');
   const [busy, setBusy] = useState(false);
@@ -260,6 +260,8 @@ export default function Composer({
           </button>
         </details>
       </section>
+
+      {children}
     </aside>
   );
 }

@@ -57,6 +57,9 @@ CREATE TRIGGER IF NOT EXISTS gen_au AFTER UPDATE OF title, text, tags ON generat
 END;
 `;
 
+// Added after the first release: kind is 'audio' or 'video'. Older libraries gain it on start.
+const MIGRATIONS = [['kind', "ALTER TABLE generations ADD COLUMN kind TEXT NOT NULL DEFAULT 'audio'"]];
+
 const UPDATABLE = new Set([
   'title',
   'tags',
@@ -101,11 +104,13 @@ export function toApi(row, { withText = false } = {}) {
     error: row.error,
     audioBytes: row.audio_bytes,
     durationSec: row.duration_sec,
+    kind: row.kind || 'audio',
     favorite: !!row.favorite,
     tags: row.tags ? row.tags.split(',') : [],
     createdAt: row.created_at,
     finishedAt: row.finished_at,
-    audioUrl: row.status === 'done' ? `/api/generations/${row.id}/audio` : null,
+    audioUrl: row.status === 'done' && row.kind !== 'video' ? `/api/generations/${row.id}/audio` : null,
+    videoUrl: row.status === 'done' && row.kind === 'video' ? `/api/generations/${row.id}/video` : null,
   };
   if (withText) out.text = row.text;
   if (row.snip !== undefined) {
@@ -119,18 +124,22 @@ export function toApi(row, { withText = false } = {}) {
 export function createStore(dataDir) {
   const audioDir = path.join(dataDir, 'audio');
   const previewDir = path.join(dataDir, 'previews');
+  const videoDir = path.join(dataDir, 'video');
   fs.mkdirSync(audioDir, { recursive: true });
+  fs.mkdirSync(videoDir, { recursive: true });
   fs.mkdirSync(previewDir, { recursive: true });
   const db = new Database(path.join(dataDir, 'studio.db'));
   db.pragma('journal_mode = WAL');
   db.exec(SCHEMA);
+  const columns = new Set(db.prepare('PRAGMA table_info(generations)').all().map((c) => c.name));
+  for (const [column, sql] of MIGRATIONS) if (!columns.has(column)) db.exec(sql);
 
   const insertStmt = db.prepare(`
     INSERT INTO generations (
-      id, title, source_name, text, text_hash, config_hash, char_count, word_count,
+      id, kind, title, source_name, text, text_hash, config_hash, char_count, word_count,
       voice_id, voice_name, model_id, settings_json, status, tags, created_at
     ) VALUES (
-      @id, @title, @source_name, @text, @text_hash, @config_hash, @char_count, @word_count,
+      @id, @kind, @title, @source_name, @text, @text_hash, @config_hash, @char_count, @word_count,
       @voice_id, @voice_name, @model_id, @settings_json, @status, @tags, @created_at
     )`);
   const getStmt = db.prepare('SELECT * FROM generations WHERE id = ?');
@@ -143,6 +152,8 @@ export function createStore(dataDir) {
 
   const audioPath = (id) => path.join(audioDir, `${id}.mp3`);
   const previewPath = (voiceId) => path.join(previewDir, `${voiceId}.mp3`);
+  /** A built video and its captions: ext is mp4, srt or vtt. */
+  const videoPath = (id, ext = 'mp4') => path.join(videoDir, `${id}.${ext}`);
 
   function update(id, patch) {
     const keys = Object.keys(patch).filter((k) => UPDATABLE.has(k));
@@ -240,7 +251,8 @@ export function createStore(dataDir) {
     db,
     audioPath,
     previewPath,
-    insert: (row) => insertStmt.run(row),
+    videoPath,
+    insert: (row) => insertStmt.run({ kind: 'audio', ...row }),
     getRaw: (id) => getStmt.get(id),
     get: (id, opts) => toApi(getStmt.get(id), opts),
     findByConfig: (hash) => findByConfigStmt.get(hash),

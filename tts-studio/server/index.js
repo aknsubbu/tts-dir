@@ -3,13 +3,14 @@ import { loadConfig, ROOT } from './config.js';
 import { createStore } from './db.js';
 import { createEngine } from './kokoro.js';
 import { createRunner } from './runner.js';
+import { createVideoBuilder } from './video.js';
 import { createApp } from './app.js';
 
 const cfg = loadConfig();
 const store = createStore(cfg.dataDir);
 const interrupted = store.markInterrupted();
 const engine = createEngine({ getConfig: loadConfig });
-const runner = createRunner({ store, engine });
+const runner = createRunner({ store, engine, video: createVideoBuilder({ getConfig: loadConfig }) });
 const app = createApp({ getConfig: loadConfig, store, runner, engine, distDir: path.join(ROOT, 'dist') });
 
 const server = app.listen(cfg.port, cfg.host, () => {
