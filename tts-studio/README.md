@@ -1,11 +1,11 @@
 # TTS Studio
 
-A local dashboard for text-to-speech. Drop a `.txt` or `.md` script, get an MP3, and keep every script and its audio in a searchable library. The voice is [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M), an open model that runs on your Mac: no API key, no quota, and it works offline.
+A local dashboard with two tabs. **Lessons** turns a topic and your notes into a narrated, animated explainer video. **Audio** turns a `.txt` or `.md` script into an MP3. Everything you make is kept in a searchable library. The voice is [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M), an open model that runs on your Mac: no API key, no quota, and it works offline.
 
 - **Drop or paste** one or many scripts. Audio generation starts straight away (or review a batch first).
 - **Library** of everything you've generated, with full-text search over titles, script text and tags, plus filters for status, voice, favorites and tags.
 - **Player** with speed control, seeking and 15-second skips, plus MP3 and script downloads.
-- **Nothing leaves your Mac.** The model runs in a local Python process and the server binds to `127.0.0.1` only.
+- **Speech never leaves your Mac.** The model runs in a local Python process. The server binds to `127.0.0.1` and refuses requests that come from a page on another site.
 - **54 voices** in American and British English, Spanish, French, Hindi, Italian, Brazilian Portuguese and Mandarin, with Japanese as an optional extra. Each one has a preview.
 
 ## Run it
@@ -31,9 +31,13 @@ For development with hot reload, run `npm run dev` and open <http://localhost:51
 | `npm run app` | Build the UI, then start the server (the everyday command) |
 | `npm start` | Start the server using the last build |
 | `npm run dev` | Server with auto-restart plus Vite dev server on port 5173 |
-| `npm test` | Server and engine tests. The ones that load the real model are skipped until `npm run setup` has run |
+| `npm run author` | The lesson writer on its own, for running it apart from the dashboard |
+| `npm test` | Everything: server and lesson writer (`test:server`), the page (`test:client`), engine and `../video` (`test:python`). The ones that load the real model are skipped until `npm run setup` has run |
+| `npm run lint` | ESLint over the server, the lesson writer and the page |
 
 ## Using it
+
+The page opens on the **Lessons** tab, described in the next section. Switch to **Audio** in the header for plain text-to-speech:
 
 1. **Drop files anywhere on the page**, or click the drop zone. Multiple files are queued and generated one at a time.
 2. Pick a **voice** and speed on the left, in the language your script is written in. **Preview** plays a sample. Settings are remembered.
@@ -51,19 +55,31 @@ Turn off **Generate immediately on drop** to collect files into a batch first. Y
 - **Regenerate** in the details panel re-runs a stored script with whatever voice and settings are currently selected on the left. Handy for trying another voice.
 - **Markdown is stripped** before speaking (headings, bold, links, code blocks, bullet markers). You can turn this off.
 - **Cancel works mid-job.** It restarts the voice engine, which takes a few seconds. If the engine crashes during a job, the job is retried once. Other failures show the reason on the card, with a Retry button. If the server restarts mid-job, that job is marked failed so you can retry it.
+
 ## Explain it to me: a video from a topic
 
-The panel at the top of the left column makes a narrated, animated explainer from a topic and your notes. It is built for mathematics: derivations, proofs, the maths behind machine learning.
+The **Lessons** tab makes a narrated, animated explainer from a topic and your notes. It is built for mathematics: derivations, proofs, the maths behind machine learning.
 
 1. Type a **topic** and what you want to understand.
-2. Paste your **notes**, or drop `.txt` and `.md` files on the panel. Notes are optional, but with them the video uses your notation and your examples.
+2. Add your **notes**: type or paste them, drop files anywhere on the page, or paste a screenshot. Notes are optional, but with them the video uses your notation and your examples.
 3. Pick a length, a quality and an English voice, then press **Make the video**.
 
 The card in the library shows each stage, and the finished video plays in the details panel with captions.
 
+Notes can be more than text:
+
+| Kind of file | What happens to it |
+| --- | --- |
+| `.txt`, `.md` | Read in the browser and added to the notes box |
+| Images (PNG, JPEG, WebP, GIF, HEIC, TIFF, BMP) | Shown to Claude as pictures: handwritten working, textbook pages, diagrams. Each is re-encoded as a JPEG of at most 2000 pixels on its long side, which also drops the location and camera details in phone photos |
+| PDF | Shown to Claude whole, pages and figures included |
+| Word, RTF, OpenDocument (`.docx`, `.doc`, `.rtf`, `.odt`) | Turned into text and added to the typed notes |
+
+A lesson takes up to 12 attached files and 20 MB in total, and 60,000 characters of text. Converting images and documents uses `sips` and `textutil`, which ship with macOS; elsewhere PNG, JPEG, WebP and GIF images are accepted as they are, and other images and all documents are refused.
+
 | Stage on the card | What is happening |
 | --- | --- |
-| Writing the lesson | Claude writes the narration and the animation code, with `claude -p` |
+| Writing the lesson (or Reading the notes and writing the lesson) | Claude writes the narration and the animation code, with `claude -p` |
 | Checking the scenes | The narration is spoken and every scene is run once without drawing it |
 | Fixing the scenes (1 of 3) | A scene failed, so Claude is shown the error and rewrites |
 | Polishing timing and layout | It runs, but text overlaps or an animation ran past its word, so Claude gets one go at those |
@@ -73,7 +89,7 @@ A two-minute video takes roughly five to ten minutes from start to finish. Most 
 
 **What it needs.** [Claude Code](https://claude.com/claude-code) installed and signed in (`claude` on your PATH), and the `video/` folder set up as its README describes (manim, ffmpeg, LaTeX). Each lesson uses your Claude plan or credits: one request to write, plus one for each fix.
 
-**What you get on disk.** Every lesson is a normal project in `../video/projects/<topic>-<id>/`: `script.txt`, `scenes.py`, your `brief.json`, and under `build/author/` every prompt sent to Claude and every answer. Edit the script or the scenes and rebuild from the **Narrated video** panel, or with `python3 ../video/build.py <name>`.
+**What you get on disk.** Every lesson is a normal project in `../video/projects/<topic>-<id>/`: `script.txt`, `scenes.py`, your `brief.json`, the attached files in `notes/`, and under `build/author/` every prompt sent to Claude and every answer. Edit the script or the scenes and rebuild from the **Narrated video** panel under the lesson form, or with `python3 ../video/build.py <name>`.
 
 **How it works.** The lesson writer is a second small Express server in `author/`. `npm start` runs it in the same process on port 8790; `npm run author` runs it alone. It gives Claude no tools, so Claude can only send text back, and that text is checked by `../video/check.py` before anything is built. The prompts are plain files you can edit without restarting:
 
@@ -86,10 +102,11 @@ A two-minute video takes roughly five to ten minutes from start to finish. Most 
 
 **Good to know**
 
-- The scenes are Python that Claude wrote and your machine runs, with your permissions. The check refuses imports beyond manim, numpy, `math`, `random`, `itertools` and `functools`, and names such as `open`, `eval`, `os`, `sys` and `getattr`, but that is a guard against accidents and not a sandbox: code written to get around it can. Notes are sent to Claude as material to teach from, so only use notes you trust, or read `scenes.py` before building when you are unsure.
+- The scenes are Python that Claude wrote and your machine runs. Two things confine them. The check refuses imports beyond manim, numpy, `math`, `random`, `itertools` and `functools`, and names such as `open`, `eval`, `os`, `sys` and `getattr`. And every scene runs inside the macOS sandbox: no network, no writing outside its own project folder and the temporary folders, no reading `~/.ssh`, keychains and the like. It can still read most other files, so it is confinement and not isolation; see `../video/README.md`.
 - Lessons need an English voice, because animations follow individual words and only the English voices report word timings.
 - If Claude cannot get the scenes to run in three fixes, the card fails with the last error. **Retry** carries on from the files already written.
 - Cancel works at every stage, and stops Claude, the check or the build.
+- Pictures and PDFs go to Claude with the first request only. A fix is about code that failed, so it is sent the script and scenes alone.
 
 ## Where things are stored
 
@@ -99,10 +116,13 @@ Everything lives in `data/` inside the project (override with `TTS_DATA_DIR`):
 data/
   studio.db        SQLite database: scripts, settings, status, and the full-text index
   audio/<id>.mp3   one MP3 per finished generation
+  video/<id>.*     each finished video: .mp4, captions as .srt and .vtt, and a .jpg still for its card
   previews/        cached voice samples
 ```
 
-Back it up by copying that folder. Deleting an item in the UI removes its database row, its search entry and its MP3.
+Back it up by copying that folder. Deleting an item in the UI removes its database row, its search entry and its MP3 or video files.
+
+A lesson also has a project folder in `../video/projects/`, holding the script, the scenes, your notes and any photos or PDFs you attached. Deleting a lesson asks a second question: whether to delete that folder too. Say no and it stays, so you can rebuild from it. Projects you wrote by hand, such as `demo`, are never deleted from the dashboard. From the command line it is `DELETE /api/generations/:id?project=1`.
 
 ## Configuration
 
@@ -125,6 +145,8 @@ All optional. Put them in a `.env` in this folder or the one above it, or in the
 | `AUTHOR_PORT` | `8790` | Port for the lesson writer |
 | `TTS_AUTHOR_URL` | none | Use a lesson writer running elsewhere and do not start one |
 | `TTS_VIDEO_DIR` | `../video` | The folder holding `build.py`, `check.py` and `projects/` |
+| `TTS_VIDEO_BUILD` | `python3 ../video/build.py` | Another executable to build a video with |
+| `TTS_AUTHOR_CHECK` | `python3 ../video/check.py` | Another executable to check a lesson with |
 
 ## From the terminal
 
@@ -153,7 +175,19 @@ curl -s localhost:8787/api/lessons \
   -d "$(jq -n --rawfile n notes.md '{topic:"Gradient of logistic regression", goal:"Why it collapses to (y_hat - y) x", notes:$n, minutes:2, quality:"low"}')"
 ```
 
-They show up in the library like anything dropped in the UI. Other useful routes: `GET /api/generations?q=search+terms`, `GET /api/generations/:id/audio`, `GET /api/voices`, `GET /api/stats`.
+They show up in the library like anything dropped in the UI. To attach files, add `attachments: [{ name, data }]` with each file's bytes in base64.
+
+Other useful routes:
+
+| Route | What it gives |
+| --- | --- |
+| `GET /api/generations?q=search+terms&kind=video` | The library. `kind` is `audio` or `video`; `status`, `voiceId`, `tag`, `favorite`, `sort`, `limit` and `offset` also filter |
+| `GET /api/generations/:id/audio` | The MP3 |
+| `GET /api/generations/:id/video`, `/poster`, `/captions.srt`, `/captions.vtt` | A video, its still and its captions |
+| `GET /api/generations/:id/notes/:file` | An image or PDF attached to a lesson |
+| `POST /api/videos` | Build a project in `../video/projects/`: `{ project, quality }` |
+| `POST /api/generations/:id/retry`, `/cancel` | Retry a failed or cancelled item, or stop a running one |
+| `GET /api/video/projects`, `/api/voices`, `/api/stats`, `/api/health` | Projects, voices, counts, and the engine's state |
 
 ## Project layout
 
@@ -172,7 +206,11 @@ server/
   text.js         markdown cleanup
   test/           node:test suite (fake engine, plus tests against the real one)
   lessons.js      follows a lesson through the lesson writer, then queues its build
-  video.js        runs video/build.py
+  notes.js        saves the images, PDFs and documents attached to a lesson
+  video.js        runs video/build.py, and makes a poster for a video that has none
+  local.js        refuses requests that do not come from this machine's own pages
+shared/
+  limits.js       what a lesson may be given; imported by the server and the page
 author/
   index.js        the lesson writer on its own (npm run author)
   app.js          its HTTP API: POST /lessons, GET /lessons/:id, POST /lessons/:id/cancel
@@ -182,8 +220,9 @@ author/
   prompts/        the prompt templates and the worked example
   test/           tests with a fake claude and a fake check
 client/
-  src/App.jsx     state, polling, drag and drop
+  src/App.jsx     state, polling, drag and drop, the Lessons and Audio tabs
   src/components/ Header, LessonPanel, Composer, VideoPanel, Library, Drawer, Toasts
+  src/**/*.test.* vitest tests
 scripts/setup.sh  creates .venv and downloads the model
 ```
 
@@ -195,3 +234,5 @@ scripts/setup.sh  creates .venv and downloads the model
 - **A word is mispronounced (English voices only).** Write it as a link whose target is its phonemes between slashes, for example `[Kokoro](/kˈOkəɹO/)`. These hints are kept even when markdown is stripped.
 - **`npm install` fails on `better-sqlite3`.** It normally installs a prebuilt binary. If your Node version has none, install Xcode command line tools (`xcode-select --install`) so it can compile, or switch to an LTS Node.
 - **Port already in use.** Set `PORT=8788` in your `.env`.
+- **"This server only answers on localhost."** Open the dashboard as `http://localhost:8787` or `http://127.0.0.1:8787`, not through another hostname or a tunnel.
+- **A lesson's scene fails with "Operation not permitted" or a network error.** The scene tried to reach outside its sandbox. Lessons should never need to.

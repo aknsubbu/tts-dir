@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 
 from captions import block_cues, group_cues, to_srt, to_vtt
+from sandbox import wrap as sandboxed
 
 HERE = Path(__file__).resolve().parent
 KOKORO_PYTHON = os.environ.get("KOKORO_PYTHON") or str(HERE.parent / "tts-studio" / ".venv" / "bin" / "python")
@@ -68,8 +69,9 @@ def render(root, config, scene, quality):
     }
     started = time.time()
     # Never -n or -s: manim drops add_sound() while skipping, so a partial render loses audio.
+    # The scene's own Python runs here, so this is the step that is sandboxed (see sandbox.py).
     run(
-        [MANIMGL, root / config["scenes_file"], scene, "-w", *QUALITY[quality], "--video_dir", build / "scenes"],
+        sandboxed([MANIMGL, root / config["scenes_file"], scene, "-w", *QUALITY[quality], "--video_dir", build / "scenes"], root),
         failed=f"rendering {scene} failed; see the manimgl output above",
         cwd=root,
         env=env,

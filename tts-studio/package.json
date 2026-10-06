@@ -17,7 +17,11 @@
     "start": "node server/index.js",
     "author": "node author/index.js",
     "app": "vite build && node server/index.js",
-    "test": "node --test server/test/*.test.js author/test/*.test.js && python3 -m unittest discover -s engine && python3 -m unittest discover -s ../video"
+    "test": "npm run test:server && npm run test:client && npm run test:python",
+    "test:server": "node --test server/test/*.test.js author/test/*.test.js",
+    "test:client": "vitest run",
+    "test:python": "python3 -m unittest discover -s engine && python3 -m unittest discover -s ../video",
+    "lint": "eslint ."
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",
@@ -27,8 +31,17 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
     "@vitejs/plugin-react": "^4.7.0",
     "concurrently": "^10.0.5",
-    "vite": "^6.4.3"
+    "eslint": "^9.39.5",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.13.0",
+    "jsdom": "^30.1.2",
+    "vite": "^6.4.3",
+    "vitest": "^5.0.3"
   }
 }

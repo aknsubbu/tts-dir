@@ -5,13 +5,12 @@ import express from 'express';
 import { toApi } from './db.js';
 import { cleanText, countWords, slugify } from './text.js';
 import { EngineError, MODEL_ID } from './kokoro.js';
-import { listProjects, readProject } from './video.js';
+import { listProjects, makePoster, PROJECT_NAME, readProject } from './video.js';
 import { NotesError, saveAttachments } from './notes.js';
+import { localOnly } from './local.js';
+import { LESSON_MINUTES, MAX_NOTES, VIDEO_QUALITIES } from '../shared/limits.js';
 
 export const MAX_CHARS = 200_000;
-export const VIDEO_QUALITIES = ['default', 'low', 'medium', 'hd', '4k'];
-export const LESSON_MINUTES = [1, 2, 3, 5];
-export const MAX_NOTES = 60_000; // the lesson writer's limit too
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 const clamp = (v, min, max, fallback) => {
@@ -46,6 +45,7 @@ function deriveTitle(text) {
 export function createApp({ getConfig, store, runner, engine, lessons, distDir }) {
   const app = express();
   app.disable('x-powered-by');
+  app.use(localOnly());
   // A lesson may carry photos and PDFs of notes, so that one route takes a larger body.
   const smallJson = express.json({ limit: '8mb' });
   const lessonJson = express.json({ limit: '48mb' });
@@ -68,6 +68,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, distDir }
   }
 
   const previews = new Map(); // voice id -> in-flight preview render
+  const posters = new Map(); // generation id -> in-flight poster
   let lastStart = 0;
 
   api.get('/health', (req, res) => {
@@ -293,11 +294,20 @@ export function createApp({ getConfig, store, runner, engine, lessons, distDir }
     res.sendFile(file, { dotfiles: 'allow' });
   });
 
-  // A still from the video, for its card. Videos built before posters existed have none.
-  api.get('/generations/:id/poster', (req, res) => {
+  // A still from the video, for its card. A video built before posters existed gets one
+  // made the first time its card is shown.
+  api.get('/generations/:id/poster', async (req, res) => {
     const row = store.getRaw(req.params.id);
-    const file = row && store.videoPath(row.id, 'jpg');
-    if (!row || row.kind !== 'video' || !fs.existsSync(file)) throw httpError(404, 'No poster');
+    if (!row || row.kind !== 'video' || row.status !== 'done') throw httpError(404, 'No poster');
+    const file = store.videoPath(row.id, 'jpg');
+    if (!fs.existsSync(file)) {
+      const video = store.videoPath(row.id);
+      if (!fs.existsSync(video)) throw httpError(404, 'No poster');
+      if (!posters.has(row.id)) {
+        posters.set(row.id, makePoster(video, file, row.duration_sec).finally(() => posters.delete(row.id)));
+      }
+      if (!(await posters.get(row.id))) throw httpError(404, 'No poster');
+    }
     res.set('Cache-Control', 'private, max-age=86400');
     res.sendFile(file, { dotfiles: 'allow' });
   });
@@ -367,6 +377,17 @@ export function createApp({ getConfig, store, runner, engine, lessons, distDir }
     if (!row) throw httpError(404, 'Not found');
     if (!runner.cancel(row.id)) lessons?.cancel(row.id);
     store.remove(row.id);
+    // ?project=1 also removes the folder a lesson was written into: its script, scenes, notes
+    // and attached files. Only for lessons, whose folder this server made; a project you wrote
+    // by hand is never touched. Skipped while another library item was built from the same folder.
+    const settings = JSON.parse(row.settings_json);
+    let projectRemoved = false;
+    if (['1', 'true'].includes(String(req.query.project)) && settings.lesson && PROJECT_NAME.test(String(settings.project))) {
+      if (!store.countBySource(row.source_name)) {
+        fs.rmSync(path.join(getConfig().videoDir, 'projects', settings.project), { recursive: true, force: true });
+        projectRemoved = true;
+      }
+    }
     const files = [store.audioPath(row.id), `${store.audioPath(row.id)}.tmp`, ...['mp4', 'srt', 'vtt', 'jpg'].map((e) => store.videoPath(row.id, e))];
     for (const f of files) {
       try {
@@ -375,7 +396,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, distDir }
         /* no file to remove */
       }
     }
-    res.json({ ok: true });
+    res.json({ ok: true, projectRemoved });
   });
 
   api.get('/generations/:id/audio', (req, res) => {

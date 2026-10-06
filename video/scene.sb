@@ -1,0 +1,19 @@
+; What a scene may do while manimgl runs it. See sandbox.py. Later rules win.
+(version 1)
+(allow default)
+
+; Nothing in or out. LaTeX, ffmpeg and the GPU need none.
+(deny network*)
+
+; Write only in the project, the temporary folders, and the caches manim, fontconfig and TeX keep.
+(deny file-write*)
+(allow file-write*
+  (subpath (param "PROJECT"))
+  (subpath (param "TMP"))
+  (subpath "/private/tmp")
+  (subpath "/private/var/folders")
+  (subpath (string-append (param "HOME") "/Library/Caches"))
+  (subpath (string-append (param "HOME") "/.cache"))
+  (subpath (string-append (param "HOME") "/.matplotlib"))
+  (subpath (string-append (param "HOME") "/Library/texlive"))
+  (subpath "/dev"))

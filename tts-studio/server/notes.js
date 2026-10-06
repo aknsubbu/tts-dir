@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { DOC_EXT, IMAGE_EXT, MAX_BYTES, MAX_FILES } from '../shared/limits.js';
 
 /**
  * Files a person adds to a lesson's notes that are not plain text.
@@ -12,10 +13,6 @@ import path from 'node:path';
  * They are saved in the lesson's project, in notes/. Plain-text formats never reach this
  * file: the browser reads those itself and puts them in the notes box.
  */
-export const IMAGE_EXT = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'heic', 'heif', 'tif', 'tiff', 'bmp'];
-export const DOC_EXT = ['docx', 'doc', 'rtf', 'odt'];
-export const MAX_FILES = 12; // the API is stricter about image size past 20 images and PDFs
-export const MAX_BYTES = 20 * 1024 * 1024; // all files together; a request to Claude may be 32 MB once encoded
 const MAX_EDGE = 2000; // pixels on the long side: enough to read handwriting, small enough to send many
 const SIPS = '/usr/bin/sips'; // both ship with macOS
 const TEXTUTIL = '/usr/bin/textutil';

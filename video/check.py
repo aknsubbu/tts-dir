@@ -28,13 +28,15 @@ import sys
 from pathlib import Path
 
 import build
+import sandbox
 from narrate import _MARK, ScriptError, load_project, parse_script
 
 HERE = Path(__file__).resolve().parent
 
 # What a scenes.py may import and call. The scenes are run as written, so keep this short.
-# These rules catch accidents and the obvious ways out; they are not a sandbox, and code that
-# sets out to get around them can. Scenes from notes you do not trust should be read first.
+# These rules catch accidents and the obvious ways out, and give Claude an error it can fix.
+# They are not what confines a scene: sandbox.py is, by running it with no network and no
+# writing outside its project.
 ALLOWED_IMPORTS = {"manimlib", "voiceover", "numpy", "math", "random", "itertools", "functools", "sys", "pathlib"}
 FORBIDDEN_NAMES = {"eval", "exec", "compile", "__import__", "open", "input", "breakpoint", "globals"}
 # --strict is for scenes a model wrote (the lesson writer passes it). They have no reason to
@@ -237,7 +239,7 @@ def try_scene(root, config, scene, report):
     print(f"$ manimgl {config['scenes_file']} {scene} -s", file=sys.stderr, flush=True)
     try:
         done = subprocess.run(
-            [build.MANIMGL, str(root / config["scenes_file"]), scene, "-s", "-w", "-l", "--video_dir", str(out)],
+            sandbox.wrap([build.MANIMGL, str(root / config["scenes_file"]), scene, "-s", "-w", "-l", "--video_dir", str(out)], root),
             cwd=root, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, timeout=SCENE_TIMEOUT,
         )

@@ -36,7 +36,7 @@ export const api = {
   get: (id) => req(`/generations/${id}`),
   create: (body) => req('/generations', { method: 'POST', body }),
   patch: (id, body) => req(`/generations/${id}`, { method: 'PATCH', body }),
-  remove: (id) => req(`/generations/${id}`, { method: 'DELETE' }),
+  remove: (id, { project = false } = {}) => req(`/generations/${id}${query({ project: project && 1 })}`, { method: 'DELETE' }),
   retry: (id) => req(`/generations/${id}/retry`, { method: 'POST' }),
   cancel: (id) => req(`/generations/${id}/cancel`, { method: 'POST' }),
   videoProjects: () => req('/video/projects'),

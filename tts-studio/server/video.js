@@ -1,10 +1,10 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { EngineError } from './kokoro.js';
 
-const PROJECT_NAME = /^[A-Za-z0-9_-]{1,80}$/;
+export const PROJECT_NAME = /^[A-Za-z0-9_-]{1,80}$/;
 
 /** Video projects in video/projects/: [{ name, voice, speed, scenes, script }]. */
 export function listProjects(videoDir) {
@@ -42,6 +42,33 @@ export function readProject(videoDir, name) {
   } catch {
     return null;
   }
+}
+
+// A server started from a login item may not have Homebrew on its PATH.
+function findFfmpeg() {
+  const dirs = [...(process.env.PATH || '').split(path.delimiter), '/opt/homebrew/bin', '/usr/local/bin'];
+  return dirs.filter(Boolean).map((d) => path.join(d, 'ffmpeg')).find((f) => fs.existsSync(f)) || null;
+}
+
+/**
+ * A still from a video, as build.py makes one: from late enough that the screen has something
+ * on it. Resolves to true once `jpg` exists, false when it could not be made (no ffmpeg, say).
+ */
+export function makePoster(mp4, jpg, durationSec) {
+  const ffmpeg = findFfmpeg();
+  if (!ffmpeg) return Promise.resolve(false);
+  const tmp = `${jpg}.part.jpg`;
+  const shot = (at) =>
+    new Promise((resolve) => {
+      execFile(ffmpeg, ['-y', '-v', 'error', '-ss', at.toFixed(2), '-i', mp4, '-frames:v', '1', '-vf', 'scale=960:-2', '-q:v', '3', tmp], { timeout: 60_000 }, (err) => {
+        const ok = !err && fs.existsSync(tmp) && fs.statSync(tmp).size > 0;
+        if (ok) fs.renameSync(tmp, jpg);
+        else fs.rmSync(tmp, { force: true });
+        resolve(ok);
+      });
+    });
+  // If the recorded length is wrong and that moment is past the end, the first frame will do.
+  return shot((Number(durationSec) || 0) * 0.62).then((ok) => ok || shot(0));
 }
 
 /**

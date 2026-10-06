@@ -1,15 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { fmtBytes, fmtNumber, useLocalStorage } from '../utils.js';
+// The server enforces these; they are one file so the two cannot disagree.
+import { DOC_EXT, IMAGE_EXT, MAX_BYTES, MAX_FILES, MAX_NOTES, TEXT_EXT } from '../../../shared/limits.js';
 
-const MAX_NOTES = 60000;
-// The same lists and limits as server/notes.js.
-const IMAGE_EXT = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'heic', 'heif', 'tif', 'tiff', 'bmp'];
-const DOC_EXT = ['docx', 'doc', 'rtf', 'odt'];
-const TEXT_EXT = ['txt', 'md', 'markdown', 'text'];
 const PREVIEWABLE = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp']; // HEIC and TIFF do not show in a browser
-const MAX_FILES = 12;
-const MAX_BYTES = 20 * 1024 * 1024;
 const ACCEPT = [...TEXT_EXT, ...IMAGE_EXT, 'pdf', ...DOC_EXT].map((e) => `.${e}`).join(',');
 
 const LENGTHS = [

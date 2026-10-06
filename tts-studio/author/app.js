@@ -1,8 +1,9 @@
 import crypto from 'node:crypto';
 import express from 'express';
 import { createAuthor, PROJECT_NAME } from './pipeline.js';
+import { localOnly } from '../server/local.js';
+import { MAX_NOTES } from '../shared/limits.js';
 
-export const MAX_NOTES = 60_000; // characters of notes sent to Claude
 const KEEP_FINISHED = 50;
 
 /**
@@ -19,6 +20,7 @@ const KEEP_FINISHED = 50;
 export function createAuthorApp({ getConfig, author = createAuthor({ getConfig }) }) {
   const app = express();
   app.disable('x-powered-by');
+  app.use(localOnly());
   app.use(express.json({ limit: '2mb' }));
 
   const jobs = new Map(); // id -> { id, project, status, stage, error, result, input, controller }

@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    # macOS: attached photos and documents are converted with sips and textutil, and
+    # scenes run inside sandbox-exec. Elsewhere those tests would only be skipped.
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: tts-studio
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tts-studio/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci
+      - run: npm run lint
+      # Kokoro and manim are not installed here, so the tests that need the real model
+      # skip themselves; everything else runs against fakes.
+      - run: npm test
+      - run: npm run build

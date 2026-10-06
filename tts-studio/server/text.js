@@ -1,7 +1,7 @@
 /** Strip markdown and tidy whitespace so the text reads naturally when spoken. */
 export function cleanText(text, { stripMarkdown = true } = {}) {
   let t = String(text ?? '')
-    .replace(/^﻿/, '')
+    .replace(/^\uFEFF/, '')
     .replace(/\r\n?/g, '\n');
   if (stripMarkdown) {
     t = t

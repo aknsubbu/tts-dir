@@ -274,6 +274,7 @@ export function createStore(dataDir) {
     findByConfig: (hash) => findByConfigStmt.get(hash),
     update,
     remove: (id) => deleteStmt.run(id).changes,
+    countBySource: (source) => db.prepare('SELECT COUNT(*) AS n FROM generations WHERE source_name = ?').get(source).n,
     list,
     stats,
     tags,

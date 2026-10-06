@@ -52,7 +52,7 @@ The build does four things:
 3. **Join.** Concatenates the scene videos in the listed order with ffmpeg. Each scene's audio is padded or cut to its picture's length, so sound cannot drift.
 4. **Caption.** Writes SRT and VTT from the word timings. Each caption is placed at the start time its scene recorded for the block, plus the real lengths of the earlier scenes as reported by ffprobe.
 
-The TTS Studio dashboard can run builds too: open **Narrated video** in its left column, pick a project and a quality, and the finished video lands in the library with its captions. Builds share the dashboard's queue, so audio jobs wait while one runs.
+The TTS Studio dashboard can run builds too: on its **Lessons** tab open **Narrated video** under the lesson form, pick a project and a quality, and the finished video lands in the library with its captions. Builds share the dashboard's queue, so audio jobs wait while one runs.
 
 Use `--no-narrate` to reuse the manifest as it is. `$KOKORO_PYTHON` and `$MANIMGL` override where the two environments are.
 
@@ -67,6 +67,18 @@ python3 check.py demo --static   # only read the files
 
 This is what the dashboard's **Explain it to me** panel runs on the scenes Claude writes; see `../tts-studio/README.md`. It also limits what a `scenes.py` may import to manim, `voiceover`, numpy and a few standard modules.
 
+## The sandbox
+
+A `scenes.py` is ordinary Python, and a lesson's was written by a model. So `check.py` and `build.py` run every scene inside the macOS sandbox (`sandbox.py`, with the rules in `scene.sb`):
+
+| | |
+| --- | --- |
+| Network | None |
+| Writing | Only the scene's own project folder, the temporary folders, and the caches manim, matplotlib, fontconfig and TeX keep |
+| Reading | Not `~/.ssh`, `~/.aws`, `~/.config`, `~/.claude`, keychains, browser profiles or mail. Everything else can be read |
+
+It is confinement, not isolation: a scene can still read most of your files, but with no network and nowhere else to write there is nowhere to send them. `sandbox-exec` ships with macOS; on a system without it scenes run unconfined. Set `VIDEO_SANDBOX=0` to turn it off for a hand-written project that needs the network or another folder.
+
 ## A project
 
 A project is a folder under `projects/`:
@@ -78,6 +90,8 @@ projects/demo/
   scenes.py      the manim scenes
   build/         everything generated (git ignores it)
 ```
+
+A project the dashboard's lesson writer made also has `brief.json` (the topic and notes it was written from), `notes/` (attached photos and PDFs) and `author.json` (written once the scenes passed their check). Git ignores `brief.json` and `notes/` for new lessons, because they hold your own notes. The example lesson's `brief.json` was committed before that rule and is still tracked.
 
 ```json
 { "voice": "af_heart", "speed": 1.0, "script": "script.txt", "scenes_file": "scenes.py", "scenes": ["Slope", "SyncCheck"] }

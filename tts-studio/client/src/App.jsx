@@ -293,9 +293,14 @@ export default function App() {
   }
 
   async function removeItem(g) {
-    if (!window.confirm(`Delete “${g.title}” and its audio file? This cannot be undone.`)) return;
+    const what = g.kind === 'video' ? 'video' : 'audio file';
+    if (!window.confirm(`Delete “${g.title}” and its ${what}? This cannot be undone.`)) return;
+    // A lesson also has a folder in video/projects: what Claude wrote, and the notes and files given to it.
+    const project = !!g.settings?.lesson && window.confirm(
+      `Also delete this lesson’s project folder?\n\n${g.sourceName}\n\nIt holds the script, the scenes, your notes and any photos or PDFs you attached. Cancel keeps the folder.`,
+    );
     try {
-      await api.remove(g.id);
+      await api.remove(g.id, { project });
       if (selected?.id === g.id) setSelected(null);
       await Promise.all([refreshList(), refreshMeta()]);
     } catch (e) {

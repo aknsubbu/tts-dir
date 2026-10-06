@@ -1,5 +1,6 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -221,4 +222,26 @@ test('a library from before videos gains the kind column, and old rows are audio
   assert.equal(g.audioUrl, '/api/generations/old/audio');
   assert.equal(g.videoUrl, null);
   reopened.close();
+});
+
+const FFMPEG = ['/opt/homebrew/bin', '/usr/local/bin', ...(process.env.PATH || '').split(path.delimiter)].map((d) => path.join(d, 'ffmpeg')).find((f) => fs.existsSync(f));
+
+test('a video with no poster gets one made on first request', { skip: !FFMPEG && 'needs ffmpeg' }, async () => {
+  const { data } = await j('POST', '/api/videos', { project: 'demo', quality: 'low' });
+  const done = await waitFor(data.generation.id);
+  const jpg = store.videoPath(done.id, 'jpg');
+  assert.ok(!fs.existsSync(jpg), 'the fake build writes no poster');
+
+  // What the fake build wrote is not a video, so no poster can be made: the card just has none.
+  assert.equal((await fetch(base + done.posterUrl)).status, 404);
+  assert.ok(!fs.existsSync(jpg) && !fs.existsSync(`${jpg}.part.jpg`));
+
+  // With a real video in its place, as for one built before posters existed.
+  execFileSync(FFMPEG, ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=320x240:d=1', '-pix_fmt', 'yuv420p', store.videoPath(done.id)]);
+  const [a, b] = await Promise.all([fetch(base + done.posterUrl), fetch(base + done.posterUrl)]);
+  assert.equal(a.status, 200);
+  assert.equal(b.status, 200);
+  assert.equal(a.headers.get('content-type'), 'image/jpeg');
+  assert.ok((await a.arrayBuffer()).byteLength > 100);
+  assert.ok(fs.existsSync(jpg), 'and it is kept for next time');
 });

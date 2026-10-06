@@ -1,6 +1,7 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { createStore } from '../db.js';
@@ -297,4 +298,52 @@ test('an older library gains the stage column', () => {
   assert.ok(again.db.prepare('PRAGMA table_info(generations)').all().some((c) => c.name === 'stage'));
   again.close();
   fs.rmSync(old, { recursive: true, force: true });
+});
+
+test('deleting a lesson keeps its project folder unless asked, and then removes notes and all', async () => {
+  const folder = (g) => path.join(config.videoDir, 'projects', g.settings.project);
+  box.answers([answer(), answer()]);
+  const kept = await settled((await j('POST', '/api/lessons', LESSON)).data.generation.id);
+  const gone = await settled((await j('POST', '/api/lessons', { ...LESSON, attachments: [{ name: 'page.pdf', data: Buffer.from('%PDF-1.4 notes').toString('base64') }] })).data.generation.id);
+  assert.equal(kept.status, 'done', kept.error);
+  assert.equal(gone.status, 'done', gone.error);
+  assert.ok(fs.existsSync(path.join(folder(gone), 'notes', 'page.pdf')));
+
+  const plain = await j('DELETE', `/api/generations/${kept.id}`);
+  assert.equal(plain.data.projectRemoved, false);
+  assert.ok(fs.existsSync(path.join(folder(kept), 'scenes.py')), 'a plain delete leaves the project for rebuilding');
+
+  // A second library item built from the same folder keeps it alive.
+  const rebuilt = await j('POST', '/api/videos', { project: gone.settings.project, quality: 'low' });
+  await settled(rebuilt.data.generation.id);
+  // (it is not a lesson row, so asking through it removes nothing either)
+  assert.equal((await j('DELETE', `/api/generations/${rebuilt.data.generation.id}?project=1`)).data.projectRemoved, false);
+  assert.ok(fs.existsSync(folder(gone)));
+
+  const whole = await j('DELETE', `/api/generations/${gone.id}?project=1`);
+  assert.equal(whole.data.projectRemoved, true);
+  assert.ok(!fs.existsSync(folder(gone)), 'script, scenes, notes and attached files are gone');
+  assert.ok(fs.existsSync(path.dirname(folder(gone))), 'and nothing above it');
+});
+
+test('only pages on this machine may talk to the dashboard or the lesson writer', async () => {
+  const ask = (url, headers, method = 'GET') => fetch(url, { method, headers }).then((r) => r.status);
+  const author = config.authorUrl;
+  // A page that points its own domain at 127.0.0.1 still sends its own name as Host.
+  const raw = (url, host) => new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const sock = net.connect(Number(u.port), u.hostname, () => sock.write(`GET ${u.pathname} HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`));
+    let said = '';
+    sock.on('data', (d) => (said += d)).on('end', () => resolve(Number(said.split(' ')[1]))).on('error', reject);
+  });
+  assert.equal(await raw(`${base}/api/health`, 'evil.example:80'), 403);
+  assert.equal(await raw(`${author}/health`, 'evil.example'), 403);
+  assert.equal(await raw(`${base}/api/health`, `localhost:${new URL(base).port}`), 200);
+  assert.equal(await raw(`${base}/api/health`, '[::1]:8787'), 200);
+
+  assert.equal(await ask(`${base}/api/health`, { Origin: 'https://evil.example' }), 403);
+  assert.equal(await ask(`${base}/api/lessons`, { Origin: 'null', 'Content-Type': 'application/json' }, 'POST'), 403);
+  assert.equal(await ask(`${author}/health`, { Origin: 'https://evil.example' }), 403);
+  assert.equal(await ask(`${base}/api/health`, { Origin: 'http://localhost:5173' }), 200, 'the vite dev page');
+  assert.equal(await ask(`${base}/api/health`, {}), 200, 'curl sends no Origin');
 });
