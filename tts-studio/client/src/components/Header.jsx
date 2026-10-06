@@ -16,7 +16,12 @@ const ENGINE = {
   error: { tone: 'bad', label: 'Voice engine offline' },
 };
 
-export default function Header({ health, stats }) {
+const MODES = [
+  ['lessons', 'Lessons', 'Narrated videos from your notes'],
+  ['audio', 'Audio', 'Scripts read aloud as MP3s'],
+];
+
+export default function Header({ health, stats, mode, setMode }) {
   const engine = health?.engine;
   const pill = ENGINE[engine?.status] || ENGINE.error;
 
@@ -26,9 +31,17 @@ export default function Header({ health, stats }) {
         <Logo />
         <div>
           <h1>TTS Studio</h1>
-          <p>Scripts in, audio out</p>
+          <p>{mode === 'audio' ? 'Scripts in, audio out' : 'Notes in, lessons out'}</p>
         </div>
       </div>
+
+      <nav className="modes" role="tablist" aria-label="What to make">
+        {MODES.map(([id, label, title]) => (
+          <button key={id} role="tab" aria-selected={mode === id} className={mode === id ? 'on' : ''} title={title} onClick={() => setMode(id)}>
+            {label}
+          </button>
+        ))}
+      </nav>
 
       <div className="topbar-right">
         {stats && (

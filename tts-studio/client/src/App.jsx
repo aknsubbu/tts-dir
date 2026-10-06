@@ -28,6 +28,10 @@ export default function App() {
 
   const [settings, setSettings] = useLocalStorage('tts-studio.kokoro-settings', DEFAULT_SETTINGS);
   const [autoGenerate, setAutoGenerate] = useLocalStorage('tts-studio.auto', true);
+  // Lessons (narrated videos made from notes) or plain audio. It decides what the left column
+  // offers, what a dropped file is for, and which half of the library is shown.
+  const [mode, setMode] = useLocalStorage('tts-studio.mode', 'lessons');
+  const kind = mode === 'audio' ? 'audio' : 'video';
   const [drafts, setDrafts] = useState([]);
   const [dragging, setDragging] = useState(false);
 
@@ -46,9 +50,10 @@ export default function App() {
       tag: filters.tag,
       favorite: filters.favorite,
       sort: filters.sort,
+      kind,
       limit,
     }),
-    [debouncedQ, filters.status, filters.voiceId, filters.tag, filters.favorite, filters.sort, limit],
+    [debouncedQ, filters.status, filters.voiceId, filters.tag, filters.favorite, filters.sort, kind, limit],
   );
   const paramsRef = useRef(params);
   paramsRef.current = params;
@@ -217,6 +222,9 @@ export default function App() {
   }
   const addFilesRef = useRef(addFiles);
   addFilesRef.current = addFiles;
+  const lessonAddRef = useRef(null); // set by LessonPanel
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
 
   async function generateDrafts() {
     const batch = drafts;
@@ -234,8 +242,6 @@ export default function App() {
   useEffect(() => {
     let depth = 0;
     const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes('Files');
-    // Files dropped on the lesson panel are notes for a lesson; the panel takes them itself.
-    const onLesson = (e) => !!e.target?.closest?.('.panel.lesson');
     const enter = (e) => {
       if (!hasFiles(e)) return;
       e.preventDefault();
@@ -246,7 +252,7 @@ export default function App() {
       if (!hasFiles(e)) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'copy';
-      setDragging(!onLesson(e)); // the lesson panel shows its own outline instead
+      setDragging(true);
     };
     const leave = (e) => {
       if (!hasFiles(e)) return;
@@ -258,7 +264,10 @@ export default function App() {
       e.preventDefault();
       depth = 0;
       setDragging(false);
-      if (!onLesson(e)) addFilesRef.current([...e.dataTransfer.files]);
+      // In lessons mode a dropped file is a note for the lesson being written; otherwise a script.
+      const files = [...e.dataTransfer.files];
+      if (modeRef.current === 'lessons') lessonAddRef.current?.(files);
+      else addFilesRef.current(files);
     };
     window.addEventListener('dragenter', enter);
     window.addEventListener('dragover', over);
@@ -322,13 +331,22 @@ export default function App() {
       {dragging && (
         <div className="drop-overlay" aria-hidden="true">
           <div className="drop-overlay-card">
-            <strong>Drop to {autoGenerate ? 'generate audio' : 'add to the batch'}</strong>
-            <span>.txt and .md files, as many as you like</span>
+            {mode === 'lessons' ? (
+              <>
+                <strong>Drop to add to your lesson notes</strong>
+                <span>Photos, screenshots, PDFs, Word and text files</span>
+              </>
+            ) : (
+              <>
+                <strong>Drop to {autoGenerate ? 'generate audio' : 'add to the batch'}</strong>
+                <span>.txt and .md files, as many as you like</span>
+              </>
+            )}
           </div>
         </div>
       )}
 
-      <Header health={health} stats={stats} />
+      <Header health={health} stats={stats} mode={mode} setMode={(m) => { setLimit(30); setMode(m); }} />
 
       {engineStatus === 'error' && (
         <div className="banner error" role="alert">
@@ -342,35 +360,40 @@ export default function App() {
       )}
 
       <div className="layout">
-        <Composer
-          health={health}
-          voices={voices}
-          languages={languages}
-          voicesError={voicesError}
-          settings={settings}
-          setSettings={setSettings}
-          defaults={DEFAULT_SETTINGS}
-          autoGenerate={autoGenerate}
-          setAutoGenerate={setAutoGenerate}
-          drafts={drafts}
-          setDrafts={setDrafts}
-          dragging={dragging}
-          onFiles={(files) => addFiles(files)}
-          onPaste={addPasted}
-          onGenerate={generateDrafts}
-          lead={
+        {/* Both columns stay mounted, so switching modes never loses a lesson or a batch in progress. */}
+        <div className="side">
+          <aside className="composer" hidden={mode !== 'lessons'}>
             <LessonPanel
               voices={voices}
               defaultVoiceId={settings.voiceId}
               engineReady={health?.engine?.status === 'ready'}
               toast={toast}
+              addRef={lessonAddRef}
               onQueued={() => Promise.all([refreshList(), refreshStats()])}
             />
-          }
-        >
-          <VideoPanel toast={toast} onQueued={() => Promise.all([refreshList(), refreshStats()])} />
-        </Composer>
+            <VideoPanel toast={toast} onQueued={() => Promise.all([refreshList(), refreshStats()])} />
+          </aside>
+          <Composer
+            hidden={mode !== 'audio'}
+            health={health}
+            voices={voices}
+            languages={languages}
+            voicesError={voicesError}
+            settings={settings}
+            setSettings={setSettings}
+            defaults={DEFAULT_SETTINGS}
+            autoGenerate={autoGenerate}
+            setAutoGenerate={setAutoGenerate}
+            drafts={drafts}
+            setDrafts={setDrafts}
+            dragging={dragging}
+            onFiles={(files) => addFiles(files)}
+            onPaste={addPasted}
+            onGenerate={generateDrafts}
+          />
+        </div>
         <Library
+          mode={mode}
           list={list}
           filters={filters}
           setFilters={(f) => {

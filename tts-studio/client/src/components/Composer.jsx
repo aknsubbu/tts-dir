@@ -120,7 +120,7 @@ function Drafts({ drafts, setDrafts }) {
 
 export default function Composer({
   health, voices, languages, voicesError, settings, setSettings, defaults,
-  autoGenerate, setAutoGenerate, drafts, setDrafts, dragging, onFiles, onPaste, onGenerate, lead, children,
+  autoGenerate, setAutoGenerate, drafts, setDrafts, dragging, onFiles, onPaste, onGenerate, hidden,
 }) {
   const [tab, setTab] = useState('files');
   const [busy, setBusy] = useState(false);
@@ -161,8 +161,7 @@ export default function Composer({
   const voiceLabel = (v) => (v.gender ? `${v.name} (${v.gender})` : v.name);
 
   return (
-    <aside className="composer">
-      {lead}
+    <aside className="composer" hidden={hidden}>
       <section className="panel">
         <div className="tabs" role="tablist">
           <button role="tab" aria-selected={tab === 'files'} className={tab === 'files' ? 'on' : ''} onClick={() => setTab('files')}>
@@ -262,7 +261,6 @@ export default function Composer({
         </details>
       </section>
 
-      {children}
     </aside>
   );
 }
