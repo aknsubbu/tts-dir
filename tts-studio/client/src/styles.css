@@ -239,12 +239,40 @@ input[type='range'] { width: 100%; accent-color: var(--accent); }
   * { animation: none !important; transition: none !important; }
 }
 
-/* Lesson panel */
-.panel-title { margin: 0 0 4px; font-size: 16px; }
+/* ---------- modes ---------- */
+[hidden] { display: none !important; }
+.side { min-width: 0; align-self: stretch; } /* full row height, so the column inside can stick */
+.modes { display: flex; gap: 4px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 4px; box-shadow: var(--shadow); }
+.modes button { border: none; background: transparent; padding: 6px 18px; border-radius: 8px; color: var(--muted); font-weight: 600; }
+.modes button:hover { color: var(--text); }
+.modes button.on { background: var(--accent); color: var(--accent-ink); }
+
+/* ---------- lesson panel ---------- */
+.panel-title { margin: 0 0 4px; font-size: 17px; }
 .panel.lesson { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
-.panel.lesson.over { border-style: dashed; border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--panel)); }
 textarea.input.short { min-height: 58px; }
 .row.wrap { flex-wrap: wrap; align-items: flex-end; }
 .field.grow { flex: 1 1 130px; }
-.over-limit { color: var(--danger, #d9534f); }
+.over-limit { color: var(--err); }
 button.link { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; cursor: pointer; text-decoration: underline; }
+.btn.big { padding: 11px 16px; font-size: 15px; }
+
+.note-drop { display: flex; flex-direction: column; gap: 2px; align-items: center; text-align: center; padding: 14px 12px; border: 2px dashed var(--border); border-radius: 12px; color: var(--muted); font-size: 13px; cursor: pointer; transition: all 0.15s; }
+.note-drop strong { color: var(--text); font-size: 14px; }
+.note-drop:hover { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+
+.attachments, .note-files { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; }
+.attachment, .note-files a { position: relative; display: flex; flex-direction: column; gap: 4px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 6px; font-size: 11.5px; color: var(--text); text-decoration: none; min-width: 0; }
+.note-files a:hover { border-color: var(--accent); }
+.attachment img, .note-files img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 6px; background: var(--panel); }
+.attachment-icon { display: grid; place-items: center; width: 100%; aspect-ratio: 4 / 3; border-radius: 6px; background: var(--panel); font-size: 26px; }
+.attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-remove { position: absolute; top: 2px; right: 2px; width: 22px; height: 22px; border-radius: 50%; border: none; background: rgba(0, 0, 0, 0.6); color: #fff; line-height: 1; font-size: 15px; display: grid; place-items: center; padding: 0; }
+.attachment-remove:hover { background: var(--err); }
+
+/* ---------- video posters on cards ---------- */
+.play.poster { width: 112px; height: 63px; border-radius: 10px; position: relative; overflow: hidden; padding: 0; background: #000; }
+.play.poster img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.play.poster .play-icon { position: relative; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: rgba(0, 0, 0, 0.55); color: #fff; font-size: 12px; padding-left: 2px; opacity: 0.85; transition: opacity 0.12s; }
+.card:hover .play.poster .play-icon { opacity: 1; background: var(--accent); color: var(--accent-ink); }
+@media (max-width: 560px) { .play.poster { width: 80px; height: 45px; } }

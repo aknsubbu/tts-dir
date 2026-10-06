@@ -54,6 +54,27 @@ function VideoPlayer({ g, autoplay }) {
   );
 }
 
+/** The pictures and PDFs Claude was shown with a lesson's notes. */
+function NoteFiles({ id, attachments }) {
+  if (!attachments?.length) return null;
+  const url = (a) => `/api/generations/${id}/notes/${encodeURIComponent(a.file.split('/').pop())}`;
+  return (
+    <section className="block">
+      <h4>Notes Claude read</h4>
+      <ul className="note-files">
+        {attachments.map((a) => (
+          <li key={a.file}>
+            <a href={url(a)} target="_blank" rel="noreferrer" title={a.name}>
+              {a.kind === 'image' ? <img src={url(a)} alt={a.name} loading="lazy" /> : <span className="attachment-icon" aria-hidden="true">📄</span>}
+              <span className="attachment-name">{a.name}</span>
+            </a>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export default function Drawer({
   id, autoplay, summary, query, allTags,
   onClose, onPatch, onFavorite, onDelete, onCancel, onRetry, onRegenerate, toast,
@@ -256,9 +277,10 @@ export default function Drawer({
                       {s.lesson.goal ? ` — ${s.lesson.goal}` : ''}
                       {s.lesson.fixes ? ` · fixed ${s.lesson.fixes}×` : ''}
                       {s.lesson.warnings ? ` · ${s.lesson.warnings} layout or timing note${s.lesson.warnings === 1 ? '' : 's'}` : ''}
+                      {s.lesson.costUsd != null ? ` · Claude cost $${s.lesson.costUsd.toFixed(2)}` : ''}
                     </dd>
                     <dt>Files</dt>
-                    <dd><code>video/projects/{s.project}/</code> (script.txt, scenes.py)</dd>
+                    <dd><code>video/projects/{s.project}/</code> (script.txt, scenes.py{s.lesson.attachments?.length ? ', notes/' : ''})</dd>
                   </>
                 )}
                 {s && g.kind !== 'video' && (
@@ -275,6 +297,8 @@ export default function Drawer({
                 {g.finishedAt && g.status === 'done' && (<><dt>Finished</dt><dd>{fmtDate(g.finishedAt)}</dd></>)}
               </dl>
             </section>
+
+            <NoteFiles id={g.id} attachments={s?.lesson?.attachments} />
 
             <section className="block grow-block">
               <div className="row">

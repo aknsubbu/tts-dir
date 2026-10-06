@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { fmtDuration, fmtNumber, isActive, parseSnippet, timeAgo } from '../utils.js';
 
 export function Marked({ parts }) {
@@ -36,6 +37,8 @@ function Card({ g, selected, onOpen, onFavorite, onDelete, onCancel, onRetry }) 
   const titleParts = parseSnippet(g.titleSnippet);
   const snippetParts = parseSnippet(g.snippet);
   const done = g.status === 'done';
+  const [noPoster, setNoPoster] = useState(false); // videos built before posters existed have none
+  const poster = done && g.posterUrl && !noPoster;
   const stop = (fn) => (e) => {
     e.stopPropagation();
     fn();
@@ -54,13 +57,14 @@ function Card({ g, selected, onOpen, onFavorite, onDelete, onCancel, onRetry }) 
       tabIndex={0}
     >
       <button
-        className="play"
+        className={`play ${poster ? 'poster' : ''}`}
         disabled={!done}
         aria-label={done ? `Play ${g.title}` : 'Not ready yet'}
         title={done ? 'Play' : 'Not ready yet'}
         onClick={stop(() => onOpen(g.id, true))}
       >
-        {done ? '▶' : isActive(g) ? <span className="spinner" /> : '!'}
+        {poster && <img src={g.posterUrl} alt="" loading="lazy" onError={() => setNoPoster(true)} />}
+        {done ? <span className="play-icon">▶</span> : isActive(g) ? <span className="spinner" /> : '!'}
       </button>
 
       <div className="card-body">
@@ -75,7 +79,7 @@ function Card({ g, selected, onOpen, onFavorite, onDelete, onCancel, onRetry }) 
         {g.error && g.status !== 'done' && <p className="card-error">{g.error}</p>}
 
         <div className="card-meta">
-          {g.kind === 'video' && <span className="kind">▶ Video</span>}
+          {g.kind === 'video' && <span className="kind">{g.settings?.lesson ? 'Lesson' : 'Video'}</span>}
           <span>{g.voiceName || g.voiceId}</span>
           <span>{fmtNumber(g.wordCount)} words</span>
           {done && <span>{fmtDuration(g.durationSec)}</span>}
@@ -132,13 +136,14 @@ function Card({ g, selected, onOpen, onFavorite, onDelete, onCancel, onRetry }) 
 }
 
 export default function Library({
-  list, filters, setFilters, stats, tags, selectedId,
+  mode, list, filters, setFilters, stats, tags, selectedId,
   onOpen, onFavorite, onDelete, onCancel, onRetry, onMore,
 }) {
   const set = (patch) => setFilters({ ...filters, ...patch });
   const hasFilters = Boolean(filters.q || filters.status || filters.voiceId || filters.tag || filters.favorite);
   const searching = Boolean(filters.q.trim());
   const voiceOptions = stats?.voices || [];
+  const noun = (n) => (mode === 'audio' ? (n === 1 ? 'script' : 'scripts') : n === 1 ? 'video' : 'videos');
 
   return (
     <main className="library">
@@ -151,7 +156,7 @@ export default function Library({
           <input
             className="input"
             type="search"
-            placeholder="Search titles, script text and tags"
+            placeholder={mode === 'audio' ? 'Search titles, script text and tags' : 'Search lessons: titles, narration and tags'}
             value={filters.q}
             onChange={(e) => set({ q: e.target.value })}
             aria-label="Search the library"
@@ -209,7 +214,7 @@ export default function Library({
 
         <div className="result-line">
           <span>
-            {list.loaded ? `${fmtNumber(list.total)} ${hasFilters ? 'match' + (list.total === 1 ? '' : 'es') : list.total === 1 ? 'script' : 'scripts'}` : 'Loading…'}
+            {list.loaded ? `${fmtNumber(list.total)} ${hasFilters ? 'match' + (list.total === 1 ? '' : 'es') : noun(list.total)}` : 'Loading…'}
           </span>
           {hasFilters && (
             <button className="link" onClick={() => setFilters({ q: '', status: '', voiceId: '', tag: '', favorite: false, sort: '' })}>
@@ -230,8 +235,17 @@ export default function Library({
             </>
           ) : (
             <>
-              <h2>Your library is empty</h2>
-              <p>Drop a .txt script on the left. It’s saved here with its audio, and you can search every script later.</p>
+              {mode === 'audio' ? (
+                <>
+                  <h2>No audio yet</h2>
+                  <p>Drop a .txt script on the left. It’s saved here with its audio, and you can search every script later.</p>
+                </>
+              ) : (
+                <>
+                  <h2>No lessons yet</h2>
+                  <p>Name a topic on the left and drop in your notes, photos of handwritten pages or PDFs. The finished video lands here.</p>
+                </>
+              )}
             </>
           )}
         </section>
