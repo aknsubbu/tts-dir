@@ -30,7 +30,7 @@ export default function Header({ health, stats, mode, setMode }) {
       <div className="brand">
         <Logo />
         <div>
-          <h1>TTS Studio</h1>
+          <h1>Narrated Proofs</h1>
           <p>{mode === 'audio' ? 'Scripts in, audio out' : 'Notes in, lessons out'}</p>
         </div>
       </div>

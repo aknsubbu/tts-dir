@@ -355,7 +355,7 @@ export default function App() {
 
       {engineStatus === 'error' && (
         <div className="banner error" role="alert">
-          <strong>{health.unreachable ? 'Cannot reach the TTS Studio server.' : 'The Kokoro voice engine is not running.'}</strong>{' '}
+          <strong>{health.unreachable ? 'Cannot reach the Narrated Proofs server.' : 'The Kokoro voice engine is not running.'}</strong>{' '}
           {health.unreachable ? (
             <>Start it with <code>npm run dev</code> (or <code>npm start</code>). This page reconnects on its own.</>
           ) : (

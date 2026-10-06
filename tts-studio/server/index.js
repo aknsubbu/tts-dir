@@ -26,7 +26,7 @@ authorServer?.on('error', (e) => {
 });
 
 const server = app.listen(cfg.port, cfg.host, () => {
-  console.log(`\n  TTS Studio       http://localhost:${cfg.port}`);
+  console.log(`\n  Narrated Proofs  http://localhost:${cfg.port}`);
   console.log(`  Dev UI (vite)    http://localhost:5173   (when running npm run dev)`);
   console.log(`  Library data     ${cfg.dataDir}`);
   console.log(`  Lesson writer    ${cfg.authorUrl || `http://localhost:${cfg.authorPort}`}   (asks Claude with \`${cfg.claudeBin} -p\`)`);

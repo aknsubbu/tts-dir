@@ -1,4 +1,4 @@
-# TTS Studio
+# Narrated Proofs: the dashboard
 
 A local dashboard with two tabs. **Lessons** turns a topic and your notes into a narrated, animated explainer video. **Audio** turns a `.txt` or `.md` script into an MP3. Everything you make is kept in a searchable library. The voice is [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M), an open model that runs on your Mac: no API key, no quota, and it works offline.
 

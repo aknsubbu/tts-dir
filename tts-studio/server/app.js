@@ -430,7 +430,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, distDir }
       res
         .type('html')
         .send(
-          '<h3>TTS Studio API is running.</h3><p>The web UI is not built yet. Run <code>npm run build</code>, or use <code>npm run dev</code> and open http://localhost:5173.</p>',
+          '<h3>Narrated Proofs API is running.</h3><p>The web UI is not built yet. Run <code>npm run build</code>, or use <code>npm run dev</code> and open http://localhost:5173.</p>',
         ),
     );
   }

@@ -30,7 +30,7 @@ export function createLessons({ store, runner, getConfig, pollMs = 1500 }) {
     return data;
   }
 
-  const unreachable = () => `The lesson writer is not running at ${base()}. Restart TTS Studio, then press Retry.`;
+  const unreachable = () => `The lesson writer is not running at ${base()}. Restart Narrated Proofs, then press Retry.`;
 
   function fail(id, message) {
     watching.delete(id);
