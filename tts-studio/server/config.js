@@ -44,6 +44,10 @@ export function loadConfig() {
     port: Number(pick('PORT', 8787)),
     host: '127.0.0.1', // local only; the dashboard is never exposed to your network
     dataDir: path.resolve(pick('TTS_DATA_DIR', path.join(ROOT, 'data'))),
+    // Narrated videos: the video/ folder next to tts-studio, and the command that builds one
+    // (default: python3 video/build.py). TTS_VIDEO_BUILD names another executable.
+    videoDir: path.resolve(pick('TTS_VIDEO_DIR', path.join(path.dirname(ROOT), 'video'))),
+    videoBuild: pick('TTS_VIDEO_BUILD', '') ? [String(pick('TTS_VIDEO_BUILD', '')).trim()] : null,
     envFile,
   };
 }

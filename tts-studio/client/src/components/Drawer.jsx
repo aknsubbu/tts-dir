@@ -44,6 +44,16 @@ function Player({ src, autoplay }) {
   );
 }
 
+function VideoPlayer({ g, autoplay }) {
+  return (
+    <div className="player">
+      <video key={g.videoUrl} src={g.videoUrl} controls preload="metadata" autoPlay={autoplay} playsInline>
+        <track kind="captions" src={`/api/generations/${g.id}/captions.vtt`} srcLang="en" label="Captions" default />
+      </video>
+    </div>
+  );
+}
+
 export default function Drawer({
   id, autoplay, summary, query, allTags,
   onClose, onPatch, onFavorite, onDelete, onCancel, onRetry, onRegenerate, toast,
@@ -148,7 +158,7 @@ export default function Drawer({
             </div>
 
             {g.status === 'done' ? (
-              <Player src={g.audioUrl} autoplay={autoplay} />
+              g.kind === 'video' ? <VideoPlayer g={g} autoplay={autoplay} /> : <Player src={g.audioUrl} autoplay={autoplay} />
             ) : (
               <div className={`status-box ${g.status}`}>
                 <div className="row">
@@ -165,11 +175,17 @@ export default function Drawer({
             )}
 
             <div className="actions">
-              {g.status === 'done' && (
+              {g.status === 'done' && g.kind !== 'video' && (
                 <a className="btn primary" href={`${g.audioUrl}?download=1`} download>Download MP3</a>
               )}
+              {g.status === 'done' && g.kind === 'video' && (
+                <>
+                  <a className="btn primary" href={`${g.videoUrl}?download=1`} download>Download MP4</a>
+                  <a className="btn" href={`/api/generations/${g.id}/captions.srt?download=1`} download>Captions (SRT)</a>
+                </>
+              )}
               <a className="btn" href={`/api/generations/${g.id}/script?download=1`} download>Download script</a>
-              <button
+              {g.kind !== 'video' && <button
                 className="btn"
                 title="Run this script again with the voice and settings currently selected on the left"
                 onClick={async () => {
@@ -178,7 +194,7 @@ export default function Drawer({
                 }}
               >
                 Regenerate
-              </button>
+              </button>}
               <button className={`btn ${g.favorite ? 'primary' : ''}`} aria-pressed={g.favorite} onClick={() => onFavorite(g)}>
                 {g.favorite ? '★ Favorited' : '☆ Favorite'}
               </button>
@@ -223,10 +239,16 @@ export default function Drawer({
                 <dt>Length</dt><dd>{fmtNumber(g.wordCount)} words · {fmtNumber(g.charCount)} characters</dd>
                 {g.status === 'done' && (
                   <>
-                    <dt>Audio</dt><dd>{fmtDuration(g.durationSec)} · {fmtBytes(g.audioBytes)}</dd>
+                    <dt>{g.kind === 'video' ? 'Video' : 'Audio'}</dt><dd>{fmtDuration(g.durationSec)} · {fmtBytes(g.audioBytes)}</dd>
                   </>
                 )}
-                {s && (
+                {s && g.kind === 'video' && (
+                  <>
+                    <dt>Project</dt>
+                    <dd>{s.project} · {s.scenes?.join(', ')} · {s.quality} quality</dd>
+                  </>
+                )}
+                {s && g.kind !== 'video' && (
                   <>
                     <dt>Settings</dt>
                     <dd>

@@ -39,4 +39,6 @@ export const api = {
   remove: (id) => req(`/generations/${id}`, { method: 'DELETE' }),
   retry: (id) => req(`/generations/${id}/retry`, { method: 'POST' }),
   cancel: (id) => req(`/generations/${id}/cancel`, { method: 'POST' }),
+  videoProjects: () => req('/video/projects'),
+  buildVideo: (body) => req('/videos', { method: 'POST', body }),
 };

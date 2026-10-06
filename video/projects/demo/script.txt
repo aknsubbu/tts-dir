@@ -1,0 +1,12 @@
+# Narration for the demo. Each [block-id] line starts a block that a scene plays
+# with `with self.voiceover("block-id")`. A mark is a bookmark a scene can sync to.
+
+[slope]
+Every straight line has a <mark name="slope"/>slope.
+It tells you how far the line <mark name="rise"/>rises for each step you take to the <mark name="run"/>right.
+
+[slope-ratio]
+Divide the rise by the run, and you get one number that describes the whole line.
+
+[sync]
+This last scene is a timing check. Watch the square. It should flash exactly <mark name="flash"/>now.

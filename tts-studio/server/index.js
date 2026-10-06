@@ -3,13 +3,14 @@ import { loadConfig, ROOT } from './config.js';
 import { createStore } from './db.js';
 import { createEngine } from './kokoro.js';
 import { createRunner } from './runner.js';
+import { createVideoBuilder } from './video.js';
 import { createApp } from './app.js';
 
 const cfg = loadConfig();
 const store = createStore(cfg.dataDir);
 const interrupted = store.markInterrupted();
 const engine = createEngine({ getConfig: loadConfig });
-const runner = createRunner({ store, engine });
+const runner = createRunner({ store, engine, video: createVideoBuilder({ getConfig: loadConfig }) });
 const app = createApp({ getConfig: loadConfig, store, runner, engine, distDir: path.join(ROOT, 'dist') });
 
 const server = app.listen(cfg.port, cfg.host, () => {
@@ -37,6 +38,7 @@ server.on('error', (e) => {
 
 const shutdown = () => {
   engine.stop(); // otherwise the Python process outlives every restart
+  runner.stop(); // and so would a video build
   server.close(() => {
     store.close();
     process.exit(0);
@@ -45,4 +47,7 @@ const shutdown = () => {
 };
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
-process.on('exit', () => engine.stop());
+process.on('exit', () => {
+  engine.stop();
+  runner.stop();
+});

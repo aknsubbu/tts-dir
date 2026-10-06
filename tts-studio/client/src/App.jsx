@@ -5,6 +5,7 @@ import Header from './components/Header.jsx';
 import Composer from './components/Composer.jsx';
 import Library from './components/Library.jsx';
 import Drawer from './components/Drawer.jsx';
+import VideoPanel from './components/VideoPanel.jsx';
 import Toasts from './components/Toasts.jsx';
 
 export const DEFAULT_SETTINGS = {
@@ -353,7 +354,9 @@ export default function App() {
           onFiles={(files) => addFiles(files)}
           onPaste={addPasted}
           onGenerate={generateDrafts}
-        />
+        >
+          <VideoPanel toast={toast} onQueued={() => Promise.all([refreshList(), refreshStats()])} />
+        </Composer>
         <Library
           list={list}
           filters={filters}

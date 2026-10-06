@@ -85,6 +85,7 @@ All optional. Put them in a `.env` in this folder or the one above it, or in the
 python3 ../tts.py script.md                      # writes script.mp3 next to the input
 python3 ../tts.py script.md -o out.wav --voice bm_george --speed 1.1
 python3 ../tts.py --list-voices
+python3 ../tts.py script.md -o out.wav --timings out.json   # plus word start/end times (English voices)
 ```
 
 The dashboard also has a small JSON API, so scripts can be pushed into the library from the command line:

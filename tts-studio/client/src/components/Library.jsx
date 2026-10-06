@@ -11,8 +11,10 @@ export function StatusBadge({ g }) {
       ? 'Queued'
       : g.status === 'processing'
         ? g.progressTotal > 1
-          ? `Generating ${g.progressDone}/${g.progressTotal}`
-          : 'Generating'
+          ? `${g.kind === 'video' ? 'Building' : 'Generating'} ${g.progressDone}/${g.progressTotal}`
+          : g.kind === 'video'
+            ? 'Building'
+            : 'Generating'
         : g.status === 'error'
           ? 'Failed'
           : 'Cancelled';
@@ -71,6 +73,7 @@ function Card({ g, selected, onOpen, onFavorite, onDelete, onCancel, onRetry }) 
         {g.error && g.status !== 'done' && <p className="card-error">{g.error}</p>}
 
         <div className="card-meta">
+          {g.kind === 'video' && <span className="kind">▶ Video</span>}
           <span>{g.voiceName || g.voiceId}</span>
           <span>{fmtNumber(g.wordCount)} words</span>
           {done && <span>{fmtDuration(g.durationSec)}</span>}
@@ -99,10 +102,10 @@ function Card({ g, selected, onOpen, onFavorite, onDelete, onCancel, onRetry }) 
         {done && (
           <a
             className="icon-btn"
-            href={`${g.audioUrl}?download=1`}
+            href={`${g.audioUrl || g.videoUrl}?download=1`}
             download
-            title="Download MP3"
-            aria-label="Download MP3"
+            title={g.kind === 'video' ? 'Download MP4' : 'Download MP3'}
+            aria-label={g.kind === 'video' ? 'Download MP4' : 'Download MP3'}
             onClick={(e) => e.stopPropagation()}
           >
             ⬇
