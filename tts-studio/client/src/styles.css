@@ -238,3 +238,13 @@ input[type='range'] { width: 100%; accent-color: var(--accent); }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* Lesson panel */
+.panel-title { margin: 0 0 4px; font-size: 16px; }
+.panel.lesson { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.panel.lesson.over { border-style: dashed; border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--panel)); }
+textarea.input.short { min-height: 58px; }
+.row.wrap { flex-wrap: wrap; align-items: flex-end; }
+.field.grow { flex: 1 1 130px; }
+.over-limit { color: var(--danger, #d9534f); }
+button.link { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; cursor: pointer; text-decoration: underline; }

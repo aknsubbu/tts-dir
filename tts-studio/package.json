@@ -15,8 +15,9 @@
     "dev:client": "vite",
     "build": "vite build",
     "start": "node server/index.js",
+    "author": "node author/index.js",
     "app": "vite build && node server/index.js",
-    "test": "node --test server/test/*.test.js && python3 -m unittest discover -s engine && python3 -m unittest discover -s ../video"
+    "test": "node --test server/test/*.test.js author/test/*.test.js && python3 -m unittest discover -s engine && python3 -m unittest discover -s ../video"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",

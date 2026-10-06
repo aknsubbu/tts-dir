@@ -9,6 +9,8 @@ import { listProjects, readProject } from './video.js';
 
 export const MAX_CHARS = 200_000;
 export const VIDEO_QUALITIES = ['default', 'low', 'medium', 'hd', '4k'];
+export const LESSON_MINUTES = [1, 2, 3, 5];
+export const MAX_NOTES = 60_000; // the lesson writer's limit too
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 const clamp = (v, min, max, fallback) => {
@@ -40,7 +42,7 @@ function deriveTitle(text) {
   return first.length > 60 ? `${first.slice(0, 57).trimEnd()}…` : first || 'Untitled script';
 }
 
-export function createApp({ getConfig, store, runner, engine, distDir }) {
+export function createApp({ getConfig, store, runner, engine, lessons, distDir }) {
   const app = express();
   app.disable('x-powered-by');
   app.use(express.json({ limit: '8mb' }));
@@ -216,6 +218,48 @@ export function createApp({ getConfig, store, runner, engine, distDir }) {
     res.status(201).json({ generation: store.get(id) });
   });
 
+  // A lesson: Claude writes the script and the scenes from a topic and notes, then it is built
+  // like any other video. The row exists from the start so the library shows each stage.
+  api.post('/lessons', async (req, res) => {
+    if (!lessons) throw httpError(503, 'Lessons are not set up on this server.');
+    const b = req.body || {};
+    const topic = String(b.topic || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    const goal = String(b.goal || '').trim().slice(0, 2000);
+    const notes = String(b.notes || '').trim();
+    if (!topic) throw httpError(400, 'Say what the video should be about.');
+    if (notes.length > MAX_NOTES) throw httpError(400, `Notes are limited to ${MAX_NOTES.toLocaleString('en-US')} characters; these have ${notes.length.toLocaleString('en-US')}.`);
+    const voiceId = String(b.voiceId || getConfig().defaultVoiceId);
+    checkVoice(voiceId);
+    // Marks need word timings, which only the English voices have.
+    if (!/^[ab]/.test(voiceId)) throw httpError(400, 'Lessons need an English voice, so animations can follow individual words.');
+    const minutes = LESSON_MINUTES.includes(Number(b.minutes)) ? Number(b.minutes) : 2;
+    const quality = VIDEO_QUALITIES.includes(b.quality) ? b.quality : 'default';
+    const id = crypto.randomUUID();
+    const project = `${slugify(topic, 'lesson').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40) || 'lesson'}-${id.slice(0, 6)}`;
+    const ownTitle = String(b.title || '').trim().slice(0, 120);
+    const brief = [topic, goal, notes].filter(Boolean).join('\n\n');
+    store.insert({
+      id,
+      kind: 'video',
+      title: ownTitle || topic.slice(0, 120),
+      source_name: `video/projects/${project}`,
+      text: brief,
+      text_hash: sha(brief),
+      config_hash: sha(`lesson:${id}`),
+      char_count: brief.length,
+      word_count: countWords(brief),
+      voice_id: voiceId,
+      voice_name: engine.catalog().voices.find((v) => v.voiceId === voiceId)?.name || null,
+      model_id: MODEL_ID,
+      settings_json: JSON.stringify({ project, quality, speed: 1, scenes: [], lesson: { topic, goal, minutes, ownTitle: !!ownTitle } }),
+      status: 'queued',
+      tags: normalizeTags(b.tags ?? ['lesson']).join(','),
+      created_at: Date.now(),
+    });
+    await lessons.start(id, { topic, goal, notes, minutes, voice: voiceId });
+    res.status(201).json({ generation: store.get(id) });
+  });
+
   api.get('/generations/:id/video', (req, res) => {
     const row = store.getRaw(req.params.id);
     if (!row || row.kind !== 'video' || row.status !== 'done') throw httpError(404, 'Video not available');
@@ -253,11 +297,17 @@ export function createApp({ getConfig, store, runner, engine, distDir }) {
     res.json(store.get(req.params.id));
   });
 
-  api.post('/generations/:id/retry', (req, res) => {
+  api.post('/generations/:id/retry', async (req, res) => {
     const row = store.getRaw(req.params.id);
     if (!row) throw httpError(404, 'Not found');
     if (!['error', 'cancelled'].includes(row.status)) throw httpError(409, 'Only failed or cancelled items can be retried.');
     if (row.kind !== 'video') checkVoice(row.voice_id); // a video's voice is checked by its build
+    const settings = JSON.parse(row.settings_json);
+    if (settings.lesson && lessons && !lessons.isWritten(settings.project)) {
+      // Claude never finished this one: go back to the writer, which picks up where it stopped.
+      await lessons.start(row.id);
+      return res.json(store.get(row.id));
+    }
     store.update(row.id, { status: 'queued', error: null, progress_done: 0, finished_at: null });
     runner.enqueue(row.id);
     res.json(store.get(row.id));
@@ -265,14 +315,14 @@ export function createApp({ getConfig, store, runner, engine, distDir }) {
 
   api.post('/generations/:id/cancel', (req, res) => {
     if (!store.getRaw(req.params.id)) throw httpError(404, 'Not found');
-    runner.cancel(req.params.id);
+    if (!runner.cancel(req.params.id)) lessons?.cancel(req.params.id);
     res.json(store.get(req.params.id));
   });
 
   api.delete('/generations/:id', (req, res) => {
     const row = store.getRaw(req.params.id);
     if (!row) throw httpError(404, 'Not found');
-    runner.cancel(row.id);
+    if (!runner.cancel(row.id)) lessons?.cancel(row.id);
     store.remove(row.id);
     const files = [store.audioPath(row.id), `${store.audioPath(row.id)}.tmp`, ...['mp4', 'srt', 'vtt'].map((e) => store.videoPath(row.id, e))];
     for (const f of files) {

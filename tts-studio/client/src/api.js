@@ -41,4 +41,5 @@ export const api = {
   cancel: (id) => req(`/generations/${id}/cancel`, { method: 'POST' }),
   videoProjects: () => req('/video/projects'),
   buildVideo: (body) => req('/videos', { method: 'POST', body }),
+  createLesson: (body) => req('/lessons', { method: 'POST', body }),
 };

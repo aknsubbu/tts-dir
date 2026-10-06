@@ -6,6 +6,7 @@ import Composer from './components/Composer.jsx';
 import Library from './components/Library.jsx';
 import Drawer from './components/Drawer.jsx';
 import VideoPanel from './components/VideoPanel.jsx';
+import LessonPanel from './components/LessonPanel.jsx';
 import Toasts from './components/Toasts.jsx';
 
 export const DEFAULT_SETTINGS = {
@@ -233,6 +234,8 @@ export default function App() {
   useEffect(() => {
     let depth = 0;
     const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes('Files');
+    // Files dropped on the lesson panel are notes for a lesson; the panel takes them itself.
+    const onLesson = (e) => !!e.target?.closest?.('.panel.lesson');
     const enter = (e) => {
       if (!hasFiles(e)) return;
       e.preventDefault();
@@ -243,6 +246,7 @@ export default function App() {
       if (!hasFiles(e)) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'copy';
+      setDragging(!onLesson(e)); // the lesson panel shows its own outline instead
     };
     const leave = (e) => {
       if (!hasFiles(e)) return;
@@ -254,7 +258,7 @@ export default function App() {
       e.preventDefault();
       depth = 0;
       setDragging(false);
-      addFilesRef.current([...e.dataTransfer.files]);
+      if (!onLesson(e)) addFilesRef.current([...e.dataTransfer.files]);
     };
     window.addEventListener('dragenter', enter);
     window.addEventListener('dragover', over);
@@ -354,6 +358,15 @@ export default function App() {
           onFiles={(files) => addFiles(files)}
           onPaste={addPasted}
           onGenerate={generateDrafts}
+          lead={
+            <LessonPanel
+              voices={voices}
+              defaultVoiceId={settings.voiceId}
+              engineReady={health?.engine?.status === 'ready'}
+              toast={toast}
+              onQueued={() => Promise.all([refreshList(), refreshStats()])}
+            />
+          }
         >
           <VideoPanel toast={toast} onQueued={() => Promise.all([refreshList(), refreshStats()])} />
         </Composer>

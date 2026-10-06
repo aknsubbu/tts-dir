@@ -4,19 +4,32 @@ import { createStore } from './db.js';
 import { createEngine } from './kokoro.js';
 import { createRunner } from './runner.js';
 import { createVideoBuilder } from './video.js';
+import { createLessons } from './lessons.js';
 import { createApp } from './app.js';
+import { createAuthorApp } from '../author/app.js';
 
 const cfg = loadConfig();
 const store = createStore(cfg.dataDir);
 const interrupted = store.markInterrupted();
 const engine = createEngine({ getConfig: loadConfig });
 const runner = createRunner({ store, engine, video: createVideoBuilder({ getConfig: loadConfig }) });
-const app = createApp({ getConfig: loadConfig, store, runner, engine, distDir: path.join(ROOT, 'dist') });
+const lessons = createLessons({ store, runner, getConfig: loadConfig });
+const app = createApp({ getConfig: loadConfig, store, runner, engine, lessons, distDir: path.join(ROOT, 'dist') });
+
+// The lesson writer is its own small server. It runs in this process on its own port, so one
+// command starts everything; set TTS_AUTHOR_URL to use one started elsewhere with `npm run author`.
+const author = cfg.authorUrl ? null : createAuthorApp({ getConfig: loadConfig });
+const authorServer = author?.listen(cfg.authorPort, cfg.host);
+authorServer?.on('error', (e) => {
+  const why = e.code === 'EADDRINUSE' ? `port ${cfg.authorPort} is in use (set AUTHOR_PORT in your .env)` : e.message;
+  console.error(`  Lesson writer    NOT RUNNING: ${why}. Everything else works.\n`);
+});
 
 const server = app.listen(cfg.port, cfg.host, () => {
   console.log(`\n  TTS Studio       http://localhost:${cfg.port}`);
   console.log(`  Dev UI (vite)    http://localhost:5173   (when running npm run dev)`);
   console.log(`  Library data     ${cfg.dataDir}`);
+  console.log(`  Lesson writer    ${cfg.authorUrl || `http://localhost:${cfg.authorPort}`}   (asks Claude with \`${cfg.claudeBin} -p\`)`);
   console.log(`  Kokoro           loading the model…`);
   if (interrupted) console.log(`  ${interrupted} unfinished job(s) from the last run were marked for retry.`);
   console.log('');
@@ -39,6 +52,9 @@ server.on('error', (e) => {
 const shutdown = () => {
   engine.stop(); // otherwise the Python process outlives every restart
   runner.stop(); // and so would a video build
+  lessons.stop();
+  author?.stop(); // and Claude, and the check it runs
+  authorServer?.close();
   server.close(() => {
     store.close();
     process.exit(0);
@@ -50,4 +66,5 @@ process.on('SIGTERM', shutdown);
 process.on('exit', () => {
   engine.stop();
   runner.stop();
+  author?.stop();
 });

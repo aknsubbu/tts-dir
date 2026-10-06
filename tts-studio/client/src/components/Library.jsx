@@ -10,11 +10,13 @@ export function StatusBadge({ g }) {
     g.status === 'queued'
       ? 'Queued'
       : g.status === 'processing'
-        ? g.progressTotal > 1
-          ? `${g.kind === 'video' ? 'Building' : 'Generating'} ${g.progressDone}/${g.progressTotal}`
-          : g.kind === 'video'
-            ? 'Building'
-            : 'Generating'
+        ? g.stage // a lesson Claude is still writing says what it is doing
+          ? g.stage
+          : g.progressTotal > 1
+            ? `${g.kind === 'video' ? 'Building' : 'Generating'} ${g.progressDone}/${g.progressTotal}`
+            : g.kind === 'video'
+              ? 'Building'
+              : 'Generating'
         : g.status === 'error'
           ? 'Failed'
           : 'Cancelled';

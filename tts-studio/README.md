@@ -51,6 +51,46 @@ Turn off **Generate immediately on drop** to collect files into a batch first. Y
 - **Regenerate** in the details panel re-runs a stored script with whatever voice and settings are currently selected on the left. Handy for trying another voice.
 - **Markdown is stripped** before speaking (headings, bold, links, code blocks, bullet markers). You can turn this off.
 - **Cancel works mid-job.** It restarts the voice engine, which takes a few seconds. If the engine crashes during a job, the job is retried once. Other failures show the reason on the card, with a Retry button. If the server restarts mid-job, that job is marked failed so you can retry it.
+## Explain it to me: a video from a topic
+
+The panel at the top of the left column makes a narrated, animated explainer from a topic and your notes. It is built for mathematics: derivations, proofs, the maths behind machine learning.
+
+1. Type a **topic** and what you want to understand.
+2. Paste your **notes**, or drop `.txt` and `.md` files on the panel. Notes are optional, but with them the video uses your notation and your examples.
+3. Pick a length, a quality and an English voice, then press **Make the video**.
+
+The card in the library shows each stage, and the finished video plays in the details panel with captions.
+
+| Stage on the card | What is happening |
+| --- | --- |
+| Writing the lesson | Claude writes the narration and the animation code, with `claude -p` |
+| Checking the scenes | The narration is spoken and every scene is run once without drawing it |
+| Fixing the scenes (1 of 3) | A scene failed, so Claude is shown the error and rewrites |
+| Polishing timing and layout | It runs, but text overlaps or an animation ran past its word, so Claude gets one go at those |
+| Building 2/5 | Rendering each scene and joining them, as for any narrated video |
+
+A two-minute video takes roughly five to ten minutes from start to finish. Most of that is Claude writing.
+
+**What it needs.** [Claude Code](https://claude.com/claude-code) installed and signed in (`claude` on your PATH), and the `video/` folder set up as its README describes (manim, ffmpeg, LaTeX). Each lesson uses your Claude plan or credits: one request to write, plus one for each fix.
+
+**What you get on disk.** Every lesson is a normal project in `../video/projects/<topic>-<id>/`: `script.txt`, `scenes.py`, your `brief.json`, and under `build/author/` every prompt sent to Claude and every answer. Edit the script or the scenes and rebuild from the **Narrated video** panel, or with `python3 ../video/build.py <name>`.
+
+**How it works.** The lesson writer is a second small Express server in `author/`. `npm start` runs it in the same process on port 8790; `npm run author` runs it alone. It gives Claude no tools, so Claude can only send text back, and that text is checked by `../video/check.py` before anything is built. The prompts are plain files you can edit without restarting:
+
+| File | What it is |
+| --- | --- |
+| `author/prompts/guide.md` | The system prompt: how to plan a lesson, the script and scene formats, the ManimGL reference |
+| `author/prompts/lesson.md` | The request, with `{{topic}}`, `{{goal}}`, `{{notes}}` and the length filled in |
+| `author/prompts/repair.md` | The follow-up when the check finds problems |
+| `author/prompts/example/` | The worked example shown to Claude. `npm test` checks it still passes |
+
+**Good to know**
+
+- The scenes are Python that Claude wrote and your machine runs, with your permissions. The check refuses imports beyond manim, numpy, `math`, `random`, `itertools` and `functools`, and names such as `open`, `eval`, `os`, `sys` and `getattr`, but that is a guard against accidents and not a sandbox: code written to get around it can. Notes are sent to Claude as material to teach from, so only use notes you trust, or read `scenes.py` before building when you are unsure.
+- Lessons need an English voice, because animations follow individual words and only the English voices report word timings.
+- If Claude cannot get the scenes to run in three fixes, the card fails with the last error. **Retry** carries on from the files already written.
+- Cancel works at every stage, and stops Claude, the check or the build.
+
 ## Where things are stored
 
 Everything lives in `data/` inside the project (override with `TTS_DATA_DIR`):
@@ -76,6 +116,15 @@ All optional. Put them in a `.env` in this folder or the one above it, or in the
 | `PORT` | `8787` | Port for `npm start` |
 | `TTS_DATA_DIR` | `./data` | Library location |
 | `TTS_ENV_DIR` | none | Another folder to read `.env` from |
+| `TTS_CLAUDE_BIN` | `claude` | The Claude Code command the lesson writer runs |
+| `TTS_CLAUDE_MODEL` | Claude Code's default | Model for writing lessons, such as `opus` or `sonnet` |
+| `TTS_CLAUDE_EFFORT` | Claude Code's default | Effort level: `low`, `medium`, `high`, `xhigh` or `max` |
+| `TTS_CLAUDE_TIMEOUT_MIN` | `20` | Minutes one request to Claude may take |
+| `TTS_AUTHOR_FIXES` | `3` | How many times Claude may be asked to fix failing scenes |
+| `TTS_AUTHOR_POLISH` | `1` | `0` skips the extra round for timing and layout warnings |
+| `AUTHOR_PORT` | `8790` | Port for the lesson writer |
+| `TTS_AUTHOR_URL` | none | Use a lesson writer running elsewhere and do not start one |
+| `TTS_VIDEO_DIR` | `../video` | The folder holding `build.py`, `check.py` and `projects/` |
 
 ## From the terminal
 
@@ -96,6 +145,14 @@ curl -s localhost:8787/api/generations \
   -d "$(jq -n --rawfile t script.txt '{title:"My script", text:$t, voiceId:"af_heart"}')"
 ```
 
+A lesson can be started the same way:
+
+```bash
+curl -s localhost:8787/api/lessons \
+  -H 'Content-Type: application/json' \
+  -d "$(jq -n --rawfile n notes.md '{topic:"Gradient of logistic regression", goal:"Why it collapses to (y_hat - y) x", notes:$n, minutes:2, quality:"low"}')"
+```
+
 They show up in the library like anything dropped in the UI. Other useful routes: `GET /api/generations?q=search+terms`, `GET /api/generations/:id/audio`, `GET /api/voices`, `GET /api/stats`.
 
 ## Project layout
@@ -114,9 +171,19 @@ server/
   db.js           SQLite schema, FTS5 index, queries
   text.js         markdown cleanup
   test/           node:test suite (fake engine, plus tests against the real one)
+  lessons.js      follows a lesson through the lesson writer, then queues its build
+  video.js        runs video/build.py
+author/
+  index.js        the lesson writer on its own (npm run author)
+  app.js          its HTTP API: POST /lessons, GET /lessons/:id, POST /lessons/:id/cancel
+  pipeline.js     write, check, fix, polish
+  claude.js       runs `claude -p` and reads its answer
+  prompts.js      fills the templates in prompts/
+  prompts/        the prompt templates and the worked example
+  test/           tests with a fake claude and a fake check
 client/
   src/App.jsx     state, polling, drag and drop
-  src/components/ Header, Composer, Library, Drawer, Toasts
+  src/components/ Header, LessonPanel, Composer, VideoPanel, Library, Drawer, Toasts
 scripts/setup.sh  creates .venv and downloads the model
 ```
 

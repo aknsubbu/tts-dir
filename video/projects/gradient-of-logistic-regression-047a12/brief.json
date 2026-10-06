@@ -1,0 +1,7 @@
+{
+  "topic": "Gradient of logistic regression",
+  "goal": "Why the messy derivative of cross entropy through the sigmoid collapses to (y_hat - y) x",
+  "notes": "# Logistic regression gradient (my notes)\n\nModel: z = w^T x + b,  y_hat = sigma(z) = 1 / (1 + e^{-z})\nLoss for one example (binary cross entropy):\n  L = -[ y log(y_hat) + (1 - y) log(1 - y_hat) ]\n\nWant: dL/dw\n\nChain: dL/dw = dL/dy_hat * dy_hat/dz * dz/dw\n\n- dL/dy_hat = -y/y_hat + (1-y)/(1-y_hat)\n- dy_hat/dz = sigma(z)(1 - sigma(z)) = y_hat (1 - y_hat)    <- sigmoid derivative\n- dz/dw = x\n\nMultiply first two: the y_hat(1-y_hat) cancels the denominators ->  dL/dz = y_hat - y   (!!)\nSo dL/dw = (y_hat - y) x      same form as linear regression w/ squared error\nand dL/db = y_hat - y\n\nI never remember why the messy fractions collapse to y_hat - y.",
+  "minutes": 2,
+  "voice": "af_heart"
+}

@@ -1,0 +1,14 @@
+[bowl]
+A model with one weight makes a prediction, and the loss measures how wrong it is. Plot the loss against the weight and you get a <mark name="bowl"/>bowl. To learn, we need to know which way is <mark name="down"/>downhill from where we stand. That is the derivative of the loss with respect to the weight.
+
+[setup]
+Here is the setup. The prediction, y hat, is the <mark name="pred"/>weight times the input. The loss is <mark name="loss"/>one half of the squared difference between the prediction and the true value.
+
+[chain]
+The weight does not appear in the loss directly. It acts through the prediction. So the chain rule <mark name="split"/>splits the derivative into two links: how the loss changes with the <mark name="first"/>prediction, times how the prediction changes with the <mark name="second"/>weight.
+
+[links]
+The first link is the derivative of one half of something squared, which is just the <mark name="error"/>something: prediction minus target. The second link is the <mark name="input"/>input, x.
+
+[result]
+Multiply them, and the gradient is the <mark name="grad"/>error times the input. Step the weight <mark name="step"/>against it, and the loss goes down.

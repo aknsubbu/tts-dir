@@ -1,0 +1,32 @@
+[model]
+Logistic regression turns an input x into a score, <mark name="z"/>z, which is the weights times x plus a bias. The <mark name="sig"/>sigmoid squashes z into y hat, a probability between zero and one.
+
+[loss]
+The loss is binary cross entropy. It compares y hat with the true <mark name="label"/>label y, which is zero or one, using <mark name="logs"/>logarithms of y hat and one minus y hat.
+
+[puzzle]
+Differentiating logs of a sigmoid sounds messy. Yet the gradient with respect to the weights is just <mark name="dest"/>y hat minus y, times x. Let's see why the mess <mark name="why"/>collapses.
+
+[chain]
+The weights reach the loss through z and then y hat, so the chain rule gives <mark name="three"/>three links. The last link is <mark name="easy"/>simply x. The puzzle lives in the <mark name="two"/>first two, which together are the derivative of L with respect to z.
+
+[link1]
+For the first link, the derivative of a log is one over its argument, so we get <mark name="fracs"/>two fractions: minus y over y hat, plus one minus y over one minus y hat.
+
+[link2]
+Second link. The sigmoid's derivative is a standard fact, which we just state: <mark name="deriv"/>y hat times one minus y hat. Those two factors are <mark name="match"/>exactly the two denominators from the first link.
+
+[term1]
+Now multiply. In the first term, y hat on the bottom <mark name="cancel"/>cancels y hat on the right, leaving <mark name="left"/>minus y times one minus y hat.
+
+[term2]
+In the second term, one minus y hat <mark name="cancel"/>cancels instead, leaving <mark name="left"/>one minus y, times y hat. No fractions remain.
+
+[expand]
+Expand the brackets. We get <mark name="four"/>four terms, and the two products y times y hat <mark name="kill"/>cancel each other. What survives is <mark name="result"/>y hat minus y.
+
+[check]
+Try it with label one and prediction zero point eight. The first link is <mark name="a"/>minus one over zero point eight. The second is <mark name="b"/>zero point eight times zero point two. Their product is <mark name="c"/>minus zero point two, exactly y hat minus y.
+
+[final]
+Multiply by the last link, x, and the gradient is <mark name="grad"/>the error times the input, the same form as linear regression. For the <mark name="bias"/>bias it is just the error. <mark name="pieces"/>Cross entropy's fractions are built from exactly the pieces the sigmoid's derivative supplies, so they cancel.

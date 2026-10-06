@@ -25,6 +25,12 @@ KOKORO_PYTHON = os.environ.get("KOKORO_PYTHON") or str(HERE.parent / "tts-studio
 MANIMGL = os.environ.get("MANIMGL") or str(HERE / ".venv" / "bin" / "manimgl")
 QUALITY = {"low": ["-l"], "medium": ["-m"], "hd": ["--hd"], "4k": ["--uhd"], "default": []}
 
+# A server started from a login item or an old shell may not have Homebrew or TeX on its
+# PATH, and manim needs ffmpeg, latex and dvisvgm. Add the usual places when they exist.
+for _dir in ("/Library/TeX/texbin", "/opt/homebrew/bin", "/usr/local/bin"):
+    if Path(_dir).is_dir() and _dir not in os.environ.get("PATH", "").split(os.pathsep):
+        os.environ["PATH"] = os.pathsep.join(filter(None, [os.environ.get("PATH"), _dir]))
+
 
 class BuildError(Exception):
     pass

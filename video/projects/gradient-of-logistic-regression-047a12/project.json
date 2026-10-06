@@ -1,0 +1,13 @@
+{
+  "title": "Why the logistic regression gradient collapses",
+  "voice": "af_heart",
+  "speed": 1,
+  "script": "script.txt",
+  "scenes_file": "scenes.py",
+  "scenes": [
+    "Puzzle",
+    "Chain",
+    "Collapse",
+    "Result"
+  ]
+}

@@ -56,6 +56,17 @@ The TTS Studio dashboard can run builds too: open **Narrated video** in its left
 
 Use `--no-narrate` to reuse the manifest as it is. `$KOKORO_PYTHON` and `$MANIMGL` override where the two environments are.
 
+## Check a project before building
+
+```bash
+python3 check.py demo            # read the files, speak the script, run every scene once
+python3 check.py demo --static   # only read the files
+```
+
+`check.py` prints a JSON report. An **error** means the build would fail: a block no scene plays, a mark that does not exist, a scene that raises. A **warning** means it would build but look or sound wrong: an animation that ran more than 0.3 seconds past its word or past the end of its block, text that crosses the edge of the frame, text on top of other text. Each scene is run with `manimgl -s -w`, which executes every line without drawing the animations, so a two-minute video is checked in a few seconds. A picture of the screen at the end of each block is left in `build/check/frames/`.
+
+This is what the dashboard's **Explain it to me** panel runs on the scenes Claude writes; see `../tts-studio/README.md`. It also limits what a `scenes.py` may import to manim, `voiceover`, numpy and a few standard modules.
+
 ## A project
 
 A project is a folder under `projects/`:

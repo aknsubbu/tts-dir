@@ -57,8 +57,12 @@ CREATE TRIGGER IF NOT EXISTS gen_au AFTER UPDATE OF title, text, tags ON generat
 END;
 `;
 
-// Added after the first release: kind is 'audio' or 'video'. Older libraries gain it on start.
-const MIGRATIONS = [['kind', "ALTER TABLE generations ADD COLUMN kind TEXT NOT NULL DEFAULT 'audio'"]];
+// Added after the first release; older libraries gain them on start.
+// kind is 'audio' or 'video'. stage says what a lesson is doing while Claude writes it.
+const MIGRATIONS = [
+  ['kind', "ALTER TABLE generations ADD COLUMN kind TEXT NOT NULL DEFAULT 'audio'"],
+  ['stage', 'ALTER TABLE generations ADD COLUMN stage TEXT'],
+];
 
 const UPDATABLE = new Set([
   'title',
@@ -72,6 +76,12 @@ const UPDATABLE = new Set([
   'duration_sec',
   'finished_at',
   'voice_name',
+  'stage',
+  // A lesson starts as the brief and becomes the narration once Claude has written it.
+  'text',
+  'char_count',
+  'word_count',
+  'settings_json',
 ]);
 
 /** Turn free text into a safe FTS5 prefix query: every word must match, as a prefix. */
@@ -102,6 +112,7 @@ export function toApi(row, { withText = false } = {}) {
     progressDone: row.progress_done,
     progressTotal: row.progress_total,
     error: row.error,
+    stage: row.stage || null,
     audioBytes: row.audio_bytes,
     durationSec: row.duration_sec,
     kind: row.kind || 'audio',

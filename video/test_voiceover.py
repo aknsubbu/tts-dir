@@ -212,5 +212,60 @@ class VoiceoverTest(unittest.TestCase):
         self.assertAlmostEqual(data["blocks"][1]["start"], start, places=5)
 
 
+class ReportTest(unittest.TestCase):
+    """What a scene writes down for check.py when $VOICEOVER_REPORT is set."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        blocks = {"intro": block(3.0, {"early": 1.0, "late": 2.5})}
+        (self.dir / "audio").mkdir()
+        for b in blocks.values():
+            (self.dir / b["wav"]).write_bytes(b"")
+        (self.dir / "manifest.json").write_text(json.dumps({"order": list(blocks), "blocks": blocks}))
+        self.report = self.dir / "report.json"
+        os.environ["VOICEOVER_REPORT"] = str(self.report)
+        self.scene = FakeScene(self.dir / "manifest.json", skip_animations=True)
+
+    def tearDown(self):
+        os.environ.pop("VOICEOVER_REPORT", None)
+        self.tmp.cleanup()
+
+    def issues(self):
+        return [i["message"] for i in json.loads(self.report.read_text())["issues"]]
+
+    def test_a_scene_in_time_reports_no_issues(self):
+        with self.scene.voiceover("intro") as vo:
+            self.scene.play(vo.until("early"))
+            self.scene.play(vo.until("late"))
+        data = json.loads(self.report.read_text())
+        self.assertEqual(data["issues"], [])
+        self.assertEqual([b["id"] for b in data["blocks"]], ["intro"])
+
+    def test_running_past_a_mark_and_past_the_end_are_reported_once_each(self):
+        with self.scene.voiceover("intro") as vo:
+            self.scene.play(2.0)  # a fixed run time that overshoots "early" by a second
+            vo.until("early")
+            vo.until("early")
+            self.scene.play(3.0)
+        self.assertEqual(self.issues(), [
+            'the animations before it ran 1.00s past mark "early" in "intro"',
+            'the animations in block "intro" ran 2.00s past the end of its narration',
+        ])
+
+    def test_being_a_few_frames_late_is_not_worth_reporting(self):
+        with self.scene.voiceover("intro") as vo:
+            self.scene.play(1.2)
+            vo.until("early")
+            self.scene.play(vo.remaining() + 0.2)
+        self.assertEqual(self.issues(), [])
+
+    def test_nothing_is_written_without_the_report_variable(self):
+        del os.environ["VOICEOVER_REPORT"]
+        with self.scene.voiceover("intro") as vo:
+            self.scene.play(5.0)
+        self.assertFalse(self.report.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

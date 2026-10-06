@@ -245,7 +245,20 @@ export default function Drawer({
                 {s && g.kind === 'video' && (
                   <>
                     <dt>Project</dt>
-                    <dd>{s.project} · {s.scenes?.join(', ')} · {s.quality} quality</dd>
+                    <dd>{[s.project, s.scenes?.join(', '), `${s.quality} quality`].filter(Boolean).join(' · ')}</dd>
+                  </>
+                )}
+                {s?.lesson && (
+                  <>
+                    <dt>Lesson</dt>
+                    <dd>
+                      {s.lesson.topic}
+                      {s.lesson.goal ? ` — ${s.lesson.goal}` : ''}
+                      {s.lesson.fixes ? ` · fixed ${s.lesson.fixes}×` : ''}
+                      {s.lesson.warnings ? ` · ${s.lesson.warnings} layout or timing note${s.lesson.warnings === 1 ? '' : 's'}` : ''}
+                    </dd>
+                    <dt>Files</dt>
+                    <dd><code>video/projects/{s.project}/</code> (script.txt, scenes.py)</dd>
                   </>
                 )}
                 {s && g.kind !== 'video' && (
