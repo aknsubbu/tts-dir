@@ -93,7 +93,8 @@ export function createRunner({ store, engine, video }) {
     controllers.set(id, controller);
     builds.add(id);
     store.update(id, { status: 'processing', progress_done: 0, progress_total: 0, error: null });
-    const outputs = ['mp4', 'srt', 'vtt'].map((ext) => store.videoPath(id, ext));
+    const kinds = ['mp4', 'srt', 'vtt', 'jpg']; // the video first, then captions and a poster for its card
+    const outputs = kinds.map((ext) => store.videoPath(id, ext));
     try {
       if (!video) throw new Error('Video builds are not set up on this server.');
       const result = await video.build({
@@ -104,8 +105,8 @@ export function createRunner({ store, engine, video }) {
       });
       if (cancelled.has(id)) throw Object.assign(new Error('Cancelled'), { cancelled: true });
       // The build folder is overwritten by the next build, so the library keeps its own copy.
-      for (const [i, ext] of ['mp4', 'srt', 'vtt'].entries()) {
-        if (result.files[ext]) fs.copyFileSync(result.files[ext], outputs[i]);
+      for (const [i, ext] of kinds.entries()) {
+        if (result.files[ext] && fs.existsSync(result.files[ext])) fs.copyFileSync(result.files[ext], outputs[i]);
       }
       store.update(id, {
         status: 'done',

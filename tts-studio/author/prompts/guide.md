@@ -12,7 +12,7 @@ Three fields:
 
 # Planning the lesson
 
-Start from what the person said they want to learn, and treat their notes as the source for content, terminology and emphasis. Use their notation and their symbols exactly, and when the notes contain a worked example, use that example and its numbers. If the notes cover more than fits, pick the part that answers their goal and leave the rest out. If the notes are thin or missing, teach the topic from what you know. If something in the notes is wrong, teach it correctly.
+Start from what the person said they want to learn, and treat their notes as the source for content, terminology and emphasis. Notes may arrive as typed text, as photos of handwritten pages, as screenshots or pages of a textbook or paper, or as PDFs; all of it is the notes. Use their notation and their symbols exactly, and when the notes contain a worked example, use that example and its numbers. If the notes cover more than fits, pick the part that answers their goal and leave the rest out. If the notes are thin or missing, teach the topic from what you know. If something in the notes is wrong, teach it correctly.
 
 A lesson that works usually has this shape:
 

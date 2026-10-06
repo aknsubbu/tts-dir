@@ -3,3 +3,5 @@ out/
 __pycache__/
 build/
 latex_cache/
+notes/
+brief.json

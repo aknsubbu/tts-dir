@@ -50,11 +50,11 @@ export function createAuthor({ getConfig, ask = askClaude, check = runCheck }) {
     const system = guide();
     let cost = 0;
     let step = 0;
-    const consult = async (name, prompt) => {
+    const consult = async (name, prompt, attachments = []) => {
       step += 1;
       const tag = `${String(step).padStart(2, '0')}-${name}`;
       fs.writeFileSync(path.join(log, `${tag}-prompt.md`), prompt);
-      const { answer, costUsd } = await ask({ system, prompt, config, signal });
+      const { answer, costUsd } = await ask({ system, prompt, attachments, config, signal });
       cost += costUsd;
       fs.writeFileSync(path.join(log, `${tag}-answer.json`), JSON.stringify(answer, null, 2));
       return normalizeDraft(answer);
@@ -81,8 +81,15 @@ export function createAuthor({ getConfig, ask = askClaude, check = runCheck }) {
 
     // A project that already has its files (a retry after a failure) goes straight to the check.
     if (!FILES.every((f) => fs.existsSync(path.join(root, f)))) {
-      onStage('Writing the lesson');
-      save(await consult('write', lessonPrompt(brief)));
+      // Pictures and PDFs go with the first request only. A fix is about code that failed,
+      // and by then what they said is in the script.
+      const attachments = (brief.attachments || []).map((a) => {
+        const file = path.join(root, 'notes', path.basename(a.file));
+        if (!fs.existsSync(file)) throw new AuthorError(`The attached file ${a.name} is missing from the project's notes folder.`);
+        return { ...a, path: file };
+      });
+      onStage(attachments.length ? 'Reading the notes and writing the lesson' : 'Writing the lesson');
+      save(await consult('write', lessonPrompt(brief), attachments));
     }
 
     let report = await inspect('Checking the scenes');
@@ -140,6 +147,10 @@ function pickBrief(job) {
     notes: String(job.notes || '').trim(),
     minutes: Number(job.minutes) || 2,
     voice: job.voice || 'af_heart',
+    // Saved into notes/ by the dashboard; only names come here.
+    attachments: (Array.isArray(job.attachments) ? job.attachments : [])
+      .filter((a) => a && ['image', 'pdf'].includes(a.kind) && typeof a.file === 'string')
+      .map((a) => ({ name: String(a.name || path.basename(a.file)), file: `notes/${path.basename(a.file)}`, kind: a.kind, type: a.type || null })),
   };
 }
 

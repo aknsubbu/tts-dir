@@ -123,6 +123,16 @@ def concat_args(clips, out):
     ]
 
 
+def poster(video, duration, out):
+    """A still for the library card, from late enough that the screen has something on it. Returns its name, or None."""
+    code = subprocess.call(
+        ["ffmpeg", "-y", "-v", "error", "-ss", f"{duration * 0.62:.2f}", "-i", str(video), "-frames:v", "1",
+         "-vf", "scale=960:-2", "-q:v", "3", str(out)],
+        stdin=subprocess.DEVNULL, stdout=sys.stderr,
+    )
+    return out.name if code == 0 and out.is_file() else None  # a video without a poster is still a video
+
+
 def caption_cues(manifest, scenes):
     """Captions for the joined video. `scenes` is [(offset_seconds, timeline or None)] in order."""
     cues, used = [], set()
@@ -179,6 +189,7 @@ def build(root, quality="default", narrate_first=True):
     (build_dir / f"{name}.srt").write_text(to_srt(cues), encoding="utf-8")
     (build_dir / f"{name}.vtt").write_text(to_vtt(cues), encoding="utf-8")
     result = {"video": video.name, "duration": probe(video)["duration"], "scenes": summary}
+    result["poster"] = poster(video, result["duration"], build_dir / f"{name}.jpg")
     (build_dir / "build.json").write_text(json.dumps(result, indent=1), encoding="utf-8")
     return result
 
@@ -202,8 +213,9 @@ def main(argv=None):
         sys.exit(f"error: {e}")
     out = root.resolve() / "build"
     print(f"\n{result['video']}: {result['duration']:.2f}s, {len(result['scenes'])} scenes, built in {time.time() - t0:.0f}s", file=sys.stderr)
-    for f in (result["video"], f"{root.name}.srt", f"{root.name}.vtt"):
-        print(out / f)
+    for f in (result["video"], f"{root.name}.srt", f"{root.name}.vtt", result.get("poster")):
+        if f:
+            print(out / f)
     return 0
 
 

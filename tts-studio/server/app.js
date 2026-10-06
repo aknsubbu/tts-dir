@@ -6,6 +6,7 @@ import { toApi } from './db.js';
 import { cleanText, countWords, slugify } from './text.js';
 import { EngineError, MODEL_ID } from './kokoro.js';
 import { listProjects, readProject } from './video.js';
+import { NotesError, saveAttachments } from './notes.js';
 
 export const MAX_CHARS = 200_000;
 export const VIDEO_QUALITIES = ['default', 'low', 'medium', 'hd', '4k'];
@@ -45,7 +46,10 @@ function deriveTitle(text) {
 export function createApp({ getConfig, store, runner, engine, lessons, distDir }) {
   const app = express();
   app.disable('x-powered-by');
-  app.use(express.json({ limit: '8mb' }));
+  // A lesson may carry photos and PDFs of notes, so that one route takes a larger body.
+  const smallJson = express.json({ limit: '8mb' });
+  const lessonJson = express.json({ limit: '48mb' });
+  app.use((req, res, next) => (req.path === '/api/lessons' ? lessonJson : smallJson)(req, res, next));
 
   const api = express.Router();
 
@@ -116,7 +120,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, distDir }
   api.get('/tags', (req, res) => res.json({ tags: store.tags() }));
 
   api.get('/generations', (req, res) => {
-    const { q, status, voiceId, favorite, tag, sort } = req.query;
+    const { q, status, voiceId, favorite, tag, sort, kind } = req.query;
     res.json(
       store.list({
         q: q ? String(q) : '',
@@ -124,6 +128,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, distDir }
         voiceId: voiceId ? String(voiceId) : '',
         favorite: favorite === '1' || favorite === 'true',
         tag: tag ? String(tag) : '',
+        kind: ['audio', 'video'].includes(kind) ? kind : '',
         sort: sort ? String(sort) : '',
         limit: Number(req.query.limit) || 30,
         offset: Number(req.query.offset) || 0,
@@ -237,7 +242,21 @@ export function createApp({ getConfig, store, runner, engine, lessons, distDir }
     const id = crypto.randomUUID();
     const project = `${slugify(topic, 'lesson').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40) || 'lesson'}-${id.slice(0, 6)}`;
     const ownTitle = String(b.title || '').trim().slice(0, 120);
-    const brief = [topic, goal, notes].filter(Boolean).join('\n\n');
+    // Photos, PDFs and documents are saved into the project now, so only their names travel on
+    // to the lesson writer. Documents become text and join the typed notes.
+    let attached;
+    try {
+      attached = await saveAttachments(path.join(getConfig().videoDir, 'projects', project), b.attachments);
+    } catch (e) {
+      if (e instanceof NotesError) throw httpError(400, e.message);
+      throw e;
+    }
+    const allNotes = [notes, attached.text].filter(Boolean).join('\n\n');
+    if (allNotes.length > MAX_NOTES) {
+      fs.rmSync(path.join(getConfig().videoDir, 'projects', project), { recursive: true, force: true });
+      throw httpError(400, `With the attached documents the notes come to ${allNotes.length.toLocaleString('en-US')} characters; the limit is ${MAX_NOTES.toLocaleString('en-US')}. Attach a long document as a PDF instead.`);
+    }
+    const brief = [topic, goal, allNotes].filter(Boolean).join('\n\n');
     store.insert({
       id,
       kind: 'video',
@@ -251,12 +270,15 @@ export function createApp({ getConfig, store, runner, engine, lessons, distDir }
       voice_id: voiceId,
       voice_name: engine.catalog().voices.find((v) => v.voiceId === voiceId)?.name || null,
       model_id: MODEL_ID,
-      settings_json: JSON.stringify({ project, quality, speed: 1, scenes: [], lesson: { topic, goal, minutes, ownTitle: !!ownTitle } }),
+      settings_json: JSON.stringify({
+        project, quality, speed: 1, scenes: [],
+        lesson: { topic, goal, minutes, ownTitle: !!ownTitle, attachments: attached.files.map(({ name, file, kind }) => ({ name, file, kind })) },
+      }),
       status: 'queued',
       tags: normalizeTags(b.tags ?? ['lesson']).join(','),
       created_at: Date.now(),
     });
-    await lessons.start(id, { topic, goal, notes, minutes, voice: voiceId });
+    await lessons.start(id, { topic, goal, notes: allNotes, minutes, voice: voiceId, attachments: attached.files });
     res.status(201).json({ generation: store.get(id) });
   });
 
@@ -267,6 +289,27 @@ export function createApp({ getConfig, store, runner, engine, lessons, distDir }
     if (!fs.existsSync(file)) throw httpError(404, 'Video file is missing on disk');
     if (req.query.download) res.attachment(`${slugify(row.title)}.mp4`);
     res.type('video/mp4');
+    res.set('Cache-Control', 'private, max-age=3600');
+    res.sendFile(file, { dotfiles: 'allow' });
+  });
+
+  // A still from the video, for its card. Videos built before posters existed have none.
+  api.get('/generations/:id/poster', (req, res) => {
+    const row = store.getRaw(req.params.id);
+    const file = row && store.videoPath(row.id, 'jpg');
+    if (!row || row.kind !== 'video' || !fs.existsSync(file)) throw httpError(404, 'No poster');
+    res.set('Cache-Control', 'private, max-age=86400');
+    res.sendFile(file, { dotfiles: 'allow' });
+  });
+
+  // One of the images or PDFs attached to a lesson's notes.
+  api.get('/generations/:id/notes/:file', (req, res) => {
+    const row = store.getRaw(req.params.id);
+    const settings = row ? JSON.parse(row.settings_json) : null;
+    const wanted = settings?.lesson?.attachments?.find((a) => path.basename(a.file) === req.params.file);
+    if (!wanted) throw httpError(404, 'No such file');
+    const file = path.join(getConfig().videoDir, 'projects', settings.project, 'notes', path.basename(wanted.file));
+    if (!fs.existsSync(file)) throw httpError(404, 'That file is no longer on disk');
     res.set('Cache-Control', 'private, max-age=3600');
     res.sendFile(file, { dotfiles: 'allow' });
   });
@@ -324,7 +367,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, distDir }
     if (!row) throw httpError(404, 'Not found');
     if (!runner.cancel(row.id)) lessons?.cancel(row.id);
     store.remove(row.id);
-    const files = [store.audioPath(row.id), `${store.audioPath(row.id)}.tmp`, ...['mp4', 'srt', 'vtt'].map((e) => store.videoPath(row.id, e))];
+    const files = [store.audioPath(row.id), `${store.audioPath(row.id)}.tmp`, ...['mp4', 'srt', 'vtt', 'jpg'].map((e) => store.videoPath(row.id, e))];
     for (const f of files) {
       try {
         fs.unlinkSync(f);

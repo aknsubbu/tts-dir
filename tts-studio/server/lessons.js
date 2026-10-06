@@ -103,7 +103,7 @@ export function createLessons({ store, runner, getConfig, pollMs = 1500 }) {
     const settings = JSON.parse(row.settings_json);
     const project = readProject(getConfig().videoDir, settings.project);
     const script = project?.script || result.script || row.text;
-    Object.assign(settings, { scenes: result.scenes, lesson: { ...settings.lesson, fixes: result.fixes, polished: result.polished, warnings: result.warnings?.length || 0 } });
+    Object.assign(settings, { scenes: result.scenes, lesson: { ...settings.lesson, fixes: result.fixes, polished: result.polished, warnings: result.warnings?.length || 0, costUsd: result.costUsd ?? null } });
     store.update(id, {
       // Keep a title the person typed; otherwise use the one Claude gave the video.
       ...(settings.lesson.ownTitle ? {} : { title: String(result.title || row.title).slice(0, 120) }),

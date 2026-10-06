@@ -23,7 +23,11 @@ process.stdin.on('data', (d) => (stdin += d)).on('end', () => {
   const answers = JSON.parse(fs.readFileSync(file, 'utf8'));
   const next = answers.shift();
   fs.writeFileSync(file, JSON.stringify(answers));
-  fs.appendFileSync(path.join(dir, 'asked.jsonl'), JSON.stringify({ argv, stdin, cwd: process.cwd(), nested: !!process.env.CLAUDECODE }) + '\\n');
+  // The message arrives as one stream-json line: text blocks, and pictures or PDFs in base64.
+  const content = JSON.parse(stdin.trim().split('\\n')[0]).message.content;
+  const prompt = content.filter((c) => c.type === 'text').map((c) => c.text).join('\\n');
+  const blocks = content.filter((c) => c.type !== 'text').map((c) => ({ type: c.type, media: c.source.media_type, bytes: Buffer.from(c.source.data, 'base64').length }));
+  fs.appendFileSync(path.join(dir, 'asked.jsonl'), JSON.stringify({ argv, stdin: prompt, blocks, cwd: process.cwd(), nested: !!process.env.CLAUDECODE }) + '\\n');
   if (!next) { console.error('fake claude: no answer left'); process.exit(1); }
   if (next.hang) {
     const child = spawn('sleep', ['30'], { stdio: 'ignore' });
@@ -34,8 +38,10 @@ process.stdin.on('data', (d) => (stdin += d)).on('end', () => {
   const result = next.error
     ? { type: 'result', subtype: 'error_during_execution', is_error: true, result: next.error }
     : { type: 'result', subtype: 'success', is_error: false, result: JSON.stringify(next), structured_output: next, total_cost_usd: 0.25 };
-  // The real one prints a list of events when the user has verbose output on.
-  console.log(JSON.stringify([{ type: 'system', subtype: 'init', tools: [], schema: !!flag('--json-schema') }, result]));
+  // stream-json output: one event per line, the result last.
+  console.log(JSON.stringify({ type: 'system', subtype: 'init', tools: [], schema: !!flag('--json-schema') }));
+  console.log(JSON.stringify({ type: 'assistant', message: { content: [] } }));
+  console.log(JSON.stringify(result));
 });
 `;
 

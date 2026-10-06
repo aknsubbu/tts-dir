@@ -122,6 +122,7 @@ export function toApi(row, { withText = false } = {}) {
     finishedAt: row.finished_at,
     audioUrl: row.status === 'done' && row.kind !== 'video' ? `/api/generations/${row.id}/audio` : null,
     videoUrl: row.status === 'done' && row.kind === 'video' ? `/api/generations/${row.id}/video` : null,
+    posterUrl: row.status === 'done' && row.kind === 'video' ? `/api/generations/${row.id}/poster` : null,
   };
   if (withText) out.text = row.text;
   if (row.snip !== undefined) {
@@ -163,7 +164,7 @@ export function createStore(dataDir) {
 
   const audioPath = (id) => path.join(audioDir, `${id}.mp3`);
   const previewPath = (voiceId) => path.join(previewDir, `${voiceId}.mp3`);
-  /** A built video and its captions: ext is mp4, srt or vtt. */
+  /** A built video, its captions and its poster: ext is mp4, srt, vtt or jpg. */
   const videoPath = (id, ext = 'mp4') => path.join(videoDir, `${id}.${ext}`);
 
   function update(id, patch) {
@@ -173,7 +174,7 @@ export function createStore(dataDir) {
     db.prepare(`UPDATE generations SET ${set} WHERE id = @id`).run({ ...patch, id });
   }
 
-  function list({ q, status, voiceId, favorite, tag, sort, limit = 30, offset = 0 } = {}) {
+  function list({ q, status, voiceId, favorite, tag, kind, sort, limit = 30, offset = 0 } = {}) {
     const fts = buildFtsQuery(q);
     const where = [];
     const args = [];
@@ -194,6 +195,10 @@ export function createStore(dataDir) {
     if (voiceId) {
       where.push('g.voice_id = ?');
       args.push(voiceId);
+    }
+    if (kind) {
+      where.push('g.kind = ?');
+      args.push(kind);
     }
     if (favorite) where.push('g.favorite = 1');
     if (tag) {

@@ -69,7 +69,7 @@ export function createAuthorApp({ getConfig, author = createAuthor({ getConfig }
       error: null,
       result: null,
       createdAt: Date.now(),
-      input: resume ? { project } : { project, topic: b.topic, goal: b.goal, notes: b.notes, minutes: b.minutes, voice: b.voice },
+      input: resume ? { project } : { project, topic: b.topic, goal: b.goal, notes: b.notes, minutes: b.minutes, voice: b.voice, attachments: b.attachments },
     };
     jobs.set(job.id, job);
     queue.push(job);

@@ -19,13 +19,33 @@ export const LESSON_SCHEMA = {
 const NESTING = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SSE_PORT'];
 
 /**
+ * The one message sent to Claude: any pictures and PDFs first, each with a line naming it,
+ * then the prompt. `attachments` is [{ name, kind, type, path }] with kind 'image' or 'pdf'.
+ */
+export function userMessage(prompt, attachments = []) {
+  const content = [];
+  for (const a of attachments) {
+    const data = fs.readFileSync(a.path).toString('base64');
+    content.push({ type: 'text', text: `Attached to the notes: ${a.name}` });
+    content.push(
+      a.kind === 'pdf'
+        ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data }, title: a.name }
+        : { type: 'image', source: { type: 'base64', media_type: a.type || 'image/jpeg', data } },
+    );
+  }
+  content.push({ type: 'text', text: prompt });
+  return { type: 'user', message: { role: 'user', content }, parent_tool_use_id: null };
+}
+
+/**
  * Ask Claude one question with `claude -p` and return the object it answers with.
  *
  * It runs with no tools, so it can only write text back: it cannot read or change
- * anything on this machine. --safe-mode leaves out the user's hooks, plugins and
- * CLAUDE.md files, which have nothing to do with writing a lesson.
+ * anything on this machine. Pictures and PDFs reach it inside the message itself, which
+ * is why the message goes in as stream-json. --safe-mode leaves out the user's hooks,
+ * plugins and CLAUDE.md files, which have nothing to do with writing a lesson.
  */
-export async function askClaude({ system, prompt, schema = LESSON_SCHEMA, config, signal }) {
+export async function askClaude({ system, prompt, attachments = [], schema = LESSON_SCHEMA, config, signal }) {
   const bin = config.claudeBin || 'claude';
   const args = [
     '-p',
@@ -33,7 +53,9 @@ export async function askClaude({ system, prompt, schema = LESSON_SCHEMA, config
     '--safe-mode',
     '--strict-mcp-config',
     '--no-session-persistence',
-    '--output-format', 'json',
+    '--input-format', 'stream-json',
+    '--output-format', 'stream-json',
+    '--verbose', // stream-json output needs it
     '--system-prompt', system,
     '--json-schema', JSON.stringify(schema),
   ];
@@ -46,7 +68,8 @@ export async function askClaude({ system, prompt, schema = LESSON_SCHEMA, config
 
   let done;
   try {
-    done = await run(bin, args, { input: prompt, cwd, env, signal, timeoutMs: config.claudeTimeoutMs });
+    const input = `${JSON.stringify(userMessage(prompt, attachments))}\n`;
+    done = await run(bin, args, { input, cwd, env, signal, timeoutMs: config.claudeTimeoutMs });
   } catch (e) {
     if (e.message.startsWith('Could not find')) {
       throw new AuthorError(`Could not find the Claude Code command (${bin}). Install Claude Code, or set TTS_CLAUDE_BIN to where it is.`);
@@ -56,17 +79,35 @@ export async function askClaude({ system, prompt, schema = LESSON_SCHEMA, config
   return parseAnswer(done, schema);
 }
 
-/** Pull the answer out of what `claude -p --output-format json` printed. */
-export function parseAnswer({ code, stdout, stderr }, schema = LESSON_SCHEMA) {
-  let parsed;
+/** Every JSON value in the output: one event per line (stream-json), or a single object or list (json). */
+function events(stdout) {
   try {
-    parsed = JSON.parse(stdout);
+    const whole = JSON.parse(stdout);
+    return Array.isArray(whole) ? whole : [whole];
   } catch {
+    /* not one document: read it line by line */
+  }
+  const out = [];
+  for (const line of stdout.split('\n')) {
+    if (!line.trim().startsWith('{')) continue;
+    try {
+      out.push(JSON.parse(line));
+    } catch {
+      /* a line that is not an event */
+    }
+  }
+  return out;
+}
+
+/** Pull the answer out of what `claude -p` printed. */
+export function parseAnswer({ code, stdout, stderr }, schema = LESSON_SCHEMA) {
+  const all = events(stdout);
+  if (!all.length) {
     const said = (stderr.trim() || stdout.trim()).split('\n').slice(-3).join(' ').slice(0, 400);
     throw new AuthorError(`Claude did not answer${code ? ` (exit ${code})` : ''}. ${said}`.trim());
   }
-  // One object, or with verbose output a list of events whose last "result" is the answer.
-  const result = Array.isArray(parsed) ? parsed.findLast((m) => m?.type === 'result') : parsed;
+  // The last "result" event is the answer; a lone object without a type is taken as one.
+  const result = all.findLast((m) => m?.type === 'result') || (all.length === 1 && !all[0].type ? all[0] : null);
   if (!result) throw new AuthorError('Claude finished without a result.');
   if (result.is_error || (result.subtype && result.subtype !== 'success')) {
     throw new AuthorError(`Claude could not answer: ${String(result.result || result.subtype).slice(0, 400)}`);
