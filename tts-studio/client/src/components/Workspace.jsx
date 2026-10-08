@@ -1,12 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { fmtBytes, fmtDate, fmtDuration, fmtNumber, fmtUsd, isActive, needsYou, routeHash, WORKSPACE_TABS } from '../utils.js';
 import { Progress, StatusBadge } from './Library.jsx';
 import { NoteFiles, VideoPlayer } from './Drawer.jsx';
 import Storyboard from './Storyboard.jsx';
-import EditTab from './EditTab.jsx';
-import History from './History.jsx';
 import Transcript from './Transcript.jsx';
+
+// The editor and the diffs are most of the page's code, so they load when their tab is opened.
+const EditTab = lazy(() => import('./EditTab.jsx'));
+const History = lazy(() => import('./History.jsx'));
 
 const TAB_LABELS = { watch: 'Watch', storyboard: 'Storyboard', edit: 'Edit', history: 'History', notes: 'Notes' };
 export const QUALITIES = [
@@ -236,8 +238,10 @@ export default function Workspace({ id, tab, autoplay, summary, voices = [], onC
               </div>
             )}
             {tab === 'storyboard' && <Storyboard id={g.id} refreshKey={`${g.version}-${g.status}`} />}
-            {tab === 'edit' && <EditTab g={g} voices={voices} toast={toast} />}
-            {tab === 'history' && <History g={g} toast={toast} />}
+            <Suspense fallback={<p className="hint">Loading…</p>}>
+              {tab === 'edit' && <EditTab g={g} voices={voices} toast={toast} />}
+              {tab === 'history' && <History g={g} toast={toast} />}
+            </Suspense>
             {tab === 'notes' && (
               <div className="ws-notes">
                 {lesson && (
