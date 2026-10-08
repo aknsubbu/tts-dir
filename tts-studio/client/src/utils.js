@@ -132,16 +132,37 @@ export function parseRoute(hash) {
 
 export const routeHash = (id, tab = 'watch') => `#lesson/${id}/${tab}`;
 
-/** The address's lesson workspace, kept in step with the back and forward buttons. */
-export function useRoute() {
-  const [route, setRoute] = useState(() => parseRoute(window.location.hash));
+export const SETTINGS_SECTIONS = [
+  ['writer', 'Lesson writer'],
+  ['defaults', 'Lesson defaults'],
+  ['claude', 'Claude (MCP)'],
+  ['costs', 'Costs'],
+  ['connect', 'Connect Claude'],
+  ['storage', 'Storage'],
+];
+
+/** The Settings page's section, from "#settings/<section>", or null when Settings is not open. */
+export function parseSettingsRoute(hash) {
+  const m = /^#settings(?:\/(\w+))?$/.exec(String(hash || ''));
+  if (!m) return null;
+  return { section: SETTINGS_SECTIONS.some(([s]) => s === m[1]) ? m[1] : 'writer' };
+}
+
+/** What the address shows, kept in step with the back and forward buttons. */
+function useHash(parse) {
+  const [route, setRoute] = useState(() => parse(window.location.hash));
   useEffect(() => {
-    const onHash = () => setRoute(parseRoute(window.location.hash));
+    const onHash = () => setRoute(parse(window.location.hash));
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
-  }, []);
+  }, [parse]);
   return route;
 }
+
+/** The address's lesson workspace. */
+export const useRoute = () => useHash(parseRoute);
+/** The address's Settings section. */
+export const useSettingsRoute = () => useHash(parseSettingsRoute);
 
 /**
  * Which still is on screen `t` seconds into block `index` of an ordered list of blocks:

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import Workspace from './Workspace.jsx';
+import Workspace, { whoWrote } from './Workspace.jsx';
 import { api } from '../api.js';
 
 vi.mock('../api.js', () => ({ api: { get: vi.fn(), versions: vi.fn(), storyboard: vi.fn() } }));
@@ -42,8 +42,17 @@ describe('the lesson workspace', () => {
   it('says what writing the lesson took', async () => {
     show({ status: 'done', stage: null, videoUrl: '/api/generations/g1/video', builtVersion: 1 });
     expect(await screen.findByText(/\$0\.70 · 6,900 tokens read \(6,000 from the cache\) · 4,000 written/)).toBeTruthy();
-    expect(screen.getByText(/1 fix by Claude · 2 common mistakes fixed automatically/)).toBeTruthy();
+    expect(screen.getByText(/1 fix by the writer · 2 common mistakes fixed automatically/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Approve and render' })).toBeNull();
+  });
+
+  it('says who wrote each step', () => {
+    expect(whoWrote([
+      { step: 'write', provider: 'claude-code', label: 'Claude Code', model: 'claude-opus-5-5' },
+      { step: 'fix', provider: 'ollama', label: 'This Mac: Ollama', model: 'qwen3-coder' },
+      { step: 'polish', provider: 'ollama', label: 'This Mac: Ollama', model: 'qwen3-coder' },
+    ])).toBe('Claude Code (claude-opus-5-5) wrote; This Mac: Ollama (qwen3-coder) fixed, polished');
+    expect(whoWrote(undefined)).toBeNull();
   });
 
   it('has a tab for each view, each with its own address', async () => {

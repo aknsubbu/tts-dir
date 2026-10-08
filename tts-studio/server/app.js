@@ -9,6 +9,8 @@ import { listProjects, makePoster, PROJECT_NAME, readProject } from './video.js'
 import { NotesError, saveAttachments } from './notes.js';
 import { localOnly } from './local.js';
 import { stillsOf } from './versions.js';
+import { actorOf, settingsRoutes } from './settings-routes.js';
+import { SettingsError } from './settings.js';
 import { LESSON_MINUTES, MAX_NOTES, VIDEO_QUALITIES } from '../shared/limits.js';
 
 export const MAX_CHARS = 200_000;
@@ -43,7 +45,7 @@ function deriveTitle(text) {
   return first.length > 60 ? `${first.slice(0, 57).trimEnd()}…` : first || 'Untitled script';
 }
 
-export function createApp({ getConfig, store, runner, engine, lessons, versions = null, distDir }) {
+export function createApp({ getConfig, store, runner, engine, lessons, versions = null, settings = null, secrets = null, mcp = null, distDir }) {
   const app = express();
   app.disable('x-powered-by');
   app.use(localOnly());
@@ -251,28 +253,49 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
 
   // A lesson: Claude writes the script and the scenes from a topic and notes, then it is built
   // like any other video. The row exists from the start so the library shows each stage.
+  // A lesson: Claude (or the writer chosen in Settings) writes the script and the scenes from a
+  // topic and notes, then it is built like any other video. The row exists from the start so the
+  // library shows each stage. Lessons Claude starts through MCP use profile "claude": its own
+  // writer and defaults, when Settings gives it some.
   api.post('/lessons', async (req, res) => {
     if (!lessons) throw httpError(503, 'Lessons are not set up on this server.');
     const b = req.body || {};
+    const profile = b.profile === 'claude' || actorOf(req) === 'claude' ? 'claude' : 'page';
+    const defaults = settings ? settings.lessonDefaults(profile) : { minutes: 2, quality: 'default', review: getConfig().lessonReview || 'render', voiceId: getConfig().defaultVoiceId };
     const topic = String(b.topic || '').replace(/\s+/g, ' ').trim().slice(0, 200);
     const goal = String(b.goal || '').trim().slice(0, 2000);
     const notes = String(b.notes || '').trim();
     if (!topic) throw httpError(400, 'Say what the video should be about.');
     if (notes.length > MAX_NOTES) throw httpError(400, `Notes are limited to ${MAX_NOTES.toLocaleString('en-US')} characters; these have ${notes.length.toLocaleString('en-US')}.`);
-    const voiceId = String(b.voiceId || getConfig().defaultVoiceId);
+    const voiceId = String(b.voiceId || defaults.voiceId || getConfig().defaultVoiceId);
     checkVoice(voiceId);
     // Marks need word timings, which only the English voices have.
     if (!/^[ab]/.test(voiceId)) throw httpError(400, 'Lessons need an English voice, so animations can follow individual words.');
-    const minutes = LESSON_MINUTES.includes(Number(b.minutes)) ? Number(b.minutes) : 2;
-    const quality = VIDEO_QUALITIES.includes(b.quality) ? b.quality : 'default';
+    const minutes = LESSON_MINUTES.includes(Number(b.minutes)) ? Number(b.minutes) : defaults.minutes;
+    const quality = VIDEO_QUALITIES.includes(b.quality) ? b.quality : defaults.quality;
     // "storyboard" stops before rendering so the lesson can be looked at first.
-    const review = ['render', 'storyboard'].includes(b.review) ? b.review : getConfig().lessonReview || 'render';
-    const visualReview = b.visualReview === undefined ? undefined : Boolean(b.visualReview);
+    const review = ['render', 'storyboard'].includes(b.review) ? b.review : defaults.review || 'render';
+    const visualReview = b.visualReview === undefined ? (settings ? defaults.visualReview : undefined) : Boolean(b.visualReview);
+    // A writer chosen for this lesson alone: one provider set up in Settings, for every step.
+    const override = b.writer?.provider ? { provider: String(b.writer.provider).slice(0, 40), model: String(b.writer.model || '').slice(0, 200) } : null;
+    if (settings) {
+      try {
+        if (override && !settings.provider(override.provider)) throw new SettingsError(`There is no provider called “${override.provider}”.`);
+        await settings.checkWriter(settings.resolveWriter(profile, override));
+        const { monthCapUsd } = settings.costs();
+        if (monthCapUsd != null && store.stats().costThisMonthUsd >= monthCapUsd) {
+          throw new SettingsError(`This month's lessons have reached the monthly cap of $${monthCapUsd.toFixed(2)}. Raise it in Settings → Costs, or choose a free writer.`);
+        }
+      } catch (e) {
+        if (e instanceof SettingsError) throw httpError(400, e.message);
+        throw e;
+      }
+    }
     const id = crypto.randomUUID();
     const project = `${slugify(topic, 'lesson').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40) || 'lesson'}-${id.slice(0, 6)}`;
     const ownTitle = String(b.title || '').trim().slice(0, 120);
     // Photos, PDFs and documents are saved into the project now, so only their names travel on
-    // to the lesson writer. Documents become text and join the typed notes.
+    // to the lesson writer. Documents, and PDFs sent as text, become text and join the typed notes.
     let attached;
     try {
       attached = await saveAttachments(path.join(getConfig().videoDir, 'projects', project), b.attachments, { maxEdge: getConfig().notesImageEdge });
@@ -301,13 +324,18 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
       model_id: MODEL_ID,
       settings_json: JSON.stringify({
         project, quality, speed: 1, scenes: [],
-        lesson: { topic, goal, minutes, review, ownTitle: !!ownTitle, attachments: attached.files.map(({ name, file, kind }) => ({ name, file, kind })) },
+        lesson: {
+          topic, goal, minutes, review, ownTitle: !!ownTitle,
+          attachments: attached.files.map(({ name, file, kind, pages, asText }) => ({ name, file, kind, ...(pages ? { pages } : {}), ...(asText ? { asText } : {}) })),
+          ...(profile === 'claude' ? { profile } : {}),
+          ...(override ? { writer: override } : {}),
+        },
       }),
       status: 'queued',
       tags: normalizeTags(b.tags ?? ['lesson']).join(','),
       created_at: Date.now(),
     });
-    await lessons.start(id, { topic, goal, notes: allNotes, minutes, voice: voiceId, attachments: attached.files, visualReview });
+    await lessons.start(id, { topic, goal, notes: allNotes, minutes, voice: voiceId, attachments: attached.files.filter((f) => !f.asText), visualReview });
     res.status(201).json({ generation: store.get(id) });
   });
 
@@ -482,6 +510,37 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
     res.sendFile(audio, { dotfiles: 'allow' });
   });
 
+  // A lesson's files as they are now: what was asked for, the narration and the scenes.
+  api.get('/generations/:id/source', (req, res) => {
+    const row = store.getRaw(req.params.id);
+    const root = row && versions?.projectRoot(row);
+    if (!root) throw httpError(404, 'Not found');
+    const read = (f) => {
+      try {
+        return fs.readFileSync(path.join(root, f), 'utf8');
+      } catch {
+        return null;
+      }
+    };
+    const brief = read('brief.json');
+    res.json({ project: path.basename(root), script: read('script.txt'), scenes: read('scenes.py'), brief: brief ? JSON.parse(brief) : null });
+  });
+
+  // Where a lesson's files are on this machine, for the MCP connector and anything else local.
+  api.get('/generations/:id/files', (req, res) => {
+    const row = store.getRaw(req.params.id);
+    if (!row) throw httpError(404, 'Not found');
+    const has = (f) => (fs.existsSync(f) ? f : null);
+    const settings = JSON.parse(row.settings_json);
+    res.json({
+      video: row.kind === 'video' ? has(store.videoPath(row.id)) : null,
+      captions: row.kind === 'video' ? { srt: has(store.videoPath(row.id, 'srt')), vtt: has(store.videoPath(row.id, 'vtt')) } : null,
+      poster: row.kind === 'video' ? has(store.videoPath(row.id, 'jpg')) : null,
+      audio: row.kind !== 'video' ? has(store.audioPath(row.id)) : null,
+      project: settings.project ? has(path.join(getConfig().videoDir, 'projects', settings.project)) : null,
+    });
+  });
+
   // A lesson's versions, newest first.
   api.get('/generations/:id/versions', (req, res) => {
     const row = store.getRaw(req.params.id);
@@ -554,8 +613,14 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
     res.type('text/plain; charset=utf-8').send(row.text);
   });
 
+  if (settings) api.use(settingsRoutes({ settings, secrets, getConfig, store }));
+
   api.use((req, res) => res.status(404).json({ error: 'Unknown API route' }));
   app.use('/api', api);
+
+  // The MCP connector over HTTP, for Claude Code: claude mcp add --transport http ... /mcp.
+  // Behind the same Host and Origin checks as everything else here.
+  if (mcp) app.all('/mcp', mcp);
 
   if (distDir && fs.existsSync(path.join(distDir, 'index.html'))) {
     app.use(express.static(distDir));

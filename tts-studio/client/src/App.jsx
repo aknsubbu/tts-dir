@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api.js';
-import { isActive, needsYou, routeHash, stripExt, useDebounced, useLocalStorage, useRoute } from './utils.js';
+import { isActive, needsYou, routeHash, stripExt, useDebounced, useLocalStorage, useRoute, useSettingsRoute } from './utils.js';
 import Header from './components/Header.jsx';
 import Composer from './components/Composer.jsx';
 import Library from './components/Library.jsx';
@@ -8,6 +8,7 @@ import Drawer from './components/Drawer.jsx';
 import VideoPanel from './components/VideoPanel.jsx';
 import LessonPanel from './components/LessonPanel.jsx';
 import Workspace from './components/Workspace.jsx';
+import Settings from './components/Settings.jsx';
 import Toasts from './components/Toasts.jsx';
 
 export const DEFAULT_SETTINGS = {
@@ -41,6 +42,8 @@ export default function App() {
   const [list, setList] = useState({ items: [], total: 0, loaded: false, error: '' });
   const [selected, setSelected] = useState(null); // { id, autoplay } for an audio file's panel
   const route = useRoute(); // a lesson's workspace, from #lesson/<id>/<tab>
+  const settingsRoute = useSettingsRoute(); // the Settings page, from #settings/<section>
+  const [studio, setStudio] = useState(null); // the server's Settings: writers, defaults, providers
   const [autoplay, setAutoplay] = useState(false);
   const [live, setLive] = useState(false); // the server's event stream is connected
   const [toasts, setToasts] = useState([]);
@@ -109,10 +112,13 @@ export default function App() {
     [],
   );
 
+  const loadStudio = useCallback(() => api.settings().then(setStudio).catch(() => {}), []);
+
   useEffect(() => {
     loadHealth();
     refreshMeta();
-  }, [loadHealth, refreshMeta]);
+    loadStudio();
+  }, [loadHealth, refreshMeta, loadStudio]);
 
   // The model takes a few seconds to load; keep checking until it is up, then fetch the voices.
   const engineStatus = health?.engine?.status;
@@ -450,6 +456,7 @@ export default function App() {
               engineReady={health?.engine?.status === 'ready'}
               toast={toast}
               addRef={lessonAddRef}
+              studio={studio}
               onQueued={() => Promise.all([refreshList(), refreshStats()])}
             />
             <VideoPanel toast={toast} onQueued={() => Promise.all([refreshList(), refreshStats()])} />
@@ -493,7 +500,19 @@ export default function App() {
         />
       </div>
 
-      {route && (
+      {settingsRoute && (
+        <Settings
+          section={settingsRoute.section}
+          voices={voices}
+          onClose={() => {
+            window.location.hash = '';
+          }}
+          onChanged={setStudio}
+          toast={toast}
+        />
+      )}
+
+      {route && !settingsRoute && (
         <Workspace
           key={route.id}
           id={route.id}
@@ -510,7 +529,7 @@ export default function App() {
         />
       )}
 
-      {selected && !route && (
+      {selected && !route && !settingsRoute && (
         <Drawer
           id={selected.id}
           autoplay={selected.autoplay}

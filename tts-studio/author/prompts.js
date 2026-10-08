@@ -58,6 +58,11 @@ export function lessonPrompt({ topic, goal, notes, minutes, voice, attachments }
   });
 }
 
+/** Ask a model that can see to write out the attached files, for a writer that cannot. */
+export function readPrompt({ topic, attachments }) {
+  return fill(read('read.md'), { topic, files: attachments.map((a) => a.name).join(', ') });
+}
+
 /** What the polish round is told about the stills attached to it. */
 function picturesNote(n) {
   return [

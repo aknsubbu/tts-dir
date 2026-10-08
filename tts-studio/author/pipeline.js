@@ -1,12 +1,24 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { askClaude } from './claude.js';
+import { LESSON_SCHEMA } from './claude.js';
 import { AuthorError, run } from './proc.js';
-import { guide, lessonPrompt, repairPrompt } from './prompts.js';
+import { guide, lessonPrompt, readPrompt, repairPrompt } from './prompts.js';
+import { askWriter } from './writers/index.js';
+import { normalizeWriter, sameModel, who } from './writers/plan.js';
+import { createSecrets } from '../server/secrets.js';
+import { pageTexts } from '../server/pdf.js';
 
 export const PROJECT_NAME = /^[A-Za-z0-9_-]{1,80}$/;
 const HEADER = ['from manimlib import *', 'from voiceover import VoiceoverScene'];
 const FILES = ['script.txt', 'scenes.py', 'project.json'];
+
+/** What the reading step returns: the attached files, written out. */
+export const READ_SCHEMA = {
+  type: 'object',
+  properties: { notes: { type: 'string', description: 'Everything in the attached files, as Markdown with LaTeX' } },
+  required: ['notes'],
+  additionalProperties: false,
+};
 
 const stripFence = (s) => s.replace(/^\s*```[a-z]*\n/, '').replace(/\n```\s*$/, '');
 
@@ -33,10 +45,16 @@ export function normalizeDraft(answer) {
  *   polish    if only warnings are left, Claude gets one go at them; kept only if it helped.
  *             With visual review on, it also sees the storyboard's stills and always gets that go
  *
- * Each step asks with its own effort, and every request's token counts are kept.
+ * Each step is asked of the writer the plan names for it (provider, model, effort; see
+ * writers/), and every request's token counts and cost are kept. With pictures or PDFs in the
+ * notes and a different writer for reading them, a reading step writes them out first, so a
+ * writer that cannot see still gets everything in them. After plan.handBack.after failed fixes
+ * by a fixing writer other than the main one, the fixes go back to the main one. A lesson
+ * stops when it reaches its spending cap.
+ *
  * `ask`, `check` and `autofix` can be replaced in tests.
  */
-export function createAuthor({ getConfig, ask = askClaude, check = runCheck, autofix = runAutofix }) {
+export function createAuthor({ getConfig, ask = askWriter, check = runCheck, autofix = runAutofix, secrets = null }) {
   // Jobs run side by side, but a check speaks with Kokoro and runs manim: one at a time.
   const checkTurn = createTurns();
   const inTurn = async (root, { config, signal, onStage, label }) => {
@@ -62,24 +80,44 @@ export function createAuthor({ getConfig, ask = askClaude, check = runCheck, aut
     fs.rmSync(path.join(root, 'author.json'), { force: true });
 
     const system = guide();
+    const plan = normalizeWriter(job.writer, config);
+    const capUsd = Number(job.capUsd) > 0 ? Number(job.capUsd) : null;
+    const needsKeys = Object.values(plan.steps).some((w) => !['claude-code', 'ollama', 'local'].includes(w.kind));
+    const keys = secrets || (needsKeys && config.dataDir ? createSecrets({ dataDir: config.dataDir, useKeychain: config.useKeychain }) : null);
+    // What earlier attempts at this lesson spent: a retry continues, and so does its cap.
+    const spentFile = path.join(log, 'spent.json');
+    const spentBefore = Number(readJson(spentFile)?.usd) || 0;
     const requests = [];
-    let step = 0;
-    const effortFor = {
-      write: config.claudeEffort,
-      fix: config.claudeFixEffort ?? config.claudeEffort,
-      polish: config.claudePolishEffort ?? config.claudeEffort,
+    const spent = () => spentBefore + requests.reduce((n, r) => n + (Number(r.costUsd) || 0), 0);
+    const overCap = () => {
+      if (!capUsd || spent() < capUsd) return;
+      throw new AuthorError(
+        `This lesson reached its spending cap of $${capUsd.toFixed(2)} ($${spent().toFixed(2)} so far). Raise the cap in Settings → Costs and press Retry: it continues from where it stopped.`,
+        'cap',
+      );
     };
-    const consult = async (name, prompt, attachments = []) => {
+    let step = 0;
+    const consult = async (name, w, prompt, attachments = [], schema = LESSON_SCHEMA) => {
+      overCap();
       step += 1;
       const tag = `${String(step).padStart(2, '0')}-${name}`;
       fs.writeFileSync(path.join(log, `${tag}-prompt.md`), prompt);
-      const effort = effortFor[name];
-      const { answer, costUsd, usage } = await ask({ system, prompt, attachments, config, signal, effort });
-      const used = { step: name, effort: effort || null, ...(usage || {}), costUsd: costUsd || 0 };
-      requests.push(used);
-      fs.writeFileSync(path.join(log, `${tag}-answer.json`), JSON.stringify(answer, null, 2));
-      fs.writeFileSync(path.join(log, `${tag}-usage.json`), JSON.stringify(used, null, 2));
-      return normalizeDraft(answer);
+      const record = (usage, extra = {}) => {
+        const used = { step: name, provider: w.provider, label: w.label, effort: w.effort || null, ...(usage || {}), model: usage?.model || w.model || null, costUsd: Number(usage?.costUsd) || 0, ...extra };
+        requests.push(used);
+        fs.writeFileSync(path.join(log, `${tag}-usage.json`), JSON.stringify(used, null, 2));
+        fs.writeFileSync(spentFile, JSON.stringify({ usd: spent() }));
+      };
+      let out;
+      try {
+        out = await ask({ writer: w, secrets: keys, system, prompt, attachments, schema, config, signal, effort: w.effort });
+      } catch (e) {
+        if (e.usage) record(e.usage, { failed: true, error: e.message.slice(0, 300) });
+        throw e;
+      }
+      record({ ...(out.usage || {}), costUsd: out.costUsd || 0 });
+      fs.writeFileSync(path.join(log, `${tag}-answer.json`), JSON.stringify(out.answer, null, 2));
+      return out.answer;
     };
     const save = (draft) => {
       fs.writeFileSync(path.join(root, 'script.txt'), draft.script);
@@ -109,8 +147,31 @@ export function createAuthor({ getConfig, ask = askClaude, check = runCheck, aut
         if (!fs.existsSync(file)) throw new AuthorError(`The attached file ${a.name} is missing from the project's notes folder.`);
         return { ...a, path: file };
       });
-      onStage(attachments.length ? 'Reading the notes and writing the lesson' : 'Writing the lesson');
-      save(await consult('write', lessonPrompt(brief), attachments));
+      const writer = plan.steps.write;
+      const together = sameModel(plan.steps.read, writer);
+      let notes = brief.notes;
+      let send = [];
+      if (attachments.length) {
+        // The writer reads the files itself when it is also the reader; otherwise the reader
+        // writes them out first. Either way, PDFs a model cannot take go as their text.
+        const reader = together ? writer : plan.steps.read;
+        const { files, text } = await usableBy(reader, attachments);
+        if (text) notes = [notes, text].filter(Boolean).join('\n\n');
+        if (together) send = files;
+        else if (files.length) {
+          const cache = path.join(root, 'notes', 'transcribed.md');
+          let transcript = fs.existsSync(cache) ? fs.readFileSync(cache, 'utf8').trim() : '';
+          if (!transcript) {
+            onStage(`Reading the notes with ${who(reader)}`);
+            transcript = String((await consult('read', reader, readPrompt({ topic: brief.topic, attachments: files }), files, READ_SCHEMA)).notes).trim();
+            fs.writeFileSync(cache, `${transcript}\n`);
+          }
+          notes = [notes, `# From the attached files (${files.map((f) => f.name).join(', ')}), as read by ${who(reader)}\n\n${transcript}`].filter(Boolean).join('\n\n');
+        }
+      }
+      onStage(send.length ? 'Reading the notes and writing the lesson' : 'Writing the lesson');
+      save(normalizeDraft(await consult('write', writer, lessonPrompt({ ...brief, notes, attachments: send }), send)));
+      overCap();
     }
 
     const autofixed = [];
@@ -131,31 +192,63 @@ export function createAuthor({ getConfig, ask = askClaude, check = runCheck, aut
 
     let report = await inspect('Checking the scenes');
     let fixes = 0;
+    // Hand-back: a fixing writer other than the main one gets plan.handBack.after tries, then
+    // the main writer takes over with rounds of its own.
+    const main = plan.steps.write;
+    const canHandBack = plan.handBack.after > 0 && !sameModel(plan.steps.fix, main);
+    let handedBack = false;
+    let failedFixes = 0;
+    let allowed = config.authorMaxFixes;
+    const fixer = () => (handedBack ? { ...main, effort: plan.steps.fix.effort } : plan.steps.fix);
     while (!report.ok) {
       if (await tryAutofix()) {
         report = await inspect('Checking the automatic fixes');
         if (report.ok) break;
       }
-      if (fixes >= config.authorMaxFixes) {
+      if (canHandBack && !handedBack && failedFixes >= plan.handBack.after) {
+        handedBack = true;
+        allowed = fixes + config.authorMaxFixes;
+        onStage(`Handing the fixes back to ${who(main)}`);
+      }
+      if (fixes >= allowed) {
         const first = report.errors[0];
         throw new AuthorError(
           `The scenes still fail after ${fixes} fix${fixes === 1 ? '' : 'es'}. ${first.where}: ${first.message.trim().split('\n').pop()}`,
         );
       }
       fixes += 1;
-      onStage(`Fixing the scenes (${fixes} of ${config.authorMaxFixes})`);
-      save(await consult('fix', repairPrompt({ ...brief, ...current(), errors: report.errors, warnings: report.warnings })));
+      const w = fixer();
+      onStage(`Fixing the scenes (${fixes} of ${allowed})${sameModel(w, main) ? '' : ` with ${who(w)}`}`);
+      let draft;
+      try {
+        draft = normalizeDraft(await consult('fix', w, repairPrompt({ ...brief, ...current(), errors: report.errors, warnings: report.warnings })));
+      } catch (e) {
+        // A cheaper writer that cannot even answer counts as a failed fix, while there is someone to hand back to.
+        if (e.code === 'aborted' || e.code === 'cap' || !canHandBack || handedBack) throw e;
+        failedFixes += 1;
+        continue;
+      }
+      save(draft);
       report = await inspect('Checking the scenes');
+      if (!report.ok && !handedBack) failedFixes += 1;
     }
 
     let polished = false;
     const visual = brief.visualReview ?? config.authorVisualReview;
-    const stills = visual ? reviewStills(root) : [];
-    if ((report.warnings.length && config.authorPolish) || stills.length) {
+    const polisher = handedBack ? { ...main, effort: plan.steps.polish.effort } : plan.steps.polish;
+    // Stills go only to a polisher that can see; one that cannot gets the warnings alone.
+    const stills = visual && polisher.caps?.images ? reviewStills(root) : [];
+    const atCap = capUsd && spent() >= capUsd; // the lesson passes; polishing is not worth going over
+    if (!atCap && ((report.warnings.length && config.authorPolish) || stills.length)) {
       const before = Object.fromEntries(FILES.map((f) => [f, fs.readFileSync(path.join(root, f))]));
       onStage(stills.length ? 'Looking over the frames' : 'Polishing timing and layout');
-      save(await consult('polish', repairPrompt({ ...brief, ...current(), errors: [], warnings: report.warnings, pictures: stills.length }), stills));
-      // project.json is rewritten by every check in its own format, so only the two files Claude writes count.
+      try {
+        save(normalizeDraft(await consult('polish', polisher, repairPrompt({ ...brief, ...current(), errors: [], warnings: report.warnings, pictures: stills.length }), stills)));
+      } catch (e) {
+        // The lesson already passes: a polish that cannot be had leaves it as it is.
+        if (e.code === 'aborted') throw e;
+      }
+      // project.json is rewritten by every check in its own format, so only the two files the writer writes count.
       const changed = ['script.txt', 'scenes.py'].some((f) => !fs.readFileSync(path.join(root, f)).equals(before[f]));
       const after = changed ? await inspect('Checking the polish') : report;
       // A visual review may fix what no warning names, so it only has to break nothing.
@@ -170,6 +263,8 @@ export function createAuthor({ getConfig, ask = askClaude, check = runCheck, aut
     }
 
     const usage = totalUsage(requests);
+    if (spentBefore) usage.earlierAttemptsUsd = Math.round(spentBefore * 1000) / 1000;
+    usage.costUsd = Math.round(spent() * 1000) / 1000;
     const result = {
       project: job.project,
       title: current().title,
@@ -182,7 +277,9 @@ export function createAuthor({ getConfig, ask = askClaude, check = runCheck, aut
       polished,
       costUsd: usage.costUsd,
       usage,
+      writtenBy: writtenBy(requests),
     };
+    fs.rmSync(spentFile, { force: true });
     fs.writeFileSync(path.join(root, 'author.json'), `${JSON.stringify({ ...result, script: undefined, finishedAt: new Date().toISOString() }, null, 2)}\n`);
     return result;
   }
@@ -201,6 +298,44 @@ export function createAuthor({ getConfig, ask = askClaude, check = runCheck, aut
   }
 
   return { write, check: checkOnly };
+}
+
+/**
+ * Which of the notes' files a writer can be sent, and the text of the PDFs it cannot read.
+ * A picture it cannot see, or a scanned PDF it cannot read, stops the lesson with what to change.
+ */
+export async function usableBy(w, attachments) {
+  const files = [];
+  const texts = [];
+  for (const a of attachments) {
+    if (a.kind === 'image' && !w.caps?.images) {
+      throw new AuthorError(`Your notes include pictures (${a.name}), and ${who(w)} cannot see pictures. In Settings → Lesson writer, choose a model that can for “Reading your notes”.`);
+    }
+    if (a.kind === 'pdf' && !w.caps?.pdf) {
+      let text = '';
+      try {
+        text = (await pageTexts(a.path)).map((t) => t.trim()).filter(Boolean).join('\n\n');
+      } catch {
+        /* no way to take its text here: treated as a scan */
+      }
+      if (!text) throw new AuthorError(`${a.name} has no text to take (it looks like a scan), and ${who(w)} cannot read PDFs. Choose a model that can for “Reading your notes”.`);
+      texts.push(`# From ${a.name} (its text only)\n\n${text}`);
+      continue;
+    }
+    files.push(a);
+  }
+  return { files, text: texts.join('\n\n') };
+}
+
+/** Who wrote what: each step once, with the provider and model that answered it. */
+export function writtenBy(requests) {
+  const seen = new Map();
+  for (const r of requests) {
+    if (r.failed) continue;
+    const key = `${r.step}|${r.provider}|${r.model}`;
+    if (!seen.has(key)) seen.set(key, { step: r.step, provider: r.provider, label: r.label, model: r.model || null });
+  }
+  return [...seen.values()];
 }
 
 /** A queue of turns: take(fn) runs fn once every earlier taker is done. Cancelling a wait leaves the queue. */

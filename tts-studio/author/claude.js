@@ -45,7 +45,7 @@ export function userMessage(prompt, attachments = []) {
  * is why the message goes in as stream-json. --safe-mode leaves out the user's hooks,
  * plugins and CLAUDE.md files, which have nothing to do with writing a lesson.
  */
-export async function askClaude({ system, prompt, attachments = [], schema = LESSON_SCHEMA, config, signal, effort }) {
+export async function askClaude({ system, prompt, attachments = [], schema = LESSON_SCHEMA, config, signal, effort, model }) {
   const bin = config.claudeBin || 'claude';
   const args = [
     '-p',
@@ -59,7 +59,9 @@ export async function askClaude({ system, prompt, attachments = [], schema = LES
     '--system-prompt', system,
     '--json-schema', JSON.stringify(schema),
   ];
-  if (config.claudeModel) args.push('--model', config.claudeModel);
+  // A model chosen in Settings, else TTS_CLAUDE_MODEL, else Claude Code's own default.
+  const chosen = model === undefined || model === '' ? config.claudeModel : model;
+  if (chosen) args.push('--model', chosen);
   // Each step may ask for its own effort; "auto" or empty leaves it to Claude Code.
   const level = effort === undefined ? config.claudeEffort : effort;
   if (level && level !== 'auto') args.push('--effort', level);

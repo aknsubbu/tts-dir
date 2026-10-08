@@ -18,6 +18,13 @@ function findPython(override) {
   return candidates.find((p) => fs.existsSync(p)) || '';
 }
 
+// The environment variables that, when set, fix a value Settings would otherwise choose.
+const ENV_NAMES = [
+  'TTS_VOICE', 'TTS_CLAUDE_MODEL', 'TTS_CLAUDE_EFFORT', 'TTS_CLAUDE_FIX_EFFORT', 'TTS_CLAUDE_POLISH_EFFORT',
+  'TTS_CLAUDE_READ_EFFORT', 'TTS_CLAUDE_OUTLINE_EFFORT', 'TTS_LESSON_REVIEW', 'TTS_AUTHOR_VISUAL_REVIEW',
+  'TTS_AUTHOR_MAX_COST_USD', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GROQ_API_KEY',
+];
+
 /**
  * Read config fresh on every call so editing the .env takes effect without a restart.
  * Real environment variables win over the .env file.
@@ -37,6 +44,9 @@ export function loadConfig() {
     }
   }
   const pick = (key, fallback) => process.env[key] || values[key] || fallback;
+  // Settings made in the page give way to these: a value set in the environment or the .env
+  // shows there as "Set in .env" and cannot be changed from the page or by Claude.
+  const given = (key) => Boolean(process.env[key] || values[key]);
   return {
     python: findPython(String(pick('TTS_PYTHON', '')).trim()),
     device: String(pick('TTS_DEVICE', '')).trim(), // auto (default), mps or cpu
@@ -58,6 +68,8 @@ export function loadConfig() {
     claudeEffort: String(pick('TTS_CLAUDE_EFFORT', 'high')).trim(),
     claudeFixEffort: String(pick('TTS_CLAUDE_FIX_EFFORT', 'low')).trim(),
     claudePolishEffort: String(pick('TTS_CLAUDE_POLISH_EFFORT', 'medium')).trim(),
+    claudeReadEffort: String(pick('TTS_CLAUDE_READ_EFFORT', 'medium')).trim(), // transcribing attached notes
+    claudeOutlineEffort: String(pick('TTS_CLAUDE_OUTLINE_EFFORT', 'medium')).trim(),
     claudeTimeoutMs: Number(pick('TTS_CLAUDE_TIMEOUT_MIN', 20)) * 60_000,
     checkTimeoutMs: 30 * 60_000,
     authorMaxFixes: Number(pick('TTS_AUTHOR_FIXES', 3)), // rounds of "here is the error, fix it"
@@ -69,6 +81,13 @@ export function loadConfig() {
     keepRenders: Math.max(1, Number(pick('TTS_KEEP_RENDERS', 3)) || 3), // videos kept per lesson, the current one included
     lessonReview: String(pick('TTS_LESSON_REVIEW', 'render')) === 'storyboard' ? 'storyboard' : 'render', // default for new lessons
     authorCheck: pick('TTS_AUTHOR_CHECK', '') ? [String(pick('TTS_AUTHOR_CHECK', '')).trim()] : null,
+    // What one lesson may cost before the writer stops, in US dollars (Settings → Costs otherwise).
+    lessonCapUsd: given('TTS_AUTHOR_MAX_COST_USD') ? Math.max(0, Number(pick('TTS_AUTHOR_MAX_COST_USD', 15)) || 0) : null,
+    // Keys for model providers. A key set here wins over one saved in Settings.
+    keys: { anthropic: pick('ANTHROPIC_API_KEY', ''), openai: pick('OPENAI_API_KEY', ''), groq: pick('GROQ_API_KEY', '') },
+    // macOS keeps keys in the Keychain; TTS_KEYCHAIN=0 uses a private file in the data folder instead.
+    useKeychain: String(pick('TTS_KEYCHAIN', '1')) !== '0',
+    given: Object.fromEntries(ENV_NAMES.filter(given).map((k) => [k, true])),
     envFile,
   };
 }

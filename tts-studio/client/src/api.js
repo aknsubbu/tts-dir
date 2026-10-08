@@ -1,4 +1,5 @@
 async function req(path, { method = 'GET', body } = {}) {
+  // body may be an object (sent as JSON) or left out.
   const res = await fetch(`/api${path}`, {
     method,
     headers: body ? { 'Content-Type': 'application/json' } : undefined,
@@ -45,4 +46,16 @@ export const api = {
   approve: (id, body = {}) => req(`/generations/${id}/approve`, { method: 'POST', body: { action: 'render', ...body } }),
   storyboard: (id, version) => req(`/generations/${id}/storyboard${query({ version })}`),
   versions: (id) => req(`/generations/${id}/versions`),
+  // Settings: who writes lessons, defaults, Claude's limits, costs. Keys go in and never come back.
+  settings: () => req('/settings'),
+  patchSettings: (body) => req('/settings', { method: 'PATCH', body }),
+  undoSettings: (seq) => req('/settings/undo', { method: 'POST', body: seq ? { seq } : {} }),
+  saveProvider: (id, body) => req(`/providers/${encodeURIComponent(id)}`, { method: 'PUT', body }),
+  removeProvider: (id) => req(`/providers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  setKey: (id, key) => req(`/providers/${encodeURIComponent(id)}/key`, { method: 'PUT', body: { key } }),
+  removeKey: (id) => req(`/providers/${encodeURIComponent(id)}/key`, { method: 'DELETE' }),
+  testProvider: (id, model) => req(`/providers/${encodeURIComponent(id)}/test`, { method: 'POST', body: { model } }),
+  providerModels: (id) => req(`/providers/${encodeURIComponent(id)}/models`),
+  estimate: (body) => req('/estimate', { method: 'POST', body }),
+  connect: () => req('/connect'),
 };

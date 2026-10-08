@@ -16,22 +16,38 @@ export const QUALITIES = [
 
 const SOURCE = { written: 'Written', edited: 'Edited', revised: 'Revised', restored: 'Restored' };
 
-/** What writing the lesson took: Claude's cost and tokens, and the rounds of fixing. */
+const STEP_WORDS = { read: 'read the notes', write: 'wrote', fix: 'fixed', polish: 'polished' };
+
+/** "Claude Code (claude-opus-5-5) wrote; This Mac: Ollama (qwen3-coder) fixed". */
+export function whoWrote(writtenBy) {
+  if (!writtenBy?.length) return null;
+  const by = new Map();
+  for (const w of writtenBy) {
+    const name = `${w.label || w.provider}${w.model ? ` (${w.model})` : ''}`;
+    if (!by.has(name)) by.set(name, []);
+    if (!by.get(name).includes(STEP_WORDS[w.step] || w.step)) by.get(name).push(STEP_WORDS[w.step] || w.step);
+  }
+  return [...by.entries()].map(([name, steps]) => `${name} ${steps.join(', ')}`).join('; ');
+}
+
+/** What writing the lesson took: who wrote it, the cost and tokens, and the rounds of fixing. */
 function Effort({ lesson }) {
   if (!lesson) return null;
   const u = lesson.usage;
+  const who = whoWrote(lesson.writtenBy);
   return (
     <section className="block">
       <h4>What it took</h4>
       <dl className="details">
-        <dt>Claude</dt>
+        {who && <><dt>Written by</dt><dd>{who}</dd></>}
+        <dt>Cost</dt>
         <dd>
           {fmtUsd(lesson.costUsd)}
           {u ? ` · ${fmtNumber(u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens)} tokens read (${fmtNumber(u.cacheReadTokens)} from the cache) · ${fmtNumber(u.outputTokens)} written` : ''}
         </dd>
         <dt>Rounds</dt>
         <dd>
-          {lesson.fixes ? `${lesson.fixes} fix${lesson.fixes === 1 ? '' : 'es'} by Claude` : 'no fixes by Claude'}
+          {lesson.fixes ? `${lesson.fixes} fix${lesson.fixes === 1 ? '' : 'es'} by the writer` : 'no fixes needed'}
           {lesson.autofixed ? ` · ${lesson.autofixed} common mistake${lesson.autofixed === 1 ? '' : 's'} fixed automatically` : ''}
           {lesson.polished ? ' · polished' : ''}
           {lesson.warnings ? ` · ${lesson.warnings} layout or timing note${lesson.warnings === 1 ? '' : 's'} left` : ''}

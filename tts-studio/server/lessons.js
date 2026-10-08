@@ -11,7 +11,7 @@ import { readProject } from './video.js';
  * queue: the row sits at "processing" with a stage, and joins the queue as an
  * ordinary video build once its project is ready.
  */
-export function createLessons({ store, runner, getConfig, versions = null, pollMs = 1500 }) {
+export function createLessons({ store, runner, getConfig, versions = null, settings = null, pollMs = 1500 }) {
   const watching = new Map(); // generation id -> { jobId, timer, misses }
 
   const base = () => {
@@ -43,19 +43,43 @@ export function createLessons({ store, runner, getConfig, versions = null, pollM
   }
 
   /**
+   * Who writes each step, and what the lesson may still spend, from Settings as they are now.
+   * A retry gets them afresh, so a raised cap or a newly set up provider applies.
+   */
+  async function writerFor(lesson = {}) {
+    if (!settings) return {};
+    const writer = settings.resolveWriter(lesson.profile || 'page', lesson.writer || null);
+    await settings.checkWriter(writer);
+    const { lessonCapUsd, monthCapUsd } = settings.costs();
+    let capUsd = lessonCapUsd;
+    if (monthCapUsd != null) {
+      const left = Math.round((monthCapUsd - store.stats().costThisMonthUsd) * 100) / 100;
+      if (left <= 0) throw new Error(`This month's lessons have reached the monthly cap of $${monthCapUsd.toFixed(2)}. Raise it in Settings → Costs, then press Retry.`);
+      capUsd = capUsd == null ? left : Math.min(capUsd, left);
+    }
+    return { writer, capUsd };
+  }
+
+  /**
    * Hand a lesson to the writer and start following it. `brief` is { topic, goal, notes,
    * minutes, voice, visualReview }; leave it out to retry with the brief saved in the project.
    */
   async function start(id, brief) {
     const row = store.getRaw(id);
-    const { project } = JSON.parse(row.settings_json);
+    const { project, lesson } = JSON.parse(row.settings_json);
     store.update(id, {
       status: 'processing', stage: 'Waiting for the lesson writer', error: null,
       progress_done: 0, progress_total: 0, finished_at: null,
     });
+    let plan;
+    try {
+      plan = await writerFor(lesson);
+    } catch (e) {
+      return fail(id, e.message);
+    }
     let job;
     try {
-      ({ job } = await call('POST', '/lessons', { project, ...brief }));
+      ({ job } = await call('POST', '/lessons', { project, ...brief, ...plan }));
     } catch (e) {
       return fail(id, e.cause ? unreachable() : e.message); // fetch sets .cause when it could not connect
     }
@@ -119,6 +143,7 @@ export function createLessons({ store, runner, getConfig, versions = null, pollM
         warnings: result.warnings?.length || 0,
         costUsd: result.costUsd ?? null,
         usage,
+        ...(result.writtenBy ? { writtenBy: result.writtenBy } : {}),
       },
     });
     const review = settings.lesson.review === 'storyboard';

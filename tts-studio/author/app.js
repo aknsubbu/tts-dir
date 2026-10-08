@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import express from 'express';
 import { createAuthor, PROJECT_NAME } from './pipeline.js';
+import { normalizeWriter } from './writers/plan.js';
 import { localOnly } from '../server/local.js';
 import { MAX_NOTES } from '../shared/limits.js';
 
@@ -11,8 +12,10 @@ const KINDS = ['write', 'check'];
  * The lesson writer: a small service that turns a topic and notes into a video
  * project by asking Claude (`claude -p`) and checking what comes back.
  *
- *   POST /lessons             { project, topic, goal, notes, minutes, voice } -> 202 { job }
+ *   POST /lessons             { project, topic, goal, notes, minutes, voice, writer, capUsd } -> 202 { job }
  *                             { project, kind: "check" } only checks a project's files again
+ *                             writer is the plan for each step (provider, model, effort), as the
+ *                             dashboard resolves it from Settings; it never carries a key
  *   GET  /lessons/:id         -> { job }   stage, and the result once status is "done"
  *   POST /lessons/:id/cancel  -> { job }
  *   GET  /health
@@ -69,6 +72,13 @@ export function createAuthorApp({ getConfig, author = createAuthor({ getConfig }
     const resume = kind !== 'write' || b.topic === undefined; // a retry or a check: the brief is already saved in the project
     if (!resume && !String(b.topic).trim()) return res.status(400).json({ error: 'A lesson needs a topic.' });
     if (String(b.notes || '').length > MAX_NOTES) return res.status(400).json({ error: `Notes are limited to ${MAX_NOTES.toLocaleString('en-US')} characters.` });
+    if (b.writer !== undefined) {
+      try {
+        normalizeWriter(b.writer, getConfig());
+      } catch (e) {
+        return res.status(400).json({ error: e.message });
+      }
+    }
     if ([...jobs.values()].some((j) => j.project === project && ['queued', 'working'].includes(j.status))) {
       return res.status(409).json({ error: `“${project}” is already being written.` });
     }
@@ -81,7 +91,12 @@ export function createAuthorApp({ getConfig, author = createAuthor({ getConfig }
       error: null,
       result: null,
       createdAt: Date.now(),
-      input: resume ? { project } : { project, topic: b.topic, goal: b.goal, notes: b.notes, minutes: b.minutes, voice: b.voice, attachments: b.attachments, visualReview: b.visualReview },
+      input: {
+        project,
+        writer: b.writer,
+        capUsd: b.capUsd,
+        ...(resume ? {} : { topic: b.topic, goal: b.goal, notes: b.notes, minutes: b.minutes, voice: b.voice, attachments: b.attachments, visualReview: b.visualReview }),
+      },
     };
     jobs.set(job.id, job);
     queue.push(job);

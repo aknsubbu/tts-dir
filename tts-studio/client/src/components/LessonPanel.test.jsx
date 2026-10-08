@@ -5,7 +5,7 @@ import LessonPanel from './LessonPanel.jsx';
 import { api } from '../api.js';
 import { MAX_FILES, MAX_NOTES } from '../../../shared/limits.js';
 
-vi.mock('../api.js', () => ({ api: { createLesson: vi.fn() } }));
+vi.mock('../api.js', () => ({ api: { createLesson: vi.fn(), estimate: vi.fn() } }));
 
 const VOICES = [
   { voiceId: 'ef_dora', name: 'Dora', lang: 'e' },
@@ -13,6 +13,16 @@ const VOICES = [
   { voiceId: 'bm_george', name: 'George', lang: 'b', gender: 'male' },
 ];
 const file = (name, body = 'x', type = '') => new File([body], name, { type });
+const CC = { provider: 'claude-code', label: 'Claude Code', model: '', effort: 'high', caps: {} };
+const ESTIMATE = { lowUsd: 0.4, highUsd: 1.1, free: false, unknown: [], note: null, problem: null, notesGo: [{ where: 'Anthropic', steps: ['writing the lesson'], local: false }], writer: { read: CC, write: CC, fix: CC, polish: CC } };
+const STUDIO = {
+  values: { 'lesson.defaults': { minutes: 3, quality: 'medium', review: 'storyboard', visualReview: true, voiceId: 'bm_george' } },
+  providers: [
+    { id: 'claude-code', kind: 'claude-code', label: 'Claude Code', configured: true, test: null, models: [] },
+    { id: 'ollama', kind: 'ollama', label: 'This Mac: Ollama', configured: true, test: { ok: true, caps: { 'qwen3:8b': {} } }, models: ['qwen3:8b'] },
+    { id: 'groq', kind: 'groq', label: 'Groq', configured: false, models: [] },
+  ],
+};
 
 let toast, onQueued, addRef;
 function show(props = {}) {
@@ -30,6 +40,7 @@ beforeEach(() => {
   URL.createObjectURL = vi.fn(() => 'blob:thumb');
   URL.revokeObjectURL = vi.fn();
   api.createLesson.mockReset().mockResolvedValue({ generation: { id: 'g1' } });
+  api.estimate.mockReset().mockResolvedValue(ESTIMATE);
 });
 afterEach(cleanup);
 
@@ -102,7 +113,7 @@ describe('the lesson form', () => {
     expect(toast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'success' }));
   });
 
-  it('can stop at the storyboard and ask Claude to look over its frames, and remembers both', async () => {
+  it('can stop at the storyboard and ask the writer to look over its frames', async () => {
     show();
     fireEvent.change(screen.getByLabelText('Topic'), { target: { value: 'Chain rule' } });
     fireEvent.click(screen.getByLabelText('Show me the storyboard'));
@@ -111,9 +122,43 @@ describe('the lesson form', () => {
     await waitFor(() => expect(onQueued).toHaveBeenCalled());
     expect(api.createLesson).toHaveBeenCalledWith(expect.objectContaining({ review: 'storyboard', visualReview: true }));
     expect(toast).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringMatching(/waits for you at its storyboard/) }));
-    cleanup();
-    show();
+  });
+
+  it('starts from the defaults in Settings, and shows who writes it and about what it costs', async () => {
+    show({ studio: STUDIO });
+    expect(screen.getByLabelText('Length').value).toBe('3');
+    expect(screen.getByLabelText('Quality').value).toBe('medium');
+    expect(screen.getByLabelText('Voice').value).toBe('bm_george');
     expect(screen.getByLabelText('Show me the storyboard').checked).toBe(true);
+    await waitFor(() => expect(screen.getByText(/about \$0\.40–\$1\.10/)).toBeTruthy());
+    expect(screen.getByText(/Notes go to Anthropic/)).toBeTruthy();
+    const writer = screen.getByLabelText('Written by');
+    expect([...writer.options].map((o) => o.textContent)).toEqual(['As in Settings (Claude Code)', 'Claude Code', 'This Mac: Ollama · qwen3:8b']);
+  });
+
+  it('can write one lesson with another set-up writer, and send only some pages of a PDF', async () => {
+    show({ studio: STUDIO });
+    fireEvent.change(screen.getByLabelText('Topic'), { target: { value: 'Chain rule' } });
+    fireEvent.change(await screen.findByLabelText('Written by'), { target: { value: JSON.stringify({ provider: 'ollama', model: 'qwen3:8b' }) } });
+    await waitFor(() => expect(api.estimate).toHaveBeenLastCalledWith(expect.objectContaining({ writer: { provider: 'ollama', model: 'qwen3:8b' } })));
+    await add([file('paper.pdf', 'PDF!')]);
+    fireEvent.change(screen.getByLabelText('Pages of paper.pdf'), { target: { value: '1-3, 7x' } });
+    fireEvent.click(screen.getByLabelText('text only'));
+    fireEvent.click(make());
+    await waitFor(() => expect(onQueued).toHaveBeenCalled());
+    expect(api.createLesson).toHaveBeenCalledWith(expect.objectContaining({
+      writer: { provider: 'ollama', model: 'qwen3:8b' },
+      attachments: [{ name: 'paper.pdf', data: btoa('PDF!'), pages: '1-3, 7', asText: true }],
+    }));
+    expect(toast).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringMatching(/^This Mac: Ollama is writing/) }));
+  });
+
+  it('will not start when the chosen writer is not ready', async () => {
+    api.estimate.mockResolvedValue({ ...ESTIMATE, problem: 'Groq, chosen for “Writing the lesson”, has no key.' });
+    show({ studio: STUDIO });
+    fireEvent.change(screen.getByLabelText('Topic'), { target: { value: 'Chain rule' } });
+    await waitFor(() => expect(screen.getByText(/has no key/)).toBeTruthy());
+    expect(make().disabled).toBe(true);
   });
 
   it('keeps what was typed when the server refuses', async () => {
