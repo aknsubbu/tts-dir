@@ -58,13 +58,23 @@ export function lessonPrompt({ topic, goal, notes, minutes, voice, attachments }
   });
 }
 
+/** What the polish round is told about the stills attached to it. */
+function picturesNote(n) {
+  return [
+    `Attached above ${n === 1 ? 'is a picture' : `are ${n} pictures`} of the screen at the end of a block, in order, each labelled with its scene and block.`,
+    'They were taken while checking, with animations skipped, so each shows where things end up.',
+    'Look at them as a viewer would: text over a shape or over other text, a crowded or empty frame, labels too small to read, colours hard to tell apart, anything cut off at an edge.',
+    'Fix what you see together with any problems listed. If everything looks right, return the files unchanged.',
+  ].join(' ');
+}
+
 const list = (items) => items.map((p) => `- ${p.where}: ${p.message.includes('\n') ? `\n${p.message}` : p.message}`).join('\n');
 
 /**
  * The follow-up when a check found problems. `errors` stop the video from being built;
  * `warnings` only make it look or sound wrong.
  */
-export function repairPrompt({ topic, goal, script, scenes, errors, warnings }) {
+export function repairPrompt({ topic, goal, script, scenes, errors, warnings, pictures = 0 }) {
   const broken = errors.length > 0;
   return fill(read('repair.md'), {
     topic,
@@ -75,7 +85,8 @@ export function repairPrompt({ topic, goal, script, scenes, errors, warnings }) 
     problems: [
       broken ? `These stop the video from being built:\n${list(errors)}` : '',
       warnings.length ? `These ${broken ? 'also ' : ''}make it look or sound wrong:\n${list(warnings)}` : '',
-    ].filter(Boolean).join('\n\n'),
+    ].filter(Boolean).join('\n\n') || 'Nothing the check measures. Look at the pictures.',
+    pictures: pictures ? picturesNote(pictures) : '',
     instructions: broken
       ? 'Fix every problem. A traceback means that line failed when the scene ran: the usual causes are a name that does not exist in ManimGL, wrong arguments, or LaTeX that does not compile.'
       : 'Fix these without restructuring the lesson. For timing: shorten or remove fixed run times before the word, or move the mark later in the sentence. For text off the frame: make it smaller, wrap it, or move it. For overlapping text: fade the old text out first, or move one of them.',

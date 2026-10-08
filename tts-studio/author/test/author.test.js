@@ -176,6 +176,66 @@ test('warnings get one polish round, kept only when it helps', async () => {
   assert.equal(result.warnings.length, 1);
 });
 
+test('each step asks with its own effort, and the tokens of every request are kept', async () => {
+  box.answers([answer('# BROKEN'), answer('# CROWDED CROWDED'), answer('# CROWDED')]);
+  const result = await author.write({ project: 'effort', ...BRIEF });
+  const effort = (a) => a.argv[a.argv.indexOf('--effort') + 1];
+  assert.deepEqual(box.asked().map(effort), ['high', 'low', 'medium'], 'write, fix, polish');
+  assert.deepEqual(result.usage.requests.map((r) => [r.step, r.effort]), [['write', 'high'], ['fix', 'low'], ['polish', 'medium']]);
+  assert.equal(result.usage.outputTokens, 12000);
+  assert.equal(result.usage.cacheReadTokens, 18000);
+  assert.equal(result.usage.requests[0].model, 'claude-opus-5-5');
+  assert.equal(result.costUsd, 0.75);
+  assert.equal(JSON.parse(box.read('effort', 'author.json')).usage.outputTokens, 12000);
+  assert.ok(box.exists('effort', 'build/author/01-write-usage.json'));
+
+  box.config.claudeEffort = 'auto';
+  box.answers([answer()]);
+  await author.write({ project: 'effort-auto', ...BRIEF });
+  box.config.claudeEffort = 'high';
+  assert.ok(!box.asked()[0].argv.includes('--effort'), '"auto" leaves effort to Claude Code');
+});
+
+test('common mistakes are fixed without asking Claude', async () => {
+  box.answers([answer('# FIXABLE')]);
+  const stages = [];
+  const result = await author.write({ project: 'autofix', ...BRIEF }, { onStage: (s) => stages.push(s) });
+  assert.equal(box.asked().length, 1, 'only the first draft was asked for');
+  assert.equal(result.fixes, 0);
+  assert.deepEqual(result.autofixed, ['line 8: mark "slpoe" in block "intro" is "slope"']);
+  assert.deepEqual(stages, ['Writing the lesson', 'Checking the scenes', 'Checking the automatic fixes']);
+  assert.match(box.read('autofix', 'scenes.py'), /# autofixed/);
+  const [call] = box.autofixed();
+  assert.equal(call.args[0], '--report');
+  assert.ok(box.exists('autofix', 'build/author/03-autofix.json'));
+
+  // What the fixer cannot fix still goes to Claude, and the fixer is tried again before each fix.
+  box.answers([answer('# BROKEN'), answer('# fixed')]);
+  const again = await author.write({ project: 'autofix-2', ...BRIEF });
+  assert.equal(again.fixes, 1);
+  assert.equal(box.autofixed().length, 1);
+});
+
+test('with visual review on, Claude is shown its own frames and may change nothing', async () => {
+  box.answers([answer(), answer()]);
+  const stages = [];
+  const result = await author.write({ project: 'visual', ...BRIEF, visualReview: true }, { onStage: (s) => stages.push(s) });
+  assert.equal(stages.at(-1), 'Looking over the frames');
+  const [, review] = box.asked();
+  assert.deepEqual(review.blocks, [{ type: 'image', media: 'image/png', bytes: 3 }]);
+  assert.match(review.stdin, /Attached to the notes: Intro, block \[intro\], at its end/);
+  assert.match(review.stdin, /picture of the screen at the end of a block/);
+  assert.match(review.stdin, /Nothing the check measures/);
+  assert.equal(result.polished, false, 'the same files back are not a polish');
+  assert.equal(box.checked().length, 1, 'and need no second check');
+  assert.equal(JSON.parse(box.read('visual', 'brief.json')).visualReview, true, 'a retry keeps the choice');
+
+  box.answers([answer(), answer('# tidier')]);
+  const tidied = await author.write({ project: 'visual-2', ...BRIEF, visualReview: true });
+  assert.equal(tidied.polished, true, 'a change that breaks nothing is kept');
+  assert.match(box.read('visual-2', 'scenes.py'), /# tidier/);
+});
+
 test('a retry reuses the saved brief and the files already written', async () => {
   box.answers([answer('# BROKEN'), answer('# BROKEN'), answer('# BROKEN')]);
   await assert.rejects(author.write({ project: 'again', ...BRIEF }));
@@ -206,11 +266,14 @@ test('answers that cannot be used are reported in plain words', async () => {
 test('parseAnswer reads one object or a list of events', () => {
   const good = { title: 'T', script: 'S', scenes: 'C' };
   const result = { type: 'result', subtype: 'success', is_error: false, structured_output: good, total_cost_usd: 0.5 };
-  assert.deepEqual(parseAnswer({ code: 0, stdout: JSON.stringify(result), stderr: '' }), { answer: good, costUsd: 0.5 });
+  const { usage, ...rest } = parseAnswer({ code: 0, stdout: JSON.stringify(result), stderr: '' });
+  assert.deepEqual(rest, { answer: good, costUsd: 0.5 });
+  assert.equal(usage.costUsd, 0.5);
+  assert.equal(usage.outputTokens, 0, 'no usage reported reads as zero, not as missing');
   assert.deepEqual(parseAnswer({ code: 0, stdout: JSON.stringify([{ type: 'system' }, result]), stderr: '' }).answer, good);
   // stream-json: one event per line, with the odd line that is not JSON.
   const lines = [JSON.stringify({ type: 'system' }), 'warning: something', JSON.stringify({ type: 'assistant' }), JSON.stringify(result), ''].join('\n');
-  assert.deepEqual(parseAnswer({ code: 0, stdout: lines, stderr: '' }), { answer: good, costUsd: 0.5 });
+  assert.deepEqual(parseAnswer({ code: 0, stdout: lines, stderr: '' }).answer, good);
   assert.throws(() => parseAnswer({ code: 0, stdout: JSON.stringify({ type: 'system' }) + '\n' + JSON.stringify({ type: 'assistant' }), stderr: '' }), /without a result/);
   // Without structured output the answer is the text, possibly fenced.
   const text = { type: 'result', subtype: 'success', result: '```json\n' + JSON.stringify(good) + '\n```' };

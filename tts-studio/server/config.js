@@ -54,11 +54,18 @@ export function loadConfig() {
     authorUrl: String(pick('TTS_AUTHOR_URL', '')).trim().replace(/\/+$/, ''),
     claudeBin: String(pick('TTS_CLAUDE_BIN', 'claude')).trim(),
     claudeModel: String(pick('TTS_CLAUDE_MODEL', '')).trim(), // empty: whatever Claude Code defaults to
-    claudeEffort: String(pick('TTS_CLAUDE_EFFORT', '')).trim(),
+    // Effort per step: writing needs it, a fix is mechanical. "auto" leaves it to Claude Code.
+    claudeEffort: String(pick('TTS_CLAUDE_EFFORT', 'high')).trim(),
+    claudeFixEffort: String(pick('TTS_CLAUDE_FIX_EFFORT', 'low')).trim(),
+    claudePolishEffort: String(pick('TTS_CLAUDE_POLISH_EFFORT', 'medium')).trim(),
     claudeTimeoutMs: Number(pick('TTS_CLAUDE_TIMEOUT_MIN', 20)) * 60_000,
     checkTimeoutMs: 30 * 60_000,
     authorMaxFixes: Number(pick('TTS_AUTHOR_FIXES', 3)), // rounds of "here is the error, fix it"
     authorPolish: String(pick('TTS_AUTHOR_POLISH', '1')) !== '0', // one more round for timing and layout warnings
+    authorVisualReview: String(pick('TTS_AUTHOR_VISUAL_REVIEW', '0')) === '1', // show Claude its own frames in that round
+    authorAutofix: pick('TTS_AUTHOR_AUTOFIX', '') ? [String(pick('TTS_AUTHOR_AUTOFIX', '')).trim()] : null,
+    authorParallel: Math.max(1, Number(pick('TTS_AUTHOR_PARALLEL', 2)) || 1), // requests to Claude at once
+    notesImageEdge: Math.max(800, Number(pick('TTS_NOTES_IMAGE_EDGE', 1400)) || 1400), // pixels on a photo's long side
     authorCheck: pick('TTS_AUTHOR_CHECK', '') ? [String(pick('TTS_AUTHOR_CHECK', '')).trim()] : null,
     envFile,
   };

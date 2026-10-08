@@ -26,6 +26,8 @@ What the check found:
 {{problems}}
 </problems>
 
+{{pictures}}
+
 {{instructions}}
 
 Return the complete `title`, `script` and `scenes` again, with the fixes made. Return whole files, not a diff. Change only what the problems call for: narration that is not involved in a problem should stay word for word, because its audio is already recorded and unchanged blocks are reused.

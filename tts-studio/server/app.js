@@ -247,7 +247,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, distDir }
     // to the lesson writer. Documents become text and join the typed notes.
     let attached;
     try {
-      attached = await saveAttachments(path.join(getConfig().videoDir, 'projects', project), b.attachments);
+      attached = await saveAttachments(path.join(getConfig().videoDir, 'projects', project), b.attachments, { maxEdge: getConfig().notesImageEdge });
     } catch (e) {
       if (e instanceof NotesError) throw httpError(400, e.message);
       throw e;

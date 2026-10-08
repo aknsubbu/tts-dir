@@ -45,7 +45,7 @@ export function userMessage(prompt, attachments = []) {
  * is why the message goes in as stream-json. --safe-mode leaves out the user's hooks,
  * plugins and CLAUDE.md files, which have nothing to do with writing a lesson.
  */
-export async function askClaude({ system, prompt, attachments = [], schema = LESSON_SCHEMA, config, signal }) {
+export async function askClaude({ system, prompt, attachments = [], schema = LESSON_SCHEMA, config, signal, effort }) {
   const bin = config.claudeBin || 'claude';
   const args = [
     '-p',
@@ -60,7 +60,9 @@ export async function askClaude({ system, prompt, attachments = [], schema = LES
     '--json-schema', JSON.stringify(schema),
   ];
   if (config.claudeModel) args.push('--model', config.claudeModel);
-  if (config.claudeEffort) args.push('--effort', config.claudeEffort);
+  // Each step may ask for its own effort; "auto" or empty leaves it to Claude Code.
+  const level = effort === undefined ? config.claudeEffort : effort;
+  if (level && level !== 'auto') args.push('--effort', level);
   const cwd = path.join(os.tmpdir(), 'tts-studio-author'); // a folder with no project in it
   fs.mkdirSync(cwd, { recursive: true });
   const env = { ...process.env };
@@ -125,5 +127,24 @@ export function parseAnswer({ code, stdout, stderr }, schema = LESSON_SCHEMA) {
       throw new AuthorError(`Claude's answer is missing “${key}”.`);
     }
   }
-  return { answer, costUsd: Number(result.total_cost_usd) || 0 };
+  return { answer, costUsd: Number(result.total_cost_usd) || 0, usage: readUsage(result) };
+}
+
+const count = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+
+/**
+ * What one request used, from Claude Code's result: tokens read fresh, read from the cache and
+ * written to it, tokens written back (thinking included), the cost and the model(s) that answered.
+ */
+export function readUsage(result) {
+  const u = result.usage || {};
+  return {
+    model: Object.keys(result.modelUsage || {}).join(', ') || null,
+    inputTokens: count(u.input_tokens),
+    cacheReadTokens: count(u.cache_read_input_tokens),
+    cacheWriteTokens: count(u.cache_creation_input_tokens),
+    outputTokens: count(u.output_tokens),
+    costUsd: Number(result.total_cost_usd) || 0,
+    durationMs: count(result.duration_ms),
+  };
 }

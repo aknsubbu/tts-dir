@@ -27,12 +27,16 @@ export function normalizeDraft(answer) {
  *
  *   write     Claude writes the script and the scenes
  *   check     check.py reads them, speaks the script and runs every scene
- *   fix       while the check finds errors, Claude is shown them and rewrites (a few rounds)
- *   polish    if only warnings are left, Claude gets one go at them; kept only if it helped
+ *   autofix   common mistakes (names from the other Manim, a mistyped mark) are fixed
+ *             without asking anyone, and checked again
+ *   fix       while the check still finds errors, Claude is shown them and rewrites (a few rounds)
+ *   polish    if only warnings are left, Claude gets one go at them; kept only if it helped.
+ *             With visual review on, it also sees the storyboard's stills and always gets that go
  *
- * `ask` and `check` can be replaced in tests.
+ * Each step asks with its own effort, and every request's token counts are kept.
+ * `ask`, `check` and `autofix` can be replaced in tests.
  */
-export function createAuthor({ getConfig, ask = askClaude, check = runCheck }) {
+export function createAuthor({ getConfig, ask = askClaude, check = runCheck, autofix = runAutofix }) {
   async function write(job, { signal, onStage = () => {} } = {}) {
     const config = getConfig();
     if (!PROJECT_NAME.test(job.project)) throw new AuthorError('That project name is not usable.');
@@ -48,15 +52,23 @@ export function createAuthor({ getConfig, ask = askClaude, check = runCheck }) {
     fs.rmSync(path.join(root, 'author.json'), { force: true });
 
     const system = guide();
-    let cost = 0;
+    const requests = [];
     let step = 0;
+    const effortFor = {
+      write: config.claudeEffort,
+      fix: config.claudeFixEffort ?? config.claudeEffort,
+      polish: config.claudePolishEffort ?? config.claudeEffort,
+    };
     const consult = async (name, prompt, attachments = []) => {
       step += 1;
       const tag = `${String(step).padStart(2, '0')}-${name}`;
       fs.writeFileSync(path.join(log, `${tag}-prompt.md`), prompt);
-      const { answer, costUsd } = await ask({ system, prompt, attachments, config, signal });
-      cost += costUsd;
+      const effort = effortFor[name];
+      const { answer, costUsd, usage } = await ask({ system, prompt, attachments, config, signal, effort });
+      const used = { step: name, effort: effort || null, ...(usage || {}), costUsd: costUsd || 0 };
+      requests.push(used);
       fs.writeFileSync(path.join(log, `${tag}-answer.json`), JSON.stringify(answer, null, 2));
+      fs.writeFileSync(path.join(log, `${tag}-usage.json`), JSON.stringify(used, null, 2));
       return normalizeDraft(answer);
     };
     const save = (draft) => {
@@ -92,9 +104,29 @@ export function createAuthor({ getConfig, ask = askClaude, check = runCheck }) {
       save(await consult('write', lessonPrompt(brief), attachments));
     }
 
+    const autofixed = [];
+    const tryAutofix = async () => {
+      let result;
+      try {
+        result = await autofix(root, report, { config, signal });
+      } catch (e) {
+        if (e.code === 'aborted') throw e;
+        return false; // the fixer is a shortcut; without it Claude fixes everything as before
+      }
+      if (!result?.changed) return false;
+      step += 1;
+      fs.writeFileSync(path.join(log, `${String(step).padStart(2, '0')}-autofix.json`), JSON.stringify(result, null, 2));
+      autofixed.push(...result.fixes);
+      return true;
+    };
+
     let report = await inspect('Checking the scenes');
     let fixes = 0;
     while (!report.ok) {
+      if (await tryAutofix()) {
+        report = await inspect('Checking the automatic fixes');
+        if (report.ok) break;
+      }
       if (fixes >= config.authorMaxFixes) {
         const first = report.errors[0];
         throw new AuthorError(
@@ -108,12 +140,18 @@ export function createAuthor({ getConfig, ask = askClaude, check = runCheck }) {
     }
 
     let polished = false;
-    if (report.warnings.length && config.authorPolish) {
+    const visual = brief.visualReview ?? config.authorVisualReview;
+    const stills = visual ? reviewStills(root) : [];
+    if ((report.warnings.length && config.authorPolish) || stills.length) {
       const before = Object.fromEntries(FILES.map((f) => [f, fs.readFileSync(path.join(root, f))]));
-      onStage('Polishing timing and layout');
-      save(await consult('polish', repairPrompt({ ...brief, ...current(), errors: [], warnings: report.warnings })));
-      const after = await inspect('Checking the polish');
-      if (after.ok && after.warnings.length < report.warnings.length) {
+      onStage(stills.length ? 'Looking over the frames' : 'Polishing timing and layout');
+      save(await consult('polish', repairPrompt({ ...brief, ...current(), errors: [], warnings: report.warnings, pictures: stills.length }), stills));
+      // project.json is rewritten by every check in its own format, so only the two files Claude writes count.
+      const changed = ['script.txt', 'scenes.py'].some((f) => !fs.readFileSync(path.join(root, f)).equals(before[f]));
+      const after = changed ? await inspect('Checking the polish') : report;
+      // A visual review may fix what no warning names, so it only has to break nothing.
+      const better = stills.length ? after.warnings.length <= report.warnings.length : after.warnings.length < report.warnings.length;
+      if (changed && after.ok && better) {
         report = after;
         polished = true;
       } else {
@@ -122,6 +160,7 @@ export function createAuthor({ getConfig, ask = askClaude, check = runCheck }) {
       }
     }
 
+    const usage = totalUsage(requests);
     const result = {
       project: job.project,
       title: current().title,
@@ -130,14 +169,54 @@ export function createAuthor({ getConfig, ask = askClaude, check = runCheck }) {
       narrationSec: report.duration ?? null,
       warnings: report.warnings,
       fixes,
+      autofixed,
       polished,
-      costUsd: Math.round(cost * 1000) / 1000,
+      costUsd: usage.costUsd,
+      usage,
     };
     fs.writeFileSync(path.join(root, 'author.json'), `${JSON.stringify({ ...result, script: undefined, finishedAt: new Date().toISOString() }, null, 2)}\n`);
     return result;
   }
 
   return { write };
+}
+
+/** Token counts and cost over every request, with the requests themselves. */
+export function totalUsage(requests) {
+  const sum = (key) => requests.reduce((n, r) => n + (Number(r[key]) || 0), 0);
+  return {
+    requests,
+    inputTokens: sum('inputTokens'),
+    cacheReadTokens: sum('cacheReadTokens'),
+    cacheWriteTokens: sum('cacheWriteTokens'),
+    outputTokens: sum('outputTokens'),
+    costUsd: Math.round(sum('costUsd') * 1000) / 1000,
+  };
+}
+
+const MAX_REVIEW_STILLS = 16;
+
+/**
+ * The storyboard's end-of-block stills, as attachments Claude can look at: at most
+ * MAX_REVIEW_STILLS, spread over the lesson when there are more blocks than that.
+ */
+export function reviewStills(root) {
+  let board;
+  try {
+    board = JSON.parse(fs.readFileSync(path.join(root, 'build', 'check', 'storyboard.json'), 'utf8'));
+  } catch {
+    return [];
+  }
+  const all = [];
+  for (const scene of board.scenes || []) {
+    for (const block of scene.blocks || []) {
+      const still = (block.stills || []).find((x) => x.mark == null);
+      const file = still && path.join(root, 'build', 'check', 'frames', path.basename(still.file));
+      if (file && fs.existsSync(file)) all.push({ name: `${scene.name}, block [${block.id}], at its end`, kind: 'image', type: 'image/png', path: file });
+    }
+  }
+  if (all.length <= MAX_REVIEW_STILLS) return all;
+  return Array.from({ length: MAX_REVIEW_STILLS }, (_, i) => all[Math.round((i * (all.length - 1)) / (MAX_REVIEW_STILLS - 1))]);
 }
 
 function pickBrief(job) {
@@ -147,6 +226,7 @@ function pickBrief(job) {
     notes: String(job.notes || '').trim(),
     minutes: Number(job.minutes) || 2,
     voice: job.voice || 'af_heart',
+    ...(job.visualReview === undefined ? {} : { visualReview: !!job.visualReview }),
     // Saved into notes/ by the dashboard; only names come here.
     attachments: (Array.isArray(job.attachments) ? job.attachments : [])
       .filter((a) => a && ['image', 'pdf'].includes(a.kind) && typeof a.file === 'string')
@@ -159,6 +239,28 @@ function readJson(file) {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch {
     return null;
+  }
+}
+
+/**
+ * Run video/autofix.py on a project with the check's report: { changed, fixes }.
+ * Missing (a toolchain without it, or a test that has none) means nothing was fixed.
+ */
+export async function runAutofix(root, report, { config, signal }) {
+  const [cmd, ...pre] = config.authorAutofix || ['python3', path.join(config.videoDir, 'autofix.py')];
+  if (!config.authorAutofix && !fs.existsSync(pre[0])) return { changed: false, fixes: [] };
+  const reportFile = path.join(root, 'build', 'author', 'last-check.json');
+  fs.writeFileSync(reportFile, JSON.stringify(report));
+  const { stdout } = await run(cmd, [...pre, root, '--report', reportFile], {
+    signal,
+    timeoutMs: 60_000,
+    env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+  });
+  try {
+    const out = JSON.parse(stdout);
+    return { changed: !!out.changed, fixes: Array.isArray(out.fixes) ? out.fixes.map(String) : [] };
+  } catch {
+    return { changed: false, fixes: [] };
   }
 }
 

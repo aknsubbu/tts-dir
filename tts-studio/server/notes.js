@@ -13,7 +13,9 @@ import { DOC_EXT, IMAGE_EXT, MAX_BYTES, MAX_FILES } from '../shared/limits.js';
  * They are saved in the lesson's project, in notes/. Plain-text formats never reach this
  * file: the browser reads those itself and puts them in the notes box.
  */
-const MAX_EDGE = 2000; // pixels on the long side: enough to read handwriting, small enough to send many
+// Pixels on the long side: enough to read handwriting, and image tokens grow with pixel area,
+// so a smaller edge is a cheaper request. TTS_NOTES_IMAGE_EDGE changes it.
+const MAX_EDGE = 1400;
 const SIPS = '/usr/bin/sips'; // both ship with macOS
 const TEXTUTIL = '/usr/bin/textutil';
 
@@ -48,10 +50,10 @@ const run = (cmd, args) =>
   });
 
 /**
- * Make any image a JPEG no larger than MAX_EDGE on its long side. Phone photos are HEIC,
+ * Make any image a JPEG no larger than maxEdge on its long side. Phone photos are HEIC,
  * which neither a browser nor Claude takes, and are several times larger than is useful.
  */
-async function normalizeImage(source, dest) {
+async function normalizeImage(source, dest, maxEdge = MAX_EDGE) {
   if (!fs.existsSync(SIPS)) {
     if (!['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext(source))) {
       throw new NotesError(`${path.basename(source)} cannot be converted on this system. Use a PNG or JPEG.`);
@@ -60,7 +62,7 @@ async function normalizeImage(source, dest) {
     return dest.replace(/\.jpg$/, path.extname(source).toLowerCase());
   }
   try {
-    await run(SIPS, ['-s', 'format', 'jpeg', '-s', 'formatOptions', '85', '-Z', String(MAX_EDGE), source, '--out', dest]);
+    await run(SIPS, ['-s', 'format', 'jpeg', '-s', 'formatOptions', '85', '-Z', String(maxEdge), source, '--out', dest]);
   } catch (e) {
     throw new NotesError(`${path.basename(source)} could not be read as an image. ${e.message}`.trim());
   }
@@ -84,7 +86,7 @@ const MEDIA = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: '
  *   files  [{ name, file, kind, type, bytes }]  what Claude will be shown, `file` relative to the project
  *   text   the text of any documents, to be added to the typed notes
  */
-export async function saveAttachments(projectDir, uploads) {
+export async function saveAttachments(projectDir, uploads, { maxEdge = MAX_EDGE } = {}) {
   if (!Array.isArray(uploads) || !uploads.length) return { files: [], text: '' };
   if (uploads.length > MAX_FILES) throw new NotesError(`A lesson can have at most ${MAX_FILES} attached files; this one has ${uploads.length}.`);
   const decoded = uploads.map((u) => {
@@ -118,7 +120,7 @@ export async function saveAttachments(projectDir, uploads) {
       if (kind === 'image') {
         // Always re-encode: it also drops location and camera details from phone photos.
         const jpg = path.join(dir, safeName(`${path.basename(saved, path.extname(saved))}.view.jpg`, taken));
-        file = await normalizeImage(saved, jpg);
+        file = await normalizeImage(saved, jpg, maxEdge);
         fs.rmSync(saved, { force: true });
       }
       files.push({
