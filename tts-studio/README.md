@@ -62,16 +62,24 @@ The **Lessons** tab makes a narrated, animated explainer from a topic and your n
 
 1. Type a **topic** and what you want to understand.
 2. Add your **notes**: type or paste them, drop files anywhere on the page, or paste a screenshot. Notes are optional, but with them the video uses your notation and your examples.
-3. Pick a length, a quality and an English voice, then press **Make the video**.
+3. Pick a length, a quality and an English voice. Under **Before it renders**, choose **Render right away**, or **Show me the storyboard** to look the lesson over first. Then press **Make the video**.
 
-The card in the library shows each stage, and the finished video plays in the details panel with captions.
+The card in the library shows each stage. Click it to open the lesson's workspace, a full-width page with three tabs, each with its own address (`#lesson/<id>/watch`, `/storyboard`, `/notes`):
+
+- **Watch**: the video with captions, or what is happening to it. Below it, what writing the lesson took: Claude's cost, the tokens it read (and how many came from the cache) and wrote, how many fixes Claude made and how many common mistakes were fixed without it.
+- **Storyboard**: every narration block, scene by scene, with a still of the screen at each marked word and at the end of the block, its narration with the marks shown, any timing or layout problem, and a button to hear it. **Play as animatic** plays the narration block after block and changes the picture on the marked words, so a lesson can be judged before it is rendered. The stills come from the check, which skips animations, so each shows where things end up, not how they move.
+- **Notes**: what you asked for, the files you attached and the narration.
+
+A lesson that waits for you says **Storyboard ready** on its card, and the header counts them. In its workspace, **Approve and render** renders it at the quality you pick there, and **Don't render** cancels it (Retry renders it after all). While a lesson is rebuilt, it keeps playing its last built version.
+
+**Let Claude look over its own frames** sends Claude the storyboard's end-of-block stills in one more request, to catch what the checks cannot measure: a shape over a label, a crowded frame, colours hard to tell apart. Its changes are kept only if they break nothing.
 
 Notes can be more than text:
 
 | Kind of file | What happens to it |
 | --- | --- |
 | `.txt`, `.md` | Read in the browser and added to the notes box |
-| Images (PNG, JPEG, WebP, GIF, HEIC, TIFF, BMP) | Shown to Claude as pictures: handwritten working, textbook pages, diagrams. Each is re-encoded as a JPEG of at most 2000 pixels on its long side, which also drops the location and camera details in phone photos |
+| Images (PNG, JPEG, WebP, GIF, HEIC, TIFF, BMP) | Shown to Claude as pictures: handwritten working, textbook pages, diagrams. Each is re-encoded as a JPEG of at most 1400 pixels on its long side (`TTS_NOTES_IMAGE_EDGE`), which also drops the location and camera details in phone photos. A picture costs Claude tokens by its area, so a smaller one is a cheaper request |
 | PDF | Shown to Claude whole, pages and figures included |
 | Word, RTF, OpenDocument (`.docx`, `.doc`, `.rtf`, `.odt`) | Turned into text and added to the typed notes |
 
@@ -80,16 +88,22 @@ A lesson takes up to 12 attached files and 20 MB in total, and 60,000 characters
 | Stage on the card | What is happening |
 | --- | --- |
 | Writing the lesson (or Reading the notes and writing the lesson) | Claude writes the narration and the animation code, with `claude -p` |
-| Checking the scenes | The narration is spoken and every scene is run once without drawing it |
-| Fixing the scenes (1 of 3) | A scene failed, so Claude is shown the error and rewrites |
+| Checking the scenes | The narration is spoken and every scene is run once without drawing it, leaving the storyboard |
+| Waiting for another lesson to finish its check | Two lessons can be written at once, but checks take turns |
+| Checking the automatic fixes | A common mistake (a name from Manim Community, a mistyped mark) was fixed without asking Claude, and the scenes are checked again |
+| Fixing the scenes (1 of 3) | A scene still failed, so Claude is shown the error and rewrites |
 | Polishing timing and layout | It runs, but text overlaps or an animation ran past its word, so Claude gets one go at those |
-| Building 2/5 | Rendering each scene and joining them, as for any narrated video |
+| Looking over the frames | The same, with the storyboard's stills, when you asked Claude to look over its own frames |
+| Storyboard ready: have a look | Waiting for you to approve it |
+| Building 2/5 | Rendering each scene and joining them, as for any narrated video. A scene unchanged since an earlier build is reused |
 
 A two-minute video takes roughly five to ten minutes from start to finish. Most of that is Claude writing.
 
-**What it needs.** [Claude Code](https://claude.com/claude-code) installed and signed in (`claude` on your PATH), and the `video/` folder set up as its README describes (manim, ffmpeg, LaTeX). Each lesson uses your Claude plan or credits: one request to write, plus one for each fix.
+**What it needs.** [Claude Code](https://claude.com/claude-code) installed and signed in (`claude` on your PATH), and the `video/` folder set up as its README describes (manim, ffmpeg, LaTeX). Each lesson uses your Claude plan or credits: one request to write, plus one for each fix and one for the polish. The header shows what lessons cost this month.
 
-**What you get on disk.** Every lesson is a normal project in `../video/projects/<topic>-<id>/`: `script.txt`, `scenes.py`, your `brief.json`, the attached files in `notes/`, and under `build/author/` every prompt sent to Claude and every answer. Edit the script or the scenes and rebuild from the **Narrated video** panel under the lesson form, or with `python3 ../video/build.py <name>`.
+**What it costs, and how it is kept down.** Most of a request's cost is what Claude writes, thinking included. So each step asks with its own effort: writing at high, fixes at low (a fix is mechanical), the polish at medium (`TTS_CLAUDE_EFFORT`, `TTS_CLAUDE_FIX_EFFORT`, `TTS_CLAUDE_POLISH_EFFORT`; `auto` leaves it to Claude Code). Common mistakes are fixed by `../video/autofix.py` before Claude is asked. Every request's token counts and cost are saved beside its prompt in `build/author/`.
+
+**What you get on disk.** Every lesson is a normal project in `../video/projects/<topic>-<id>/`: `script.txt`, `scenes.py`, your `brief.json`, the attached files in `notes/`, under `build/author/` every prompt sent to Claude, every answer and what each cost, under `build/check/` the storyboard, and in `versions/001/` the files and storyboard as Claude first wrote them. Edit the script or the scenes and rebuild from the **Narrated video** panel under the lesson form, or with `python3 ../video/build.py <name>`.
 
 **How it works.** The lesson writer is a second small Express server in `author/`. `npm start` runs it in the same process on port 8790; `npm run author` runs it alone. It gives Claude no tools, so Claude can only send text back, and that text is checked by `../video/check.py` before anything is built. The prompts are plain files you can edit without restarting:
 
@@ -102,11 +116,12 @@ A two-minute video takes roughly five to ten minutes from start to finish. Most 
 
 **Good to know**
 
-- The scenes are Python that Claude wrote and your machine runs. Two things confine them. The check refuses imports beyond manim, numpy, `math`, `random`, `itertools` and `functools`, and names such as `open`, `eval`, `os`, `sys` and `getattr`. And every scene runs inside the macOS sandbox: no network, no writing outside its own project folder and the temporary folders, no reading `~/.ssh`, keychains and the like. It can still read most other files, so it is confinement and not isolation; see `../video/README.md`.
+- The scenes are Python that Claude wrote and your machine runs. Two things confine them. The check refuses imports beyond manim, numpy, `math`, `random`, `itertools` and `functools`, and names such as `open`, `eval`, `os`, `sys` and `getattr`. And every scene runs inside the macOS sandbox: no network, no Apple Events, no writing outside its project's `build/` folder and a cache kept for scenes, no reading `~/.ssh`, keychains and the like, and only a short list of environment variables, so no API keys or tokens. It can still read most other files, so it is confinement and not isolation; see `../video/README.md`.
 - Lessons need an English voice, because animations follow individual words and only the English voices report word timings.
 - If Claude cannot get the scenes to run in three fixes, the card fails with the last error. **Retry** carries on from the files already written.
 - Cancel works at every stage, and stops Claude, the check or the build.
 - Pictures and PDFs go to Claude with the first request only. A fix is about code that failed, so it is sent the script and scenes alone.
+- A lesson's first version is kept in `versions/001/` beside it, with the storyboard it was approved from. Later versions (edits and revisions) are on the way.
 
 ## Where things are stored
 
@@ -117,6 +132,7 @@ data/
   studio.db        SQLite database: scripts, settings, status, and the full-text index
   audio/<id>.mp3   one MP3 per finished generation
   video/<id>.*     each finished video: .mp4, captions as .srt and .vtt, and a .jpg still for its card
+  video/<id>/v<n>.*  a lesson's earlier versions, the last three renders kept (TTS_KEEP_RENDERS)
   previews/        cached voice samples
 ```
 
@@ -138,15 +154,23 @@ All optional. Put them in a `.env` in this folder or the one above it, or in the
 | `TTS_ENV_DIR` | none | Another folder to read `.env` from |
 | `TTS_CLAUDE_BIN` | `claude` | The Claude Code command the lesson writer runs |
 | `TTS_CLAUDE_MODEL` | Claude Code's default | Model for writing lessons, such as `opus` or `sonnet` |
-| `TTS_CLAUDE_EFFORT` | Claude Code's default | Effort level: `low`, `medium`, `high`, `xhigh` or `max` |
+| `TTS_CLAUDE_EFFORT` | `high` | Effort for writing a lesson: `low`, `medium`, `high`, `xhigh`, `max`, or `auto` for Claude Code's default |
+| `TTS_CLAUDE_FIX_EFFORT` | `low` | Effort for fixing failing scenes |
+| `TTS_CLAUDE_POLISH_EFFORT` | `medium` | Effort for the round on timing and layout |
 | `TTS_CLAUDE_TIMEOUT_MIN` | `20` | Minutes one request to Claude may take |
 | `TTS_AUTHOR_FIXES` | `3` | How many times Claude may be asked to fix failing scenes |
 | `TTS_AUTHOR_POLISH` | `1` | `0` skips the extra round for timing and layout warnings |
+| `TTS_AUTHOR_VISUAL_REVIEW` | `0` | `1` shows Claude the storyboard's stills in that round for every lesson; the lesson form can ask for it per lesson |
+| `TTS_AUTHOR_PARALLEL` | `2` | Lessons the writer works on at once. Their checks still take turns |
+| `TTS_LESSON_REVIEW` | `render` | `storyboard` makes new lessons sent without a choice (from `curl`, say) wait at their storyboard |
+| `TTS_NOTES_IMAGE_EDGE` | `1400` | Pixels on the long side of an attached photo |
+| `TTS_KEEP_RENDERS` | `3` | Videos kept per lesson, the current one included |
 | `AUTHOR_PORT` | `8790` | Port for the lesson writer |
 | `TTS_AUTHOR_URL` | none | Use a lesson writer running elsewhere and do not start one |
 | `TTS_VIDEO_DIR` | `../video` | The folder holding `build.py`, `check.py` and `projects/` |
 | `TTS_VIDEO_BUILD` | `python3 ../video/build.py` | Another executable to build a video with |
 | `TTS_AUTHOR_CHECK` | `python3 ../video/check.py` | Another executable to check a lesson with |
+| `TTS_AUTHOR_AUTOFIX` | `python3 ../video/autofix.py` | Another executable to fix common mistakes with |
 
 ## From the terminal
 
@@ -186,7 +210,12 @@ Other useful routes:
 | `GET /api/generations/:id/video`, `/poster`, `/captions.srt`, `/captions.vtt` | A video, its still and its captions |
 | `GET /api/generations/:id/notes/:file` | An image or PDF attached to a lesson |
 | `POST /api/videos` | Build a project in `../video/projects/`: `{ project, quality }` |
-| `POST /api/generations/:id/retry`, `/cancel` | Retry a failed or cancelled item, or stop a running one |
+| `POST /api/generations/:id/retry`, `/cancel` | Retry a failed or cancelled item, or stop a running one. Cancelling a lesson that waits at its storyboard means "don't render" |
+| `POST /api/generations/:id/approve` | Render a lesson waiting at its storyboard: `{ quality }` is optional |
+| `GET /api/generations/:id/storyboard` | The storyboard: per scene and block, the narration, marks, stills and problems. `?version=n` for an earlier version's |
+| `GET /api/generations/:id/storyboard/:file`, `/narration/:block` | A still the storyboard lists, and a block's narration as a WAV |
+| `GET /api/generations/:id/versions` | A lesson's versions: what made each, what it cost, whether it was built |
+| `GET /api/events` | Every change to the library as it happens, as Server-Sent Events |
 | `GET /api/video/projects`, `/api/voices`, `/api/stats`, `/api/health` | Projects, voices, counts, and the engine's state |
 
 ## Project layout
@@ -205,7 +234,8 @@ server/
   db.js           SQLite schema, FTS5 index, queries
   text.js         markdown cleanup
   test/           node:test suite (fake engine, plus tests against the real one)
-  lessons.js      follows a lesson through the lesson writer, then queues its build
+  lessons.js      follows a lesson through the lesson writer, then queues its build or waits at its storyboard
+  versions.js     a lesson's versions: snapshots of its files and storyboard, and its kept renders
   notes.js        saves the images, PDFs and documents attached to a lesson
   video.js        runs video/build.py, and makes a poster for a video that has none
   local.js        refuses requests that do not come from this machine's own pages
@@ -221,7 +251,8 @@ author/
   test/           tests with a fake claude and a fake check
 client/
   src/App.jsx     state, polling, drag and drop, the Lessons and Audio tabs
-  src/components/ Header, LessonPanel, Composer, VideoPanel, Library, Drawer, Toasts
+  src/components/ Header, LessonPanel, Composer, VideoPanel, Library, Drawer, Toasts,
+                  Workspace (a lesson, full width) and Storyboard
   src/**/*.test.* vitest tests
 scripts/setup.sh  creates .venv and downloads the model
 ```

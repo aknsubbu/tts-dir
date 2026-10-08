@@ -10,10 +10,11 @@ Built for and tested on macOS with Apple Silicon.
 
 1. **You give it a topic**, what you want to understand, and optionally your notes: typed text, photos of handwritten pages, screenshots, PDFs or Word files.
 2. **Claude writes the lesson** through [Claude Code](https://claude.com/claude-code): a narration script and the ManimGL scenes that go with it, using your notation and your examples.
-3. **The scenes are checked.** Every scene is run once without drawing it. If one fails, or text overlaps, or an animation runs past its word, Claude is shown the problem and rewrites.
-4. **The narration is spoken locally** by Kokoro, which also reports when each word starts.
-5. **The animations are timed to the words.** A mark in the script, such as `<mark name="slope"/>`, makes an animation land on the exact frame that word is spoken.
-6. **You get an MP4** with captions, in a searchable library.
+3. **The scenes are checked.** Every scene is run once without drawing it. Common mistakes are fixed on the spot without asking Claude; if a scene still fails, or text overlaps, or an animation runs past its word, Claude is shown the problem and rewrites.
+4. **You can look before it renders.** The check leaves a storyboard: a still of the screen at every marked word and at the end of every block, with its narration. Play it as an animatic, then approve it, or let lessons render straight away.
+5. **The narration is spoken locally** by Kokoro, which also reports when each word starts.
+6. **The animations are timed to the words.** A mark in the script, such as `<mark name="slope"/>`, makes an animation land on the exact frame that word is spoken.
+7. **You get an MP4** with captions, in a searchable library. Each lesson shows what Claude cost to write it, and a rebuild renders only the scenes that changed.
 
 A two-minute video takes roughly five to ten minutes, most of it Claude writing. The one example in this repo, on the gradient of logistic regression, cost about $0.70 of Claude usage.
 
@@ -87,7 +88,7 @@ The dashboard's **Audio** tab does plain script-to-MP3 with the same voice, with
 
 - **Sent to Claude:** a lesson's topic, notes and attached files.
 - **Stays local:** speech, rendering and the library. The server listens on `127.0.0.1` only and refuses requests from pages on other sites.
-- **The code Claude writes runs in a sandbox:** no network, and no writing outside the lesson's own project folder. It can still read most files, so it is confinement, not isolation. Details are in [video/README.md](video/README.md#the-sandbox).
+- **The code Claude writes runs in a sandbox:** no network, no Apple Events, no writing outside the lesson's `build/` folder and a cache kept for scenes, and none of the environment's API keys or tokens. It can still read most files, so it is confinement, not isolation. Details are in [video/README.md](video/README.md#the-sandbox).
 
 ## Tests
 
@@ -104,7 +105,8 @@ None of the tests call Claude, and the ones that load the real voice model are s
 | Path | Contents | In git |
 | --- | --- | --- |
 | `tts-studio/data/` | The library: SQLite database, MP3s, finished videos | no |
-| `video/projects/<name>/` | One folder per video: script, scenes, `project.json`, and `build/` | everything except `build/` |
+| `video/projects/<name>/` | One folder per video: script, scenes, `project.json`, and `build/` (renders, the scene cache, the storyboard) | everything except `build/` and `versions/` |
+| `video/projects/<name>/versions/` | Each version of a lesson: its script, scenes and storyboard as they were | no |
 | `video/projects/<name>/notes/`, `brief.json` | Your notes and attached files for a lesson | no, for new lessons; the example lesson's `brief.json` is tracked |
 | `.env` | Optional settings; see [tts-studio/.env.example](tts-studio/.env.example) | no |
 
@@ -116,8 +118,7 @@ None of these exist yet.
 - **Edit and rebuild in the dashboard.** Change Claude's script or scenes in the page and rebuild, instead of opening the project folder in an editor.
 - **Ask for a revision.** Tell Claude what to change in a finished lesson ("slow down the second scene", "use my notation for the loss") and have it rewrite only that.
 - **Longer lessons.** Videos are limited to about five minutes. Longer ones need a chapter outline first, with each chapter written and checked on its own.
-- **Preview before the full render.** Show the stills the check already takes at the end of each block, so a lesson can be judged before minutes are spent rendering it.
-- **Stronger isolation for scenes.** The sandbox blocks the network and outside writes, but a scene can still read most files. Reading could be limited to the project, the ManimGL install, fonts and TeX.
+- **Stronger isolation for scenes.** The sandbox blocks the network, Apple Events and writes outside `build/`, and scenes no longer see the environment's secrets, but a scene can still read most files, start other programs and reach system services. Reading could be limited to the project, the ManimGL install, fonts and TeX, and starting programs to ffmpeg and TeX, once a probe on a Mac shows exactly what rendering needs.
 - **Other platforms.** Attached photos and documents, and the sandbox, rely on tools that ship with macOS. Linux needs replacements for `sips`, `textutil` and `sandbox-exec`.
 - **Word-level sync in other languages.** Only the English voices report word timings, so lessons are English only.
-- **More of the page under test.** The lesson form, the API wrapper and the helpers are tested; the library, the details panel and drag and drop are not.
+- **More of the page under test.** The lesson form, the lesson workspace, the storyboard, the library's cards, the API wrapper and the helpers are tested; the audio details panel and drag and drop are not.

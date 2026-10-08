@@ -19,10 +19,20 @@ const argv = process.argv.slice(2);
 const flag = (name) => argv[argv.indexOf(name) + 1];
 let stdin = '';
 process.stdin.on('data', (d) => (stdin += d)).on('end', () => {
-  const file = path.join(dir, 'answers.json');
-  const answers = JSON.parse(fs.readFileSync(file, 'utf8'));
-  const next = answers.shift();
-  fs.writeFileSync(file, JSON.stringify(answers));
+  // Two lessons may ask at once: take the next answer under a lock, so neither reads the list half-written.
+  const lock = path.join(dir, 'answers.lock');
+  for (;;) {
+    try { fs.mkdirSync(lock); break; } catch { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5); }
+  }
+  let next;
+  try {
+    const file = path.join(dir, 'answers.json');
+    const answers = JSON.parse(fs.readFileSync(file, 'utf8'));
+    next = answers.shift();
+    fs.writeFileSync(file, JSON.stringify(answers));
+  } finally {
+    fs.rmdirSync(lock);
+  }
   // The message arrives as one stream-json line: text blocks, and pictures or PDFs in base64.
   const content = JSON.parse(stdin.trim().split('\\n')[0]).message.content;
   const prompt = content.filter((c) => c.type === 'text').map((c) => c.text).join('\\n');
