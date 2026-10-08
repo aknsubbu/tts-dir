@@ -90,7 +90,7 @@ const MEDIA = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: '
  *          the writer is shown every file except those sent as text
  *   text   the text of any documents and PDFs sent as text, to be added to the typed notes
  */
-export async function saveAttachments(projectDir, uploads, { maxEdge = MAX_EDGE } = {}) {
+export async function saveAttachments(projectDir, uploads, { maxEdge = MAX_EDGE, prefix = '' } = {}) {
   if (!Array.isArray(uploads) || !uploads.length) return { files: [], text: '' };
   if (uploads.length > MAX_FILES) throw new NotesError(`A lesson can have at most ${MAX_FILES} attached files; this one has ${uploads.length}.`);
   const decoded = uploads.map((u) => {
@@ -107,15 +107,19 @@ export async function saveAttachments(projectDir, uploads, { maxEdge = MAX_EDGE 
   }
 
   const dir = path.join(projectDir, 'notes');
+  const existed = fs.existsSync(dir);
   fs.mkdirSync(dir, { recursive: true });
-  const taken = new Set();
+  // Names already in the folder (a revision adds to a lesson's notes) are not reused.
+  const taken = new Set(fs.readdirSync(dir).map((f) => f.toLowerCase()));
+  const written = [];
   const files = [];
   const texts = [];
   try {
     for (const upload of decoded) {
       const { name, kind, bytes } = upload;
-      const saved = path.join(dir, safeName(name, taken));
+      const saved = path.join(dir, safeName(`${prefix}${name}`, taken));
       fs.writeFileSync(saved, bytes);
+      written.push(saved);
       if (kind === 'document') {
         const text = await documentText(saved);
         if (text) texts.push(`# From ${name}\n\n${text}`);
@@ -147,6 +151,7 @@ export async function saveAttachments(projectDir, uploads, { maxEdge = MAX_EDGE 
         // Always re-encode: it also drops location and camera details from phone photos.
         const jpg = path.join(dir, safeName(`${path.basename(saved, path.extname(saved))}.view.jpg`, taken));
         file = await normalizeImage(saved, jpg, maxEdge);
+        written.push(file);
         fs.rmSync(saved, { force: true });
       }
       files.push({
@@ -160,7 +165,8 @@ export async function saveAttachments(projectDir, uploads, { maxEdge = MAX_EDGE 
       });
     }
   } catch (e) {
-    fs.rmSync(dir, { recursive: true, force: true });
+    for (const f of written) fs.rmSync(f, { force: true });
+    if (!existed) fs.rmSync(dir, { recursive: true, force: true });
     throw e;
   }
   return { files, text: texts.join('\n\n') };

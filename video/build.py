@@ -120,7 +120,7 @@ def scene_keys(root, config, manifest, quality):
     shared = {
         "v": CACHE_VERSION,
         "quality": quality,
-        "runtime": hashlib.sha256((HERE / "voiceover.py").read_bytes()).hexdigest(),
+        "runtime": hashlib.sha256((HERE / "voiceover.py").read_bytes() + (HERE / "kit.py").read_bytes()).hexdigest(),
         "manim": manim_fingerprint(),
         "custom_config": custom.read_text(encoding="utf-8") if custom.is_file() else None,
     }

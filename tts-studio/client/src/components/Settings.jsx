@@ -278,6 +278,7 @@ function Defaults({ value, locks, voices, onChange, lockPrefix, withVoice }) {
         <select className="input" disabled={!!locks[`${lockPrefix}.review`]} value={value.review} onChange={(e) => onChange({ review: e.target.value })}>
           <option value="render">Render right away</option>
           <option value="storyboard">Wait for me on the storyboard</option>
+          <option value="script">Show me the narration first</option>
         </select>
       </label>
       {withVoice && (

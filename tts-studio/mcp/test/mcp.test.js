@@ -95,7 +95,7 @@ const said = (r) => r.content.filter((c) => c.type === 'text').map((c) => c.text
 test('the tools are listed, read-only ones marked', async () => {
   const { tools } = await client.listTools();
   const names = tools.map((t) => t.name).sort();
-  assert.deepEqual(names, ['cancel_lesson', 'get_lesson', 'get_settings', 'get_video', 'lesson_status', 'list_voices', 'make_lesson', 'retry_lesson', 'search_lessons', 'test_writer', 'update_settings', 'wait_for_lesson']);
+  assert.deepEqual(names, ['approve_lesson', 'cancel_lesson', 'get_lesson', 'get_settings', 'get_video', 'lesson_status', 'list_voices', 'make_lesson', 'retry_lesson', 'revise_lesson', 'search_lessons', 'test_writer', 'update_settings', 'wait_for_lesson']);
   assert.equal(tools.find((t) => t.name === 'wait_for_lesson').annotations.readOnlyHint, true);
   const { prompts } = await client.listPrompts();
   assert.deepEqual(prompts.map((p) => p.name), ['explain']);
@@ -138,6 +138,17 @@ test('make a lesson from notes and a photo, follow it, and get the video', async
   assert.match(said(lesson), /scenes\.py:\nfrom manimlib import \*/);
   const resource = await client.readResource({ uri: `lesson://${id}/captions` });
   assert.match(resource.contents[0].text, /WEBVTT/);
+
+  // A change, narrowed to a scene, through the connector.
+  box.answers([{ summary: 'Slower', blocks: [{ id: 'intro', text: 'Every line has a slope, slowly.', after: '' }], remove_blocks: [], classes: [], remove_classes: [], preamble: '', whole_script: '', whole_scenes: '' }]);
+  const revising = await call('revise_lesson', { id, request: 'Slow it down', scene: 'Intro' });
+  assert.ok(!revising.isError, said(revising));
+  const revised = await until(async () => {
+    const r = await call('lesson_status', { id });
+    return ['done', 'error'].includes(r.structuredContent.status) && r.structuredContent.version === 2 ? r.structuredContent : null;
+  }, 20_000);
+  assert.equal(revised.lastRevision.summary, 'Slower');
+  assert.match(box.asked().at(-1).stdin, /about the scene Intro/);
 });
 
 test('files from private folders, of the wrong kind, or missing are refused', async () => {

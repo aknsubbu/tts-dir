@@ -69,6 +69,14 @@ python3 check.py demo --static   # only read the files
 A full check also leaves a **storyboard**: a picture of the screen at every mark and at the end of every block in `build/check/frames/`, described by `build/check/storyboard.json` (per scene, per block: the narration with its marks, its length, its stills and its problems). Animations are skipped, so each picture shows where things end up. A play that runs up to a mark is pictured as it ends; a wait that runs up to a mark is pictured after the animation that follows it, since that is the reveal the viewer sees on that word. The dashboard shows the storyboard and plays it as an animatic.
 
 ```bash
+python3 splice.py projects/<name> --edit edit.json   # apply an edit that names only what changes
+```
+
+`splice.py` applies an answer that names only what changes: narration blocks by id (new ones after a block it names), scene classes by name (replaced by their exact line range from Python's `ast`, decorators and the comments directly above included; new ones after a class it names), and the code above the first class. Blocks keep their place, their `[id]` line and their comments. Anything that cannot be applied (an unknown block or class, code that does not parse) is reported and nothing is written. The lesson writer uses it for fixes, the polish and revisions.
+
+`kit.py` is a small kit for scenes, importable as `from kit import ...` like `voiceover`: `derivation(*lines)` (equations one under another, lined up on their equals signs), `boxed(m)`, `cancel(m)`, `plot(f, x_range, y_range)` (axes, a graph and labels) and `note(text)`. A change to it re-renders cached scenes, as a change to `voiceover.py` does.
+
+```bash
 python3 autofix.py projects/<name> --report check.json   # fix common mistakes, given check.py's report
 ```
 

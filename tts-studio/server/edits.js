@@ -95,6 +95,9 @@ export function createEdits({ store, versions, getConfig, runner, lessons }) {
   /** check.py --static: blocks, marks, imports and scene classes, in a fraction of a second. */
   async function staticCheck(root) {
     const config = getConfig();
+    if (!fs.existsSync(path.join(root, 'scenes.py'))) {
+      return { ok: true, errors: [], warnings: [], at: Date.now(), note: 'No scenes yet: they are written once the narration is approved.' };
+    }
     const [cmd, ...pre] = config.authorCheck || ['python3', path.join(config.videoDir, 'check.py')];
     const { stdout, stderr, code } = await run(cmd, [...pre, root, '--static', '--strict', '--sync-scenes'], {
       timeoutMs: 30_000,
@@ -136,7 +139,8 @@ export function createEdits({ store, versions, getConfig, runner, lessons }) {
       next.speed = Math.round(speed * 100) / 100;
     }
     // A lesson made before versions existed: what is on disk becomes version 1 before it changes.
-    if (!row.version) versions.snapshot(row.id, { source: 'written', note: 'As it was before the first edit' });
+    // (A narration waiting for approval has no scenes yet, and becomes a version once it has.)
+    if (!row.version && now.scenes != null) versions.snapshot(row.id, { source: 'written', note: 'As it was before the first edit' });
     if (next.script !== now.script) writeAtomic(path.join(root, 'script.txt'), next.script);
     if (next.scenes !== now.scenes) writeAtomic(path.join(root, 'scenes.py'), next.scenes);
     if (next.voice !== now.voice || next.speed !== now.speed) {

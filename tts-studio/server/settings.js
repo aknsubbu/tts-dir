@@ -313,7 +313,7 @@ export function createSettings({ db, getConfig, secrets }) {
     if (key === 'lesson.defaults' || key === 'claude.defaults') {
       if (!LESSON_MINUTES.includes(Number(v.minutes))) throw new SettingsError(`A lesson is ${LESSON_MINUTES.join(', ')} minutes long.`);
       if (!VIDEO_QUALITIES.includes(v.quality)) throw new SettingsError(`Quality is one of ${VIDEO_QUALITIES.join(', ')}.`);
-      if (!['render', 'storyboard'].includes(v.review)) throw new SettingsError('Review is "render" (right away) or "storyboard" (wait for you).');
+      if (!['render', 'storyboard', 'script'].includes(v.review)) throw new SettingsError('Review is "render" (right away), "storyboard" (wait for you there) or "script" (approve the narration first).');
       const out = { minutes: Number(v.minutes), quality: v.quality, review: v.review };
       if (key === 'claude.defaults') return out;
       const voiceId = String(v.voiceId || '');

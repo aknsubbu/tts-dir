@@ -56,6 +56,7 @@ export const api = {
   restore: (id, version) => req(`/generations/${id}/restore`, { method: 'POST', body: { version } }),
   versionSource: (id, n) => req(`/generations/${id}/versions/${n}/source`),
   transcript: (id) => req(`/generations/${id}/transcript`),
+  revise: (id, body) => req(`/generations/${id}/revise`, { method: 'POST', body }),
   // Settings: who writes lessons, defaults, Claude's limits, costs. Keys go in and never come back.
   settings: () => req('/settings'),
   patchSettings: (body) => req('/settings', { method: 'PATCH', body }),

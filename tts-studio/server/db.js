@@ -210,9 +210,12 @@ export function createStore(dataDir) {
     events.emit('change', id);
   }
 
+  // What a revision asked for and changed, on versions made before it existed too.
+  const versionColumns = new Set(db.prepare('PRAGMA table_info(versions)').all().map((c) => c.name));
+  if (!versionColumns.has('details_json')) db.exec('ALTER TABLE versions ADD COLUMN details_json TEXT');
   const versionStmts = {
-    insert: db.prepare(`INSERT INTO versions (generation_id, n, source, note, created_at, cost_usd, usage_json, check_ok, warnings)
-                        VALUES (@generation_id, @n, @source, @note, @created_at, @cost_usd, @usage_json, @check_ok, @warnings)`),
+    insert: db.prepare(`INSERT INTO versions (generation_id, n, source, note, created_at, cost_usd, usage_json, check_ok, warnings, details_json)
+                        VALUES (@generation_id, @n, @source, @note, @created_at, @cost_usd, @usage_json, @check_ok, @warnings, @details_json)`),
     list: db.prepare('SELECT * FROM versions WHERE generation_id = ? ORDER BY n DESC'),
     get: db.prepare('SELECT * FROM versions WHERE generation_id = ? AND n = ?'),
     next: db.prepare('SELECT COALESCE(MAX(n), 0) + 1 AS n FROM versions WHERE generation_id = ?'),
@@ -221,7 +224,7 @@ export function createStore(dataDir) {
   const VERSION_FIELDS = new Set(['built_at', 'quality', 'duration_sec', 'video_bytes', 'render_kept', 'note']);
   const versions = {
     next: (id) => versionStmts.next.get(id).n,
-    insert: (row) => versionStmts.insert.run({ note: null, cost_usd: null, usage_json: null, check_ok: null, warnings: null, ...row }),
+    insert: (row) => versionStmts.insert.run({ note: null, cost_usd: null, usage_json: null, check_ok: null, warnings: null, details_json: null, ...row }),
     list: (id) => versionStmts.list.all(id),
     get: (id, n) => versionStmts.get.get(id, n),
     update(id, n, patch) {

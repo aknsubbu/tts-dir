@@ -44,7 +44,7 @@ export function createVersions({ store, getConfig }) {
    * Make the next version of lesson `id` from its project's files as they are now.
    * `source` says what made it: written, edited, revised or restored. Returns its number.
    */
-  function snapshot(id, { source, note = null, usage = null, costUsd = null, check = null }) {
+  function snapshot(id, { source, note = null, usage = null, costUsd = null, check = null, details = null }) {
     const row = store.getRaw(id);
     const root = row && projectRoot(row);
     if (!root || !fs.existsSync(root)) throw new Error('This lesson has no project folder to take a version of.');
@@ -58,7 +58,7 @@ export function createVersions({ store, getConfig }) {
     const createdAt = Date.now();
     fs.writeFileSync(
       path.join(dir, 'version.json'),
-      `${JSON.stringify({ n, source, note, createdAt: new Date(createdAt).toISOString(), costUsd, usage }, null, 2)}\n`,
+      `${JSON.stringify({ n, source, note, createdAt: new Date(createdAt).toISOString(), costUsd, usage, ...(details ? { details } : {}) }, null, 2)}\n`,
     );
     store.versions.insert({
       generation_id: id,
@@ -70,6 +70,7 @@ export function createVersions({ store, getConfig }) {
       usage_json: usage ? JSON.stringify(usage) : null,
       check_ok: check ? (check.ok ? 1 : 0) : null,
       warnings: check?.warnings ?? null,
+      details_json: details ? JSON.stringify(details) : null,
     });
     store.update(id, { version: n });
     return n;
@@ -146,7 +147,24 @@ export function createVersions({ store, getConfig }) {
     fs.rmSync(renderDir(id), { recursive: true, force: true });
   }
 
-  return { snapshot, archiveCurrent, built, adopt, renderFile, storyboard, removeRenders, projectRoot };
+  /** The working copy back to version n's files and storyboard, after a revision that failed. */
+  function resetTo(id, n) {
+    const row = store.getRaw(id);
+    const root = row && projectRoot(row);
+    const dir = root && versionDir(root, n);
+    if (!dir || !fs.existsSync(dir)) return false;
+    for (const f of SOURCES) if (fs.existsSync(path.join(dir, f))) fs.copyFileSync(path.join(dir, f), path.join(root, f));
+    const board = path.join(dir, 'storyboard');
+    if (fs.existsSync(path.join(board, 'storyboard.json'))) {
+      const to = path.join(root, 'build', 'check');
+      fs.mkdirSync(path.join(to, 'frames'), { recursive: true });
+      fs.copyFileSync(path.join(board, 'storyboard.json'), path.join(to, 'storyboard.json'));
+      if (fs.existsSync(path.join(board, 'frames'))) fs.cpSync(path.join(board, 'frames'), path.join(to, 'frames'), { recursive: true });
+    }
+    return true;
+  }
+
+  return { snapshot, archiveCurrent, built, adopt, resetTo, renderFile, storyboard, removeRenders, projectRoot };
 }
 
 /** Every still file a storyboard lists. */

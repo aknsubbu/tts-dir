@@ -45,7 +45,7 @@ export function userMessage(prompt, attachments = []) {
  * is why the message goes in as stream-json. --safe-mode leaves out the user's hooks,
  * plugins and CLAUDE.md files, which have nothing to do with writing a lesson.
  */
-export async function askClaude({ system, prompt, attachments = [], schema = LESSON_SCHEMA, config, signal, effort, model }) {
+export async function askClaude({ system, prompt, attachments = [], schema = LESSON_SCHEMA, nonEmpty, config, signal, effort, model }) {
   const bin = config.claudeBin || 'claude';
   const args = [
     '-p',
@@ -80,7 +80,7 @@ export async function askClaude({ system, prompt, attachments = [], schema = LES
     }
     throw e;
   }
-  return parseAnswer(done, schema);
+  return parseAnswer(done, schema, nonEmpty);
 }
 
 /** Every JSON value in the output: one event per line (stream-json), or a single object or list (json). */
@@ -103,8 +103,11 @@ function events(stdout) {
   return out;
 }
 
-/** Pull the answer out of what `claude -p` printed. */
-export function parseAnswer({ code, stdout, stderr }, schema = LESSON_SCHEMA) {
+/**
+ * Pull the answer out of what `claude -p` printed. `nonEmpty` are the fields that must hold
+ * text (all the required ones unless said otherwise: an edit's parts may be left empty).
+ */
+export function parseAnswer({ code, stdout, stderr }, schema = LESSON_SCHEMA, nonEmpty = schema.required) {
   const all = events(stdout);
   if (!all.length) {
     const said = (stderr.trim() || stdout.trim()).split('\n').slice(-3).join(' ').slice(0, 400);
@@ -124,7 +127,7 @@ export function parseAnswer({ code, stdout, stderr }, schema = LESSON_SCHEMA) {
       throw new AuthorError('Claude answered, but not in the format asked for.');
     }
   }
-  for (const key of schema.required) {
+  for (const key of nonEmpty) {
     if (typeof answer[key] !== 'string' || !answer[key].trim()) {
       throw new AuthorError(`Claude's answer is missing “${key}”.`);
     }

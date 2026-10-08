@@ -37,10 +37,10 @@ export function parseJsonAnswer(text, label = 'The model') {
   }
 }
 
-/** Every required field is a non-empty string. */
-export function checkAnswer(answer, schema, label = 'The model') {
+/** The fields that must hold text are non-empty strings (by default, every required field). */
+export function checkAnswer(answer, schema, label = 'The model', nonEmpty = schema.required || []) {
   if (!isObject(answer)) throw new ProviderError(`${label} answered, but not with a JSON object.`, 'format');
-  for (const key of schema.required || []) {
+  for (const key of nonEmpty) {
     if (typeof answer[key] !== 'string' || !answer[key].trim()) throw new ProviderError(`${label}'s answer is missing “${key}”.`, 'format');
   }
   return answer;

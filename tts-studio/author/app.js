@@ -6,7 +6,7 @@ import { localOnly } from '../server/local.js';
 import { MAX_NOTES } from '../shared/limits.js';
 
 const KEEP_FINISHED = 50;
-const KINDS = ['write', 'check'];
+const KINDS = ['write', 'check', 'revise'];
 
 /**
  * The lesson writer: a small service that turns a topic and notes into a video
@@ -14,6 +14,9 @@ const KINDS = ['write', 'check'];
  *
  *   POST /lessons             { project, topic, goal, notes, minutes, voice, writer, capUsd } -> 202 { job }
  *                             { project, kind: "check" } only checks a project's files again
+ *                             { project, kind: "revise", request, scope, history, attachments } changes
+ *                             a written lesson; { phase: "script" | "scenes" } writes the narration
+ *                             alone, or the scenes for an approved one
  *                             writer is the plan for each step (provider, model, effort), as the
  *                             dashboard resolves it from Settings; it never carries a key
  *   GET  /lessons/:id         -> { job }   stage, and the result once status is "done"
@@ -46,10 +49,10 @@ export function createAuthorApp({ getConfig, author = createAuthor({ getConfig }
     job.status = 'working';
     job.controller = new AbortController();
     const options = { signal: job.controller.signal, onStage: (stage) => (job.stage = stage) };
-    const work = job.kind === 'check' ? author.check(job.input, options) : author.write(job.input, options);
+    const work = job.kind === 'check' ? author.check(job.input, options) : job.kind === 'revise' ? author.revise(job.input, options) : author.write(job.input, options);
     work
       .then(
-        (result) => Object.assign(job, { status: 'done', stage: job.kind === 'check' ? 'Checked' : 'Ready to build', result }),
+        (result) => Object.assign(job, { status: 'done', stage: job.kind === 'check' ? 'Checked' : result?.phase === 'script' ? 'Narration ready' : 'Ready to build', result }),
         (e) => Object.assign(job, e.code === 'aborted' ? { status: 'cancelled', stage: 'Cancelled' } : { status: 'error', stage: 'Failed', error: e.message }),
       )
       .finally(() => {
@@ -71,6 +74,7 @@ export function createAuthorApp({ getConfig, author = createAuthor({ getConfig }
     if (!KINDS.includes(kind)) return res.status(400).json({ error: `A job is one of: ${KINDS.join(', ')}.` });
     const resume = kind !== 'write' || b.topic === undefined; // a retry or a check: the brief is already saved in the project
     if (!resume && !String(b.topic).trim()) return res.status(400).json({ error: 'A lesson needs a topic.' });
+    if (kind === 'revise' && !String(b.request || '').trim()) return res.status(400).json({ error: 'Say what to change.' });
     if (String(b.notes || '').length > MAX_NOTES) return res.status(400).json({ error: `Notes are limited to ${MAX_NOTES.toLocaleString('en-US')} characters.` });
     if (b.writer !== undefined) {
       try {
@@ -95,6 +99,8 @@ export function createAuthorApp({ getConfig, author = createAuthor({ getConfig }
         project,
         writer: b.writer,
         capUsd: b.capUsd,
+        phase: b.phase,
+        ...(kind === 'revise' ? { request: String(b.request).slice(0, 4000), scope: b.scope, history: b.history, attachments: b.attachments } : {}),
         ...(resume ? {} : { topic: b.topic, goal: b.goal, notes: b.notes, minutes: b.minutes, voice: b.voice, attachments: b.attachments, visualReview: b.visualReview }),
       },
     };

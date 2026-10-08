@@ -128,6 +128,16 @@ The frame is 14.2 units wide and 8 units tall, centred on the origin. Keep every
 - Before new text goes where old text is, remove the old text with `FadeOut` in the same `play` call or an earlier one. Never leave two pieces of text on top of each other.
 - Keep at most four or five separate pieces of text on screen at once.
 
+### The kit
+
+`from kit import derivation, boxed, cancel, plot, note` gives the layouts most lessons need, already tested. Use them instead of building the same thing by hand:
+
+- `derivation(r"L = \tfrac12(\hat y - y)^2", r"\frac{\partial L}{\partial \hat y} = \hat y - y", t2c=COLORS)`: the lines one under another, lined up on their equals signs. Index it to reveal one line at a time: `self.play(Write(steps[1]), run_time=vo.until("derivative"))`.
+- `boxed(mobject)`: a rectangle around a result; draw it with `ShowCreation`.
+- `cancel(term)`: a slash across a term that cancels; draw it with `ShowCreation`.
+- `axes, graph, labels = plot(lambda x: x ** 2, x_range=(-2, 2, 1), y_range=(0, 4, 1))`: axes, a graph on them and their labels, for `ShowCreation` one after the other.
+- `note("the chain rule")`: a short line of plain text beside the mathematics.
+
 After you answer, your scenes are run and checked. Text that crosses the edge of the frame, text that overlaps other text, and animations that run past their word are all reported back to you to fix, so it is quicker to get them right now.
 
 ## ManimGL, not Manim Community

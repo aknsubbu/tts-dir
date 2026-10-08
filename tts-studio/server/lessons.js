@@ -39,10 +39,14 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
     store.update(id, { status: 'error', error: message, stage: null, finished_at: Date.now() });
   }
 
-  /** True once Claude's project has passed its check, so a retry only needs to build it. */
+  /** True once the project's scenes are written and passed their check, so a retry only needs to build it. */
   function isWritten(project) {
-    return fs.existsSync(path.join(getConfig().videoDir, 'projects', project, 'author.json'));
+    const root = path.join(getConfig().videoDir, 'projects', project);
+    return fs.existsSync(path.join(root, 'author.json')) && fs.existsSync(path.join(root, 'scenes.py'));
   }
+
+  /** For a lesson whose narration is approved first: the narration now, or the scenes once it is approved. */
+  const phaseOf = (lesson) => (lesson?.review === 'script' ? (lesson.scriptApproved ? 'scenes' : 'script') : undefined);
 
   /**
    * Who writes each step, and what the lesson may still spend, from Settings as they are now.
@@ -81,7 +85,8 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
     }
     let job;
     try {
-      ({ job } = await call('POST', '/lessons', { project, ...brief, ...plan }));
+      const phase = phaseOf(lesson);
+      ({ job } = await call('POST', '/lessons', { project, ...brief, ...plan, ...(phase ? { phase } : {}) }));
     } catch (e) {
       return fail(id, e.cause ? unreachable() : e.message); // fetch sets .cause when it could not connect
     }
@@ -111,6 +116,11 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
       return schedule(id);
     }
     if (!watching.has(id)) return;
+    if (watch.kind === 'revise') {
+      if (job.status === 'done') return finishRevise(id, job.result, watch);
+      if (job.status === 'error') return endRevise(id, watch, job.error || 'The revision could not be made.');
+      if (job.status === 'cancelled') return endRevise(id, watch, null);
+    }
     if (watch.kind === 'check') {
       if (job.status === 'done') return finishCheck(id, job.result, watch);
       if (job.status === 'error') return endCheck(id, watch, { ok: false, error: job.error || 'The check could not run.' });
@@ -140,6 +150,21 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
     // The totals stay on the row; each request's figures are in the version and in author.json.
     const usage = result.usage ? { ...result.usage } : null;
     if (usage) delete usage.requests;
+    if (result.phase === 'script') {
+      // The narration waits for the person; the scenes are written once it is approved.
+      settings.lesson = { ...settings.lesson, phase: 'script', scriptCostUsd: result.costUsd ?? 0, writtenBy: result.writtenBy || [] };
+      return store.update(id, {
+        ...(settings.lesson.ownTitle ? {} : { title: String(result.title || row.title).slice(0, 120) }),
+        text: script,
+        char_count: script.length,
+        word_count: countWords(script),
+        settings_json: JSON.stringify(settings),
+        status: 'awaiting',
+        stage: 'Narration ready: have a look',
+      });
+    }
+    // A narration approved first cost something too.
+    const costUsd = result.costUsd == null ? null : Math.round((result.costUsd + (settings.lesson.scriptCostUsd || 0)) * 1000) / 1000;
     Object.assign(settings, {
       scenes: result.scenes,
       lesson: {
@@ -148,9 +173,10 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
         autofixed: result.autofixed?.length || 0,
         polished: result.polished,
         warnings: result.warnings?.length || 0,
-        costUsd: result.costUsd ?? null,
+        costUsd,
         usage,
-        ...(result.writtenBy ? { writtenBy: result.writtenBy } : {}),
+        phase: null,
+        ...(result.writtenBy ? { writtenBy: [...(settings.lesson.writtenBy || []).filter((w) => w.step === 'write' && settings.lesson.phase === 'script'), ...result.writtenBy] } : {}),
       },
     });
     const review = settings.lesson.review === 'storyboard';
@@ -168,7 +194,7 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
       versions?.snapshot(id, {
         source: 'written',
         usage: result.usage || null,
-        costUsd: result.costUsd ?? null,
+        costUsd,
         check: { ok: true, warnings: result.warnings?.length || 0 },
       });
     } catch (e) {
@@ -244,6 +270,77 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
     store.update(id, { ...(saved ? { settings_json: JSON.stringify(saved.settings) } : {}), ...watch.prior });
   }
 
+  /**
+   * Ask the writer for a change to a written lesson: { request, scope, attachments, history,
+   * review }. The lesson keeps playing its built video meanwhile; a revision that fails or is
+   * cancelled leaves the files as the current version has them.
+   */
+  async function revise(id, { request, scope, attachments = [], history = [], review = 'render' }) {
+    const row = store.getRaw(id);
+    const settings = JSON.parse(row.settings_json);
+    const prior = { status: row.status, stage: row.stage, error: row.error, finished_at: row.finished_at };
+    store.update(id, { status: 'processing', stage: 'Waiting for the lesson writer', error: null, progress_done: 0, progress_total: 0 });
+    let job;
+    try {
+      const plan = await writerFor(settings.lesson);
+      ({ job } = await call('POST', '/lessons', { project: settings.project, kind: 'revise', request, scope, attachments, history, ...plan }));
+    } catch (e) {
+      store.update(id, prior);
+      throw Object.assign(new Error(e.cause ? unreachable() : e.message), { status: e.cause ? 503 : 400 });
+    }
+    watching.set(id, { jobId: job.id, misses: 0, kind: 'revise', prior, review, request, scope });
+    schedule(id);
+  }
+
+  /** The revision is written and checked: it becomes the next version, then renders or waits at its storyboard. */
+  function finishRevise(id, result, watch) {
+    watching.delete(id);
+    const row = store.getRaw(id);
+    if (!row) return;
+    const settings = JSON.parse(row.settings_json);
+    const project = readProject(getConfig().videoDir, settings.project);
+    const script = project?.script || row.text;
+    const usage = result.usage ? { ...result.usage } : null;
+    if (usage) delete usage.requests;
+    settings.scenes = result.scenes || settings.scenes;
+    settings.lastRevision = { request: watch.request, summary: result.summary || '', at: Date.now(), ok: true };
+    store.update(id, { text: script, char_count: script.length, word_count: countWords(script), settings_json: JSON.stringify(settings) });
+    try {
+      versions?.snapshot(id, {
+        source: 'revised',
+        note: watch.request,
+        usage: result.usage || null,
+        costUsd: result.costUsd ?? null,
+        check: { ok: true, warnings: result.warnings?.length || 0 },
+        details: {
+          request: watch.request,
+          summary: result.summary || '',
+          scope: result.scope || watch.scope || { kind: 'lesson' },
+          changed: result.changed || {},
+          outsideScope: result.outsideScope || [],
+          fixes: result.fixes || 0,
+          polished: !!result.polished,
+          writtenBy: result.writtenBy || [],
+        },
+      });
+    } catch (e) {
+      console.error(`Could not keep version files for ${settings.project}: ${e.message}`);
+    }
+    if (watch.review === 'storyboard') return store.update(id, { status: 'awaiting', stage: 'Storyboard ready: have a look', error: null });
+    store.update(id, { status: 'queued', stage: null, error: null, progress_done: 0, finished_at: null });
+    runner.enqueue(id);
+  }
+
+  function endRevise(id, watch, error) {
+    watching.delete(id);
+    const row = store.getRaw(id);
+    if (!row) return;
+    if (row.version) versions?.resetTo(id, row.version);
+    const settings = JSON.parse(row.settings_json);
+    settings.lastRevision = { request: watch.request, error: error || 'Cancelled', at: Date.now(), ok: false };
+    store.update(id, { settings_json: JSON.stringify(settings), ...watch.prior });
+  }
+
   /** Stop following a lesson and tell the writer to stop too. Returns true if it was being written or checked. */
   function cancel(id) {
     const watch = watching.get(id);
@@ -252,6 +349,10 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
     call('POST', `/lessons/${watch.jobId}/cancel`).catch(() => {});
     if (watch.kind === 'check') {
       endCheck(id, watch, null); // a cancelled check leaves the lesson as it was
+      return true;
+    }
+    if (watch.kind === 'revise') {
+      endRevise(id, watch, null); // so does a cancelled revision, files included
       return true;
     }
     watching.delete(id);
@@ -264,5 +365,5 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
     watching.clear();
   }
 
-  return { start, checkEdit, cancel, stop, isWritten, isActive: (id) => watching.has(id) };
+  return { start, checkEdit, revise, cancel, stop, isWritten, isActive: (id) => watching.has(id) };
 }

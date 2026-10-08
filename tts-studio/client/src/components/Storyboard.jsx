@@ -19,7 +19,7 @@ export function Narration({ text }) {
 
 const stillLabel = (s) => (s.mark ? `at “${s.mark}”` : 'end of block');
 
-function BlockCard({ block, current, onPlay, playingHere }) {
+function BlockCard({ block, current, onPlay, playingHere, onChange }) {
   const stills = useMemo(() => [...(block.stills || [])].sort((a, b) => (a.at ?? Infinity) - (b.at ?? Infinity)), [block.stills]);
   const [picked, setPicked] = useState(null);
   const shown = current || stills.find((s) => s.file === picked) || stills.find((s) => s.mark == null) || stills[stills.length - 1];
@@ -51,6 +51,11 @@ function BlockCard({ block, current, onPlay, playingHere }) {
           </button>
         ))}
         <span className="grow" />
+        {onChange && (
+          <button type="button" className="btn small" onClick={() => onChange(block)} aria-label={`Ask for a change to block ${block.id}`}>
+            Change this…
+          </button>
+        )}
         {block.audioUrl && (
           <button type="button" className="btn small" onClick={onPlay} aria-label={`Play the narration of block ${block.id}`}>
             {playingHere ? '■' : '▶'} {block.duration != null ? `${block.duration.toFixed(1)} s` : ''}
@@ -66,7 +71,7 @@ function BlockCard({ block, current, onPlay, playingHere }) {
  * its marks and at its end, its narration and its problems. Played as an animatic, the
  * narration runs block after block and the picture changes on the marked words.
  */
-export default function Storyboard({ id, version, refreshKey }) {
+export default function Storyboard({ id, version, refreshKey, onChangeBlock }) {
   const [board, setBoard] = useState(null);
   const [error, setError] = useState('');
   const audio = useRef(null);
@@ -184,6 +189,7 @@ export default function Storyboard({ id, version, refreshKey }) {
                   current={here ? stillAt(blocks, index, anim.t) : null}
                   playingHere={here}
                   onPlay={() => (here ? stop() : playFrom(index, true))}
+                  onChange={onChangeBlock}
                 />
               );
             })}

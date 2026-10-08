@@ -96,14 +96,15 @@ export function createMcpServer({ baseUrl = DEFAULT_URL, linkBase = baseUrl.repl
       costUsd: lesson.costUsd ?? null,
       writtenBy: lesson.writtenBy || null,
       error: g.error,
-      waitingOn: g.status === 'awaiting' ? 'the person: the storyboard is ready to look over and approve in the dashboard' : null,
+      waitingOn: g.status === 'awaiting' ? (lesson.phase === 'script' ? 'the person: the narration is ready to read and approve' : 'the person: the storyboard is ready to look over and approve') : null,
+      lastRevision: g.settings?.lastRevision || null,
       durationSec: g.durationSec,
       link: link(g.id),
     };
     const what = {
       queued: 'Waiting its turn to be built.',
       processing: g.stage ? `${g.stage}${facts.progress ? ` (${facts.progress})` : ''}.` : `Building${facts.progress ? ` ${facts.progress}` : ''}.`,
-      awaiting: 'Written and checked; waiting for the person to look over the storyboard and approve it.',
+      awaiting: lesson.phase === 'script' ? 'The narration is written; waiting for the person to read and approve it before the scenes are written.' : 'Written and checked; waiting for the person to look over the storyboard and approve it.',
       done: `Done${g.durationSec ? `: ${Math.floor(g.durationSec / 60)} min ${String(Math.round(g.durationSec % 60)).padStart(2, '0')} s` : ''}${lesson.costUsd != null ? `, ${money(lesson.costUsd)} to write` : ''}.`,
       error: `Failed: ${g.error}`,
       cancelled: 'Cancelled.',
@@ -142,7 +143,7 @@ export function createMcpServer({ baseUrl = DEFAULT_URL, linkBase = baseUrl.repl
         voice: z.string().optional().describe('An English voice id from list_voices. Leave out for the default'),
         title: z.string().max(120).optional(),
         tags: z.array(z.string()).max(12).optional(),
-        review: z.enum(['none', 'storyboard']).optional().describe('"storyboard" waits for the person to approve before rendering'),
+        review: z.enum(['none', 'storyboard', 'narration']).optional().describe('"storyboard" waits for the person to approve before rendering; "narration" waits for them to approve the narration before the scenes are written'),
         writer: z.object({ provider: z.string(), model: z.string().optional() }).optional().describe('A provider set up in Settings, for this lesson only (see get_settings)'),
       },
     },
@@ -161,7 +162,7 @@ export function createMcpServer({ baseUrl = DEFAULT_URL, linkBase = baseUrl.repl
         ...(a.voice ? { voiceId: a.voice } : {}),
         ...(a.title ? { title: a.title } : {}),
         ...(a.tags ? { tags: a.tags } : {}),
-        ...(a.review ? { review: a.review === 'none' ? 'render' : 'storyboard' } : {}),
+        ...(a.review ? { review: { none: 'render', storyboard: 'storyboard', narration: 'script' }[a.review] } : {}),
         ...(a.writer ? { writer: a.writer } : {}),
       };
       const estimate = await api('POST', '/api/estimate', {
@@ -338,6 +339,52 @@ export function createMcpServer({ baseUrl = DEFAULT_URL, linkBase = baseUrl.repl
       if (!['error', 'cancelled'].includes(g.status)) return text(`${describe(g).line} Only failed or cancelled lessons can be retried.`, describe(g).facts);
       const { line, facts } = describe(await api('POST', `/api/generations/${encodeURIComponent(id)}/retry`));
       return text(`Retrying. ${line} Call wait_for_lesson to follow it.`, facts);
+    }),
+  );
+
+  server.registerTool(
+    'revise_lesson',
+    {
+      title: 'Ask for a change',
+      description: [
+        'Change a written lesson: "slow down the second scene", "use my notation for the loss". The writer changes only what the request needs;',
+        'the result is checked and becomes the next version, which then renders (the old video plays meanwhile). Narrow it with scope:',
+        'a scene class name, a block id, or a time in seconds into the video. Returns at once; follow it with wait_for_lesson.',
+      ].join(' '),
+      inputSchema: {
+        ...idArg,
+        request: z.string().min(1).max(4000).describe('What to change, in the person\'s words'),
+        scene: z.string().optional().describe('Only this scene (its class name, from get_lesson)'),
+        block: z.string().optional().describe('Only this narration block (its id)'),
+        at: z.number().min(0).optional().describe('Only the block on screen this many seconds into the video'),
+        files: z.array(fileSpec).max(MAX_FILES).optional().describe('New notes for the change, such as a photo of the notation to use'),
+        review: z.enum(['none', 'storyboard']).optional().describe('"storyboard" waits for the person before rendering'),
+      },
+    },
+    tool(async (a) => {
+      const scope = a.at !== undefined ? { kind: 'time', at: a.at } : a.block ? { kind: 'block', id: a.block } : a.scene ? { kind: 'scene', name: a.scene } : { kind: 'lesson' };
+      const files = readNoteFiles(a.files || [], { cwd });
+      const request = files.notes ? `${a.request}\n\n${files.notes}` : a.request;
+      const g = await api('POST', `/api/generations/${encodeURIComponent(a.id)}/revise`, { request, scope, attachments: files.attachments, review: a.review === 'storyboard' ? 'storyboard' : 'render' });
+      const { line, facts } = describe(g);
+      return text(`Revising. ${line} Call wait_for_lesson to follow it; the new version renders when it passes its check.`, facts);
+    }),
+  );
+
+  server.registerTool(
+    'approve_lesson',
+    {
+      title: 'Approve a lesson',
+      description: 'Continue a lesson that waits for the person: render it after its storyboard, or write the scenes for its narration. Only when the person has said to.',
+      inputSchema: { ...idArg, quality: z.enum(VIDEO_QUALITIES).optional() },
+    },
+    tool(async ({ id, quality }) => {
+      const g = await getLesson(id);
+      if (g.status !== 'awaiting') return text(`${describe(g).line} It is not waiting for approval.`, describe(g).facts);
+      const narration = g.settings?.lesson?.phase === 'script';
+      const after = await api('POST', `/api/generations/${encodeURIComponent(id)}/approve`, { action: narration ? 'scenes' : 'render', ...(quality ? { quality } : {}) });
+      const { line, facts } = describe(after);
+      return text(`${narration ? 'Narration approved: the scenes are being written.' : 'Approved: rendering.'} ${line} Call wait_for_lesson to follow it.`, facts);
     }),
   );
 

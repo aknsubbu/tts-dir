@@ -244,7 +244,7 @@ export default function LessonPanel({ voices, defaultVoiceId, engineReady, onQue
         review: prefs.review, visualReview: prefs.visualReview,
         ...(choice ? { writer: JSON.parse(choice) } : {}),
       });
-      const after = prefs.review === 'storyboard' ? 'It waits for you at its storyboard.' : 'Follow it in the library; it takes a few minutes.';
+      const after = { storyboard: 'It waits for you at its storyboard.', script: 'It waits for you once the narration is written.' }[prefs.review] || 'Follow it in the library; it takes a few minutes.';
       const by = choice ? JSON.parse(choice) : null;
       const who = by ? studio?.providers?.find((p) => p.id === by.provider)?.label || 'The writer' : writerName(estimate?.writer?.write) || 'Claude';
       toast({ kind: 'success', text: `${who} is writing “${topic.trim()}”. ${after}`, ms: 8000 });
@@ -363,6 +363,7 @@ export default function LessonPanel({ voices, defaultVoiceId, engineReady, onQue
           {[
             ['render', 'Render right away'],
             ['storyboard', 'Show me the storyboard'],
+            ['script', 'Show me the narration first'],
           ].map(([v, label]) => (
             <label key={v} className={prefs.review === v ? 'on' : ''}>
               <input type="radio" name="lesson-review" value={v} checked={prefs.review === v} onChange={() => change((p) => ({ ...p, review: v }))} />

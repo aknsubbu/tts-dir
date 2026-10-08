@@ -43,7 +43,7 @@ HERE = Path(__file__).resolve().parent
 # These rules catch accidents and the obvious ways out, and give Claude an error it can fix.
 # They are not what confines a scene: sandbox.py is, by running it with no network and no
 # writing outside its project.
-ALLOWED_IMPORTS = {"manimlib", "voiceover", "numpy", "math", "random", "itertools", "functools", "sys", "pathlib"}
+ALLOWED_IMPORTS = {"manimlib", "voiceover", "kit", "numpy", "math", "random", "itertools", "functools", "sys", "pathlib"}
 FORBIDDEN_NAMES = {"eval", "exec", "compile", "__import__", "open", "input", "breakpoint", "globals"}
 # --strict is for scenes a model wrote (the lesson writer passes it). They have no reason to
 # touch the system at all, so the modules a hand-written project uses to find its own files go

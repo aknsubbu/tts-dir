@@ -14,7 +14,7 @@ Built for and tested on macOS with Apple Silicon.
 4. **You can look before it renders.** The check leaves a storyboard: a still of the screen at every marked word and at the end of every block, with its narration. Play it as an animatic, then approve it, or let lessons render straight away.
 5. **The narration is spoken locally** by Kokoro, which also reports when each word starts.
 6. **The animations are timed to the words.** A mark in the script, such as `<mark name="slope"/>`, makes an animation land on the exact frame that word is spoken.
-7. **You get an MP4** with captions and a clickable transcript, in a searchable library. Each lesson shows who wrote it and what it cost. Edit its script or scenes in the page and render a new version, compare versions and restore an old one; a rebuild renders only the scenes that changed.
+7. **You get an MP4** with captions and a clickable transcript, in a searchable library. Each lesson shows who wrote it and what it cost. Ask for a change ("slow down the second scene") and only that is rewritten; or edit the script and scenes in the page. Each change is a new version you can compare and restore, and a rebuild renders only the scenes that changed.
 8. **Or ask Claude for one.** An MCP connector lets Claude Code and the Claude desktop app start a lesson from a conversation, follow its stages and hand you the video.
 
 A two-minute video takes roughly five to ten minutes, most of it Claude writing. The one example in this repo, on the gradient of logistic regression, cost about $0.70 of Claude usage.
@@ -131,7 +131,6 @@ None of these exist yet.
 
 - **Claude in a browser.** The MCP connector works with Claude Code and the desktop app. claude.ai connects from Anthropic's servers, so it would need this Mac reachable over HTTPS with a login in front: a tunnel, OAuth, and expiring links for videos.
 - **Write it in the conversation.** Tools that hand Claude Code the lesson guide and let it submit a script and scenes itself, so the conversation's own Claude writes the lesson with everything it already knows.
-- **Ask for a revision.** Tell Claude what to change in a finished lesson ("slow down the second scene", "use my notation for the loss") and have it rewrite only that.
 - **Longer lessons.** Videos are limited to about five minutes. Longer ones need a chapter outline first, with each chapter written and checked on its own.
 - **Stronger isolation for scenes.** The sandbox blocks the network, Apple Events and writes outside `build/`, and scenes no longer see the environment's secrets, but a scene can still read most files, start other programs and reach system services. Reading could be limited to the project, the ManimGL install, fonts and TeX, and starting programs to ffmpeg and TeX, once a probe on a Mac shows exactly what rendering needs.
 - **Other platforms.** Attached photos and documents, and the sandbox, rely on tools that ship with macOS. Linux needs replacements for `sips`, `textutil` and `sandbox-exec`.

@@ -140,6 +140,8 @@ export default function EditTab({ g, voices, toast }) {
   }
 
   const problems = [...(report?.errors || []).map((p) => ({ ...p, severity: 'error' })), ...(report?.warnings || []).map((p) => ({ ...p, severity: 'warning' }))];
+  // A narration waiting for approval has no scenes yet: only the script can be changed.
+  const narrationOnly = src.scenes == null && g.settings?.lesson?.phase === 'script';
   const errors = report?.errors?.length || 0;
   const status = state === 'saving' ? 'Saving…' : dirty ? 'Unsaved changes' : src.draft ? `Saved, not yet rendered · differs from v${src.version}` : 'Saved';
   const which = report === src.report && src.report ? `full check ${timeAgo(src.report.at)}` : report ? 'quick check' : null;
@@ -170,10 +172,12 @@ export default function EditTab({ g, voices, toast }) {
         <span className="grow" />
         {(dirty || src.draft) && <button className="btn" disabled={busy} onClick={discard}>Discard</button>}
         <button className="btn" disabled={busy || !dirty || state !== 'idle'} onClick={() => save()} title="⌘S">Save</button>
-        <button className="btn" disabled={busy || state !== 'idle'} onClick={() => start('check')}>Check</button>
-        <button className="btn primary" disabled={busy || state !== 'idle' || errors > 0} onClick={() => start('build')} title={errors ? 'Fix the problems first' : `Check, then render as v${next}`}>
-          Render v{next}
-        </button>
+        {!narrationOnly && <button className="btn" disabled={busy || state !== 'idle'} onClick={() => start('check')}>Check</button>}
+        {!narrationOnly && (
+          <button className="btn primary" disabled={busy || state !== 'idle' || errors > 0} onClick={() => start('build')} title={errors ? 'Fix the problems first' : `Check, then render as v${next}`}>
+            Render v{next}
+          </button>
+        )}
       </div>
 
       {busy && <p className="status-box processing">{g.stage || 'Building'}… The files can be edited once it finishes.</p>}
@@ -204,7 +208,9 @@ export default function EditTab({ g, voices, toast }) {
         </section>
         <section className={`pane ${pane === 'scenes' ? 'on' : ''}`}>
           <h4>scenes.py {draft.scenes !== (src.scenes || '') ? <span className="hint">edited</span> : null}</h4>
-          <CodeEditor label="scenes.py" language="python" value={draft.scenes} readOnly={busy} problems={scenesProblems} viewRef={views.scenes} onChange={(scenes) => setDraft((d) => ({ ...d, scenes }))} onSave={() => save()} />
+          {narrationOnly
+            ? <p className="status-box">The scenes are written once you approve the narration.</p>
+            : <CodeEditor label="scenes.py" language="python" value={draft.scenes} readOnly={busy} problems={scenesProblems} viewRef={views.scenes} onChange={(scenes) => setDraft((d) => ({ ...d, scenes }))} onSave={() => save()} />}
         </section>
       </div>
 

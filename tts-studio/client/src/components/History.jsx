@@ -117,9 +117,17 @@ export default function History({ g, toast }) {
               <span className="grow" />
               {v.n !== list.current && <button className="btn" disabled={busy} onClick={() => restore(v.n)}>Restore</button>}
             </div>
+            {v.details?.request && (
+              <div className="revision-note">
+                <q>{v.details.request}</q>
+                {v.details.summary && <span> {v.details.summary}.</span>}
+                {v.details.scope && v.details.scope.kind !== 'lesson' && <span className="hint"> Asked about {v.details.scope.kind === 'scene' ? `scene ${v.details.scope.name}` : `block [${v.details.scope.id}]`}.</span>}
+                {v.details.outsideScope?.length > 0 && <span className="hint warn"> Also changed outside it: {v.details.outsideScope.join(', ')}.</span>}
+              </div>
+            )}
             <div className="hint">
               {[
-                v.note,
+                v.details?.request ? null : v.note,
                 v.costUsd != null ? `${fmtUsd(v.costUsd)} to write` : null,
                 v.checkOk == null ? null : v.checkOk ? `checked${v.warnings ? `, ${v.warnings} warning${v.warnings === 1 ? '' : 's'}` : ''}` : 'failed its check',
                 v.builtAt ? `built${v.quality ? ` at ${v.quality}` : ''}${v.durationSec ? `, ${fmtDuration(v.durationSec)}` : ''}${v.renderKept ? '' : ', render not kept'}` : 'not built',

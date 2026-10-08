@@ -5,6 +5,7 @@ import { Progress, StatusBadge } from './Library.jsx';
 import { NoteFiles, VideoPlayer } from './Drawer.jsx';
 import Storyboard from './Storyboard.jsx';
 import Transcript from './Transcript.jsx';
+import RevisionBar from './RevisionBar.jsx';
 
 // The editor and the diffs are most of the page's code, so they load when their tab is opened.
 const EditTab = lazy(() => import('./EditTab.jsx'));
@@ -68,6 +69,8 @@ function Effort({ lesson }) {
  */
 export default function Workspace({ id, tab, autoplay, summary, voices = [], onClose, onPatch, onDelete, onCancel, onRetry, onApprove, toast }) {
   const videoRef = useRef(null);
+  const askRef = useRef(null);
+  const [scope, setScope] = useState({ kind: 'lesson' });
   const [detail, setDetail] = useState(null);
   const [loadError, setLoadError] = useState('');
   const [title, setTitle] = useState('');
@@ -113,6 +116,12 @@ export default function Workspace({ id, tab, autoplay, summary, voices = [], onC
 
   const s = g?.settings;
   const lesson = s?.lesson;
+  const narration = lesson?.phase === 'script'; // waiting on its narration, before the scenes are written
+  const canRevise = !!lesson && g.version > 0 && !narration && !isActive(g);
+  const changeBlock = (block) => {
+    setScope({ kind: 'block', id: block.id });
+    askRef.current?.focus();
+  };
   const current = versions?.versions?.find((v) => v.n === versions.current);
 
   const commitTitle = async () => {
@@ -172,7 +181,9 @@ export default function Workspace({ id, tab, autoplay, summary, voices = [], onC
                 <select className="input" aria-label="Quality" value={quality} onChange={(e) => setQuality(e.target.value)}>
                   {QUALITIES.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
                 </select>
-                <button className="btn primary" onClick={() => onApprove(g, { quality })}>Approve and render</button>
+                {narration
+                  ? <button className="btn primary" onClick={() => onApprove(g, { quality, action: 'scenes' })}>Approve the narration</button>
+                  : <button className="btn primary" onClick={() => onApprove(g, { quality })}>Approve and render</button>}
               </div>
             )}
             {(isActive(g) || needsYou(g)) && <button className="btn" onClick={() => onCancel(g)}>{needsYou(g) ? 'Don’t render' : 'Cancel'}</button>}
@@ -210,8 +221,13 @@ export default function Workspace({ id, tab, autoplay, summary, voices = [], onC
                   </div>
                 ) : (
                   <div className={`status-box ${g.status}`}>
-                    <p>{needsYou(g) ? 'Nothing is rendered yet. Look over the storyboard, then approve it to render.' : 'The video appears here once it is built.'}</p>
-                    {needsYou(g) && <a className="btn primary" href={tabLink('storyboard')}>Open the storyboard</a>}
+                    <p>
+                      {narration
+                        ? 'The narration is written. Read it below, change it in the Edit tab if you like, then approve it and the scenes are written for it.'
+                        : needsYou(g) ? 'Nothing is rendered yet. Look over the storyboard, then approve it to render.' : 'The video appears here once it is built.'}
+                    </p>
+                    {needsYou(g) && !narration && <a className="btn primary" href={tabLink('storyboard')}>Open the storyboard</a>}
+                    {narration && <pre className="script narration-review">{g.text}</pre>}
                   </div>
                 )}
                 {(isActive(g) || g.error) && (
@@ -237,11 +253,12 @@ export default function Workspace({ id, tab, autoplay, summary, voices = [], onC
                 </section>
               </div>
             )}
-            {tab === 'storyboard' && <Storyboard id={g.id} refreshKey={`${g.version}-${g.status}`} />}
+            {tab === 'storyboard' && <Storyboard id={g.id} refreshKey={`${g.version}-${g.status}`} onChangeBlock={canRevise ? changeBlock : undefined} />}
             <Suspense fallback={<p className="hint">Loading…</p>}>
               {tab === 'edit' && <EditTab g={g} voices={voices} toast={toast} />}
               {tab === 'history' && <History g={g} toast={toast} />}
             </Suspense>
+            {canRevise && <RevisionBar key={g.id} g={g} scope={scope} setScope={setScope} videoRef={tab === 'watch' ? videoRef : null} toast={toast} inputRef={askRef} />}
             {tab === 'notes' && (
               <div className="ws-notes">
                 {lesson && (

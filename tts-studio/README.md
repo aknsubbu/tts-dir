@@ -72,6 +72,10 @@ The card in the library shows each stage. Click it to open the lesson's workspac
 - **History**: every version, what made it (written, edited, restored), what it cost, whether it passed its check and was built. Compare any two: the narration block by block with changed words marked, and `scenes.py` as a line diff. **Restore** makes an earlier version the next one; when its render is still kept it plays at once, otherwise it is built.
 - **Notes**: what you asked for, the files you attached and the narration.
 
+**Ask for a change** sits at the bottom of every tab of a written lesson: "slow down the second scene", "use my notation for the loss". Narrow it to a scene or a block (or press **Change this…** on a storyboard card), or to the moment the video is paused at; attach notes, such as a photo of your notation; and tick **Show me the storyboard first** to look before it renders. The writer answers with only the blocks and scene classes it changes, which `../video/splice.py` puts in place, so unchanged narration is reused as recorded and unchanged scenes are not rendered again: a small change takes minutes. The result is checked and fixed like a new lesson, becomes the next version with the request, the writer's one-line summary, its cost and anything it changed outside the part you picked, and renders while the old video plays. A revision that fails, or is cancelled, leaves the lesson and its files as they were. Each request is sent with the last three requests and their summaries, so "undo that" makes sense.
+
+**Show me the narration first** (in the form's **Before it renders**) stops after the narration is written. Read it on the Watch tab, change it in the Edit tab if you like, then **Approve the narration** and the scenes are written for it. Animation code is paid for only once the direction is right.
+
 Beside the video, the **transcript** marks each word as it is spoken; click a word to jump there. It comes from the build's word timings, so lessons built before this release show none until they are built again.
 
 A lesson that waits for you says **Storyboard ready** on its card, and the header counts them. In its workspace, **Approve and render** renders it at the quality you pick there, and **Don't render** cancels it (Retry renders it after all). While a lesson is rebuilt, it keeps playing its last built version.
@@ -101,13 +105,15 @@ A lesson takes up to 12 attached files and 20 MB in total, and 60,000 characters
 | Polishing timing and layout | It runs, but text overlaps or an animation ran past its word, so Claude gets one go at those |
 | Looking over the frames | The same, with the storyboard's stills, when you asked Claude to look over its own frames |
 | Storyboard ready: have a look | Waiting for you to approve it |
+| Narration ready: have a look | Waiting for you to read and approve the narration; the scenes come after |
+| Revising: … | The writer is making a change you asked for; then the check, as above |
 | Building 2/5 | Rendering each scene and joining them, as for any narrated video. A scene unchanged since an earlier build is reused |
 
 A two-minute video takes roughly five to ten minutes from start to finish. Most of that is Claude writing.
 
 **What it needs.** A writer: by default [Claude Code](https://claude.com/claude-code) installed and signed in (`claude` on your PATH); see **Who writes your lessons** below for the others. And the `video/` folder set up as its README describes (manim, ffmpeg, LaTeX). A lesson is one request to write, plus one for each fix and one for the polish. The form shows who will write it and about what it will cost, and the header shows what lessons cost this month.
 
-**What it costs, and how it is kept down.** Most of a request's cost is what Claude writes, thinking included. So each step asks with its own effort: writing at high, fixes at low (a fix is mechanical), the polish at medium (`TTS_CLAUDE_EFFORT`, `TTS_CLAUDE_FIX_EFFORT`, `TTS_CLAUDE_POLISH_EFFORT`; `auto` leaves it to Claude Code). Common mistakes are fixed by `../video/autofix.py` before Claude is asked. Every request's token counts and cost are saved beside its prompt in `build/author/`.
+**What it costs, and how it is kept down.** Most of a request's cost is what the writer writes, thinking included. So each step asks with its own effort: writing at high, fixes at low (a fix is mechanical), the polish at medium (`TTS_CLAUDE_EFFORT`, `TTS_CLAUDE_FIX_EFFORT`, `TTS_CLAUDE_POLISH_EFFORT`; `auto` leaves it to Claude Code). Common mistakes are fixed by `../video/autofix.py` before the writer is asked. Fixes, the polish and revisions answer with only the blocks and classes they change, not both files again. The polish is shown only the scenes its warnings are in, and is skipped when the only warnings are animations running less than half a second long. Scenes can use a small kit of tested layouts (`../video/kit.py`: derivations lined up on their equals signs, boxed results, cancelled terms, axes with a graph), which makes them shorter and less likely to fail. Every request's token counts and cost are saved beside its prompt in `build/author/`.
 
 **What you get on disk.** Every lesson is a normal project in `../video/projects/<topic>-<id>/`: `script.txt`, `scenes.py`, your `brief.json`, the attached files in `notes/`, under `build/author/` every prompt sent to the writer, every answer and what each cost, under `build/check/` the storyboard and the last check's report, and in `versions/NNN/` each version's files and storyboard. Edit it in the **Edit** tab, or in your own editor and render it from there (the tab notices), or with `python3 ../video/build.py <name>`.
 
@@ -118,6 +124,9 @@ A two-minute video takes roughly five to ten minutes from start to finish. Most 
 | `author/prompts/guide.md` | The system prompt: how to plan a lesson, the script and scene formats, the ManimGL reference |
 | `author/prompts/lesson.md` | The request, with `{{topic}}`, `{{goal}}`, `{{notes}}` and the length filled in |
 | `author/prompts/repair.md` | The follow-up when the check finds problems |
+| `author/prompts/revise.md` | A change asked for after the lesson was made |
+| `author/prompts/edit-format.md` | How fixes, the polish and revisions answer: only what changes |
+| `author/prompts/read.md`, `scenes.md` | Writing out attached notes for another writer; the scenes for an approved narration |
 | `author/prompts/example/` | The worked example shown to Claude. `npm test` checks it still passes |
 
 **Good to know**
@@ -177,7 +186,9 @@ For the desktop app, add the entry Settings shows to `~/Library/Application Supp
 
 | Tool | Does |
 | --- | --- |
-| `make_lesson` | Start a lesson: topic, goal, notes, file paths (with PDF pages or text only), length, quality, voice, title, tags, review, and optionally a set-up writer. Returns at once with its id, link and estimated cost |
+| `make_lesson` | Start a lesson: topic, goal, notes, file paths (with PDF pages or text only), length, quality, voice, title, tags, review (none, storyboard or narration), and optionally a set-up writer. Returns at once with its id, link and estimated cost |
+| `revise_lesson` | Ask for a change, narrowed to a scene, a block or a time in the video, with new note files; it becomes the next version |
+| `approve_lesson` | Continue a lesson waiting on its storyboard or its narration, when the person says so |
 | `wait_for_lesson` | Waits up to 50 seconds and returns as soon as the lesson's stage changes, with progress notifications while it waits. Claude calls it again until the lesson is done |
 | `lesson_status`, `search_lessons`, `get_lesson` | Where a lesson is; the library's search; its brief, script and scenes, and up to 12 storyboard stills as images |
 | `get_video` | The MP4's path, its captions and poster, its length and link, with the poster as an image |
@@ -285,7 +296,8 @@ Other useful routes:
 | `GET /api/generations/:id/notes/:file` | An image or PDF attached to a lesson |
 | `POST /api/videos` | Build a project in `../video/projects/`: `{ project, quality }` |
 | `POST /api/generations/:id/retry`, `/cancel` | Retry a failed or cancelled item, or stop a running one. Cancelling a lesson that waits at its storyboard means "don't render" |
-| `POST /api/generations/:id/approve` | Render a lesson waiting at its storyboard: `{ quality }` is optional |
+| `POST /api/generations/:id/approve` | Continue a lesson that waits for you: `{ action: "render", quality }` after its storyboard, `{ action: "scenes" }` after its narration |
+| `POST /api/generations/:id/revise` | Ask for a change: `{ request, scope, attachments, review }`, with `scope` `{ kind: "lesson" }`, `{ kind: "scene", name }`, `{ kind: "block", id }` or `{ kind: "time", at }` |
 | `GET /api/generations/:id/storyboard` | The storyboard: per scene and block, the narration, marks, stills and problems. `?version=n` for an earlier version's |
 | `GET /api/generations/:id/storyboard/:file`, `/narration/:block` | A still the storyboard lists, and a block's narration as a WAV |
 | `GET /api/generations/:id/versions` | A lesson's versions: what made each, what it cost, whether it was built |
@@ -336,7 +348,7 @@ shared/
 author/
   index.js        the lesson writer on its own (npm run author)
   app.js          its HTTP API: POST /lessons, GET /lessons/:id, POST /lessons/:id/cancel
-  pipeline.js     write, check, fix, polish
+  pipeline.js     write (or the narration, then the scenes), revise, check, fix, polish
   claude.js       runs `claude -p` and reads its answer
   writers/        one interface over every provider: anthropic.js, openai.js (any OpenAI-compatible
                   address), ollama.js, the plan each job carries (plan.js), and the Test (probe.js)
@@ -352,7 +364,7 @@ mcp/
 client/
   src/App.jsx     state, polling, drag and drop, the Lessons and Audio tabs
   src/components/ Header, LessonPanel, Composer, VideoPanel, Library, Drawer, Toasts,
-                  Workspace (a lesson, full width), Storyboard, EditTab with CodeEditor
+                  Workspace (a lesson, full width), RevisionBar, Storyboard, EditTab with CodeEditor
                   (CodeMirror 6), History (versions and diffs), Transcript and Settings
   src/**/*.test.* vitest tests
 scripts/

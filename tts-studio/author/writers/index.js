@@ -24,9 +24,9 @@ const add = (a, b) => {
   return out;
 };
 
-export async function askWriter({ writer, secrets, config, schema, prompt, ...rest }) {
+export async function askWriter({ writer, secrets, config, schema, prompt, nonEmpty, ...rest }) {
   if (!writer || writer.kind === 'claude-code') {
-    const out = await askClaude({ ...rest, prompt, schema, config, model: writer ? writer.model : undefined });
+    const out = await askClaude({ ...rest, prompt, schema, nonEmpty, config, model: writer ? writer.model : undefined });
     return { ...out, usage: { ...out.usage, provider: 'claude-code', kind: 'claude-code', costKnown: true } };
   }
   const adapter = ADAPTERS[writer.kind];
@@ -36,7 +36,7 @@ export async function askWriter({ writer, secrets, config, schema, prompt, ...re
   const once = async (text) => {
     const out = await adapter({ writer, key, config, schema, prompt: text, ...rest });
     try {
-      checkAnswer(out.answer, schema, writer.label);
+      checkAnswer(out.answer, schema, writer.label, nonEmpty);
     } catch (e) {
       e.usage = out.usage;
       throw e;

@@ -365,10 +365,10 @@ export default function App() {
   };
   const cancelItem = act(api.cancel);
   const retryItem = act(api.retry);
-  const approveItem = async (g, { quality } = {}) => {
+  const approveItem = async (g, { quality, action } = {}) => {
     try {
-      await api.approve(g.id, { quality });
-      toast({ kind: 'success', text: `Rendering “${g.title}”. It plays here when it is done.` });
+      await api.approve(g.id, { quality, ...(action ? { action } : {}) });
+      toast({ kind: 'success', text: action === 'scenes' ? `Writing the scenes for “${g.title}”.` : `Rendering “${g.title}”. It plays here when it is done.` });
       window.location.hash = routeHash(g.id, 'watch');
     } catch (e) {
       toast({ kind: 'error', text: e.message });
