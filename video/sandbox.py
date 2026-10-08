@@ -75,9 +75,12 @@ BREW_READ = ("Cellar", "opt", "lib", "share", "Frameworks", "etc/fonts")
 # not open every program in /usr/bin. What is needed inside them is named one by one.
 SHARED = (
     "/", "/usr", "/usr/bin", "/usr/sbin", "/bin", "/sbin", "/usr/local", "/usr/local/bin", "/usr/local/sbin",
-    "/opt", "/opt/homebrew", "/opt/homebrew/bin", "/opt/homebrew/sbin", "/opt/homebrew/Cellar", "/usr/local/Cellar",
+    "/opt", "/opt/homebrew", "/opt/homebrew/bin", "/opt/homebrew/sbin",
     "/opt/local", "/opt/local/bin", "/Library", "/Applications", "/private", "/private/var", "/Users",
 )
+# Every Homebrew program, each in its own folder. Readable whole, since a program's libraries are
+# in other programs' folders there (opt/ and lib/ only link into it); never startable whole.
+CELLARS = ("/opt/homebrew/Cellar", "/usr/local/Cellar")
 # The TeX programs manim starts (latex or xelatex, then dvisvgm), and what they start themselves.
 TEX_PROGRAMS = ("latex", "xelatex", "pdftex", "xetex", "dvisvgm", "kpsewhich")
 
@@ -257,16 +260,18 @@ def _brew_prefix(real):
     return Path(text.split("/Cellar/")[0]) if "/Cellar/" in text else None
 
 
-def _too_wide(real):
+def _too_wide(real, start=False):
     """Paths no rule may cover: the home folder and the folders above it, and the folders many
-    programs share."""
+    programs share; for starting programs, Homebrew's Cellar too."""
     home = Path.home().resolve()
-    return real == home or real in home.parents or str(real) in SHARED or any(str(real) == os.path.realpath(s) for s in SHARED)
+    wide = SHARED + (CELLARS if start else ())
+    return real == home or real in home.parents or str(real) in wide or any(str(real) == os.path.realpath(s) for s in wide)
 
 
-def _paths(items, brew=False):
+def _paths(items, brew=False, start=False):
     """Each path as given and as it really is (the sandbox sees real paths), with what its
-    Homebrew prefix provides when `brew`, without duplicates or anything too wide."""
+    Homebrew prefix provides when `brew`, without duplicates or anything too wide for reading
+    (or, with `start`, for starting programs)."""
     out = []
     for item in items:
         if not item:
@@ -278,7 +283,7 @@ def _paths(items, brew=False):
         if prefix:
             found += [prefix / sub for sub in BREW_READ]
         for p in found:
-            if p.is_absolute() and not _too_wide(Path(os.path.realpath(p))) and p not in out:
+            if p.is_absolute() and not _too_wide(Path(os.path.realpath(p)), start) and p not in out:
                 out.append(p)
     return out
 
@@ -295,7 +300,19 @@ def allowed(cmd, root, search=None):
         Path(root).resolve(), RUNTIME, cache_root(), Path.home() / "Library" / "Fonts", *SYSTEM_READ,
         *py_read, *tex_read, *av_read, *start,
     ]
-    return _paths(read, brew=True), _paths(start)
+    return _paths(read, brew=True), _paths(start, start=True)
+
+
+def private_folders():
+    """The folders keys and logins are kept in, each as named and, when it is a link, as it really is."""
+    home = Path.home().resolve()
+    out = []
+    for name in PRIVATE:
+        named, real = home / name, Path(os.path.realpath(home / name))
+        for p in (named, real):
+            if p not in out and (p == named or not _too_wide(p)):  # a link to the home folder itself would deny everything
+                out.append(p)
+    return out
 
 
 # ---------- the profile ----------
@@ -315,7 +332,6 @@ def profile(cmd, root, how=None, search=None):
         body = " ".join(filters)
         return f"(allow {op} (with report){' ' + body if body else ''})" if how == "report" else f"(deny {op}{' ' + body if body else ''})"
 
-    home = Path.home().resolve()
     rules = [
         PROFILE.read_text(encoding="utf-8").rstrip(),
         "",
@@ -337,8 +353,9 @@ def profile(cmd, root, how=None, search=None):
         "; No asking Launch Services to open something, and no clipboard.",
         stop("mach-lookup", *(f"(global-name {_quote(s)})" for s in SERVICES)),
         "",
-        "; Never where keys and logins are kept, whatever was allowed above.",
-        *(f"(deny file-read* (subpath {_quote(home / p)}))" for p in PRIVATE),
+        "; Never where keys and logins are kept, whatever was allowed above: as named, and where",
+        "; they really are when they link elsewhere (a dotfiles folder, say).",
+        *(f"(deny file-read* (subpath {_quote(p)}))" for p in private_folders()),
     ]
     return "\n".join(rules) + "\n"
 

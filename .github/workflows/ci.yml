@@ -57,3 +57,9 @@ jobs:
       - name: Render inside the strict sandbox
         if: steps.plain.outputs.ok == '1'
         run: python -m unittest test_sandbox -v
+      # What the strict rules stopped, from the macOS log, as rules for scene.sb: shown even when
+      # the render above failed, so one run says everything a Mac like this one needs.
+      - name: What the sandbox stopped
+        if: always() && steps.plain.outputs.ok == '1'
+        continue-on-error: true
+        run: python sandbox_probe.py

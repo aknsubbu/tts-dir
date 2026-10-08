@@ -39,7 +39,16 @@ export function checkPath(p, { cwd = process.cwd(), home = os.homedir() } = {}) 
     throw new FileRuleError(`There is no file at ${wanted}.`);
   }
   const inside = (dir) => real === dir || real.startsWith(dir + path.sep);
-  const blocked = [...PRIVATE.map((d) => path.join(home, d)), ...SYSTEM].find(inside);
+  // Compared as they really are: a home reached through a link, or a ~/.ssh or ~/.config that
+  // links into a dotfiles folder, must not let a file through.
+  const resolved = (dir) => {
+    try {
+      return fs.realpathSync(dir);
+    } catch {
+      return dir;
+    }
+  };
+  const blocked = [...PRIVATE.map((d) => path.join(home, d)), ...SYSTEM].find((dir) => inside(dir) || inside(resolved(dir)));
   if (blocked) throw new FileRuleError(`${p} is in ${blocked}, where keys and private data are kept. Lessons never read from there.`);
   if (!fs.statSync(real).isFile()) throw new FileRuleError(`${p} is not a file.`);
   return real;

@@ -55,6 +55,7 @@ class SandboxTest(unittest.TestCase):
         done = subprocess.run(
             sandbox.wrap([sys.executable, "-c", PROBE, kind, str(target)], self.root),
             capture_output=True, text=True, env=env, preexec_fn=limits,
+            cwd=self.root,  # as every scene runs: in its own project, which Python reads as its first import path
         )
         return done.stdout.split()[0] if done.stdout else done.stderr
 
@@ -169,6 +170,17 @@ class ProfileTest(unittest.TestCase):
         last = text.strip().splitlines()[-1]
         self.assertTrue(last.startswith("(deny file-read* (subpath") and last.endswith('"))'), last)
 
+    def test_a_private_folder_that_links_elsewhere_is_denied_where_it_really_is(self):
+        home = self.base / "home"
+        (home).mkdir()
+        dotfiles = self.base / "dotfiles" / "ssh"
+        dotfiles.mkdir(parents=True)
+        (home / ".ssh").symlink_to(dotfiles)
+        with mock.patch.dict(os.environ, {"HOME": str(home)}):
+            text = sandbox.profile([sys.executable], self.root, how="strict", search="")
+        self.assertIn(f'(deny file-read* (subpath "{home / ".ssh"}"))', text)
+        self.assertIn(f'(deny file-read* (subpath "{dotfiles}"))', text)
+
     def test_report_mode_reports_instead_of_denying_the_new_rules_only(self):
         text = sandbox.profile([sys.executable], self.root, how="report", search="")
         self.assertIn("(allow file-read* (with report))", text)
@@ -226,7 +238,11 @@ class ProfileTest(unittest.TestCase):
         (self.base / "path" / "ffmpeg").symlink_to(real)
         read, start = sandbox.allowed([sys.executable], self.root, search=str(self.base / "path"))
         prefix = self.base / "brew"
+        with mock.patch.object(sandbox, "CELLARS", (str(prefix / "Cellar"),)):
+            read, start = sandbox.allowed([sys.executable], self.root, search=str(self.base / "path"))
         self.assertIn(real, start)
+        self.assertIn(prefix / "Cellar", read)  # its libraries are in other programs' folders there
+        self.assertNotIn(prefix / "Cellar", start)  # but not every program in it can be started
         self.assertIn(prefix / "opt", read)
         self.assertIn(prefix / "lib", read)
         self.assertIn(prefix / "etc" / "fonts", read)

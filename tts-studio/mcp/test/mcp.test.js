@@ -200,6 +200,13 @@ test('files from private folders, of the wrong kind, or missing are refused', as
   assert.throws(() => checkPath(path.join(home, '.ssh', 'id_ed25519'), { home }), /where keys and private data are kept/);
   fs.symlinkSync(path.join(home, '.ssh', 'id_ed25519'), path.join(dir, 'innocent.txt'));
   assert.throws(() => checkPath(path.join(dir, 'innocent.txt'), { home }), /where keys/, 'a link into a private folder is followed');
+  // A private folder that links elsewhere, as dotfiles managers make them, is still private.
+  fs.mkdirSync(path.join(dir, 'dotfiles', 'config'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'dotfiles', 'config', 'token.txt'), 'SECRET');
+  fs.symlinkSync(path.join(dir, 'dotfiles', 'config'), path.join(home, '.config'));
+  assert.throws(() => checkPath(path.join(home, '.config', 'token.txt'), { home }), /where keys/, 'a linked ~/.config');
+  fs.symlinkSync(dir, path.join(dir, 'through-a-link'));
+  assert.throws(() => checkPath(path.join(dir, 'through-a-link', 'home', '.ssh', 'id_ed25519'), { home: path.join(dir, 'through-a-link', 'home') }), /where keys/, 'a home reached through a link');
   fs.writeFileSync(path.join(dir, 'sheet.xlsx'), 'x');
   const wrong = await call('make_lesson', { topic: 'x', files: ['sheet.xlsx'] });
   assert.equal(wrong.isError, true);
