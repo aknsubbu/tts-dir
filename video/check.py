@@ -17,17 +17,23 @@ the edge of the frame, text on top of other text.
 Each scene is tried with `manimgl -s -w`, which runs every line of it without
 drawing the animations, so a broken scene is found in seconds. This is what the
 lesson writer in tts-studio/author runs on what Claude wrote.
+
+A full check also leaves a storyboard: a picture of the screen at every mark and at
+the end of every block in build/check/frames/, described by build/check/storyboard.json.
 """
 import argparse
 import ast
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import build
+import project_ast
 import sandbox
 from narrate import _MARK, ScriptError, load_project, parse_script
 
@@ -58,11 +64,11 @@ class Report:
     def __init__(self):
         self.errors, self.warnings = [], []
 
-    def error(self, where, message):
-        self.errors.append({"where": where, "message": message})
+    def error(self, where, message, **extra):
+        self.errors.append({"where": where, "message": message, **extra})
 
-    def warn(self, where, message):
-        self.warnings.append({"where": where, "message": message})
+    def warn(self, where, message, **extra):
+        self.warnings.append({"where": where, "message": message, **extra})
 
 
 # ---------- reading the files ----------
@@ -224,7 +230,8 @@ def narrate(root, report):
 
 
 def try_scene(root, config, scene, report):
-    """Run one scene without drawing its animations, and collect what it reports."""
+    """Run one scene without drawing its animations, and collect what it reports.
+    Returns (the scene's report or None, its error or None)."""
     out = root / "build" / "check"
     result = out / f"{scene}.json"
     result.unlink(missing_ok=True)
@@ -244,13 +251,72 @@ def try_scene(root, config, scene, report):
             text=True, timeout=SCENE_TIMEOUT, preexec_fn=limits,
         )
     except subprocess.TimeoutExpired:
-        return report.error(scene, f"the scene did not finish within {SCENE_TIMEOUT} seconds; it may loop forever")
+        message = f"the scene did not finish within {SCENE_TIMEOUT} seconds; it may loop forever"
+        report.error(scene, message)
+        return None, message
+    data = json.loads(result.read_text(encoding="utf-8")) if result.is_file() else None
     if done.returncode:
-        return report.error(scene, tidy(done.stdout))
-    if not result.is_file():
-        return report.error(scene, "the scene ran but played no narration; it needs at least one `with self.voiceover(...)` block")
-    for issue in json.loads(result.read_text(encoding="utf-8")).get("issues", []):
-        report.warn(scene, issue["message"])
+        report.error(scene, tidy(done.stdout))
+        return data, report.errors[-1]["message"]  # what it drew before failing still goes on the storyboard
+    if data is None:
+        message = "the scene ran but played no narration; it needs at least one `with self.voiceover(...)` block"
+        report.error(scene, message)
+        return None, message
+    for issue in data.get("issues", []):
+        report.warn(scene, issue["message"], block=issue.get("block"))
+    return data, None
+
+
+def write_storyboard(root, config, manifest, results):
+    """build/check/storyboard.json: per scene, per block, the narration and the stills taken while checking.
+
+    `results` is {scene: (its report or None, its error or None)}. Block text keeps its marks, so
+    the page can show where each one falls; `at` is seconds into the block.
+    """
+    script = dict(parse_script((root / config["script"]).read_text(encoding="utf-8")))
+    try:
+        classes = project_ast.scene_classes(ast.parse((root / config["scenes_file"]).read_text(encoding="utf-8")))
+    except SyntaxError:
+        classes = {}
+    played, scenes = set(), []
+    for name in config["scenes"]:
+        data, error = results.get(name, (None, None))
+        data = data or {}
+        stills, issues = data.get("stills", []), data.get("issues", [])
+        timeline = {b["id"]: b for b in data.get("blocks", [])}
+        order = list(timeline) or (project_ast.blocks_played(classes[name]) if name in classes else [])
+        blocks = []
+        for bid in order:
+            played.add(bid)
+            spoken = manifest["blocks"].get(bid, {})
+            blocks.append({
+                "id": bid,
+                "text": script.get(bid, spoken.get("text", "")),
+                "duration": spoken.get("duration"),
+                "start": timeline.get(bid, {}).get("start"),
+                "marks": spoken.get("marks", {}),
+                "wav": spoken.get("wav"),
+                "stills": [x for x in stills if x.get("block") == bid],
+                "issues": [{"kind": i["kind"], "message": i["message"]} for i in issues if i.get("block") == bid],
+            })
+        scenes.append({
+            "name": name,
+            "error": error,
+            "blocks": blocks,
+            "end": next((x["file"] for x in stills if x.get("block") is None), None),
+            "issues": [{"kind": i["kind"], "message": i["message"]} for i in issues if i.get("block") is None],
+        })
+    board = {
+        "version": 1,
+        "checkedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "duration": round(sum(b["duration"] for b in manifest["blocks"].values()), 2),
+        "scenes": scenes,
+        "unplayed": [b for b in manifest["order"] if b not in played],
+    }
+    out = root / "build" / "check" / "storyboard.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(board, indent=1, ensure_ascii=False), encoding="utf-8")
+    return board
 
 
 def check(root, static_only=False, sync_scenes=False, strict=False):
@@ -265,8 +331,10 @@ def check(root, static_only=False, sync_scenes=False, strict=False):
             for b in info["blocks"]:
                 b["duration"] = round(manifest["blocks"][b["id"]]["duration"], 2)
             info["duration"] = round(sum(b["duration"] for b in info["blocks"]), 1)
-            for scene in config["scenes"]:
-                try_scene(root, config, scene, report)
+            shutil.rmtree(root / "build" / "check" / "frames", ignore_errors=True)  # no stills left from an older version
+            results = {scene: try_scene(root, config, scene, report) for scene in config["scenes"]}
+            write_storyboard(root, config, manifest, results)
+            info["storyboard"] = "build/check/storyboard.json"
     return {"ok": not report.errors, "errors": report.errors, "warnings": report.warnings, **info}
 
 

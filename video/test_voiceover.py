@@ -10,20 +10,12 @@ from types import SimpleNamespace
 from voiceover import VoiceoverError, VoiceoverScene
 
 
-class FakeScene(VoiceoverScene):
+class FakeClock:
     """Advances time the way manimgl's Scene does.
 
     get_time_progression uses np.arange(0, run_time, 1/fps) + 1/fps: ceil(run_time * fps)
     frames, and the clock ends on the last of them, so every play or wait rounds up.
     """
-
-    def __init__(self, manifest, fps=30, skip_animations=False):
-        self.time = 0.0
-        self.camera = SimpleNamespace(fps=fps)
-        self.skip_animations = skip_animations
-        self.voiceover_manifest = manifest
-        self.sounds = []
-        self.frames = 0
 
     def _advance(self, run_time):
         step = 1 / self.camera.fps
@@ -41,6 +33,18 @@ class FakeScene(VoiceoverScene):
     def add_sound(self, path, time_offset=0):
         if not self.skip_animations:  # manimgl drops sounds while skipping
             self.sounds.append((Path(path).name, self.time + time_offset))
+
+
+class FakeScene(VoiceoverScene, FakeClock):
+    """VoiceoverScene first, as in class Intro(VoiceoverScene, Scene)."""
+
+    def __init__(self, manifest, fps=30, skip_animations=False):
+        self.time = 0.0
+        self.camera = SimpleNamespace(fps=fps)
+        self.skip_animations = skip_animations
+        self.voiceover_manifest = manifest
+        self.sounds = []
+        self.frames = 0
 
 
 def block(duration, marks=None, english=True):
@@ -265,6 +269,89 @@ class ReportTest(unittest.TestCase):
         with self.scene.voiceover("intro") as vo:
             self.scene.play(5.0)
         self.assertFalse(self.report.exists())
+
+    def test_problems_name_their_block_and_scene(self):
+        with self.scene.voiceover("intro") as vo:
+            self.scene.play(2.0)
+            vo.until("early")
+        issue = json.loads(self.report.read_text())["issues"][0]
+        self.assertEqual((issue["block"], issue["scene"]), ("intro", "FakeScene"))
+
+
+class PictureScene(FakeScene):
+    """A fake that can draw: each picture records what was on screen when it was taken."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.screen = "empty"
+
+    def update_frame(self, dt=0, force_draw=False):
+        pass
+
+    def get_image(self):
+        shown = self.screen
+        return SimpleNamespace(save=lambda path: Path(path).write_text(shown))
+
+
+class StoryboardTest(unittest.TestCase):
+    """Stills at every mark and at the end of every block, for the storyboard."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        blocks = {"intro": block(3.0, {"slope": 1.0, "rise": 2.0}), "outro": block(1.0)}
+        (self.dir / "audio").mkdir()
+        for b in blocks.values():
+            (self.dir / b["wav"]).write_bytes(b"")
+        (self.dir / "manifest.json").write_text(json.dumps({"order": list(blocks), "blocks": blocks}))
+        self.shots = self.dir / "frames"
+        os.environ["VOICEOVER_REPORT"] = str(self.dir / "report.json")
+        os.environ["VOICEOVER_SNAPSHOTS"] = str(self.shots)
+        self.scene = PictureScene(self.dir / "manifest.json", skip_animations=True)
+
+    def tearDown(self):
+        os.environ.pop("VOICEOVER_REPORT", None)
+        os.environ.pop("VOICEOVER_SNAPSHOTS", None)
+        self.tmp.cleanup()
+
+    def stills(self):
+        return json.loads((self.dir / "report.json").read_text())["stills"]
+
+    def shown(self, file):
+        return (self.shots / file).read_text()
+
+    def test_an_animation_that_ends_on_a_mark_is_pictured_as_it_ends(self):
+        s = self.scene
+        with s.voiceover("intro") as vo:
+            s.screen = "graph"
+            s.play(vo.until("slope"))
+            s.screen = "graph and line"
+            s.play(vo.until("rise"))
+            s.screen = "everything"
+        stills = self.stills()
+        self.assertEqual([(x["block"], x["mark"], x["at"]) for x in stills], [("intro", "slope", 1.0), ("intro", "rise", 2.0), ("intro", None, 3.0)])
+        self.assertEqual(self.shown("PictureScene-intro--slope.png"), "graph")
+        self.assertEqual(self.shown("PictureScene-intro--rise.png"), "graph and line")
+        self.assertEqual(self.shown("PictureScene-intro.png"), "everything")
+
+    def test_waiting_for_a_word_then_revealing_pictures_the_reveal(self):
+        s = self.scene
+        with s.voiceover("intro") as vo:
+            s.wait(vo.until("slope"))
+            s.screen = "caption"
+            s.play(0.5)
+            s.wait(vo.until("rise"))  # nothing is revealed for this one before the block ends
+            s.screen = "end"
+        self.assertEqual(self.shown("PictureScene-intro--slope.png"), "caption")
+        self.assertEqual(self.shown("PictureScene-intro--rise.png"), "end")
+        self.assertEqual([x["mark"] for x in self.stills()], ["slope", "rise", None])
+
+    def test_no_pictures_without_the_snapshot_variable(self):
+        del os.environ["VOICEOVER_SNAPSHOTS"]
+        with self.scene.voiceover("intro") as vo:
+            self.scene.play(vo.until("rise"))
+        self.assertFalse(self.shots.exists())
+        self.assertEqual(self.stills(), [])
 
 
 if __name__ == "__main__":
