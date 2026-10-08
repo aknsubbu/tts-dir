@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
-import { fmtBytes, fmtDate, fmtDuration, fmtNumber, fmtUsd, isActive, needsYou, routeHash, WORKSPACE_TABS } from '../utils.js';
+import { fmtBytes, fmtDate, fmtDuration, fmtNumber, fmtUsd, isActive, needsYou, routeHash, tabsFor } from '../utils.js';
 import { Progress, StatusBadge } from './Library.jsx';
 import { NoteFiles, VideoPlayer } from './Drawer.jsx';
 import Storyboard from './Storyboard.jsx';
@@ -10,8 +10,9 @@ import RevisionBar from './RevisionBar.jsx';
 // The editor and the diffs are most of the page's code, so they load when their tab is opened.
 const EditTab = lazy(() => import('./EditTab.jsx'));
 const History = lazy(() => import('./History.jsx'));
+const Outline = lazy(() => import('./Outline.jsx'));
 
-const TAB_LABELS = { watch: 'Watch', storyboard: 'Storyboard', edit: 'Edit', history: 'History', notes: 'Notes' };
+const TAB_LABELS = { watch: 'Watch', outline: 'Outline', storyboard: 'Storyboard', edit: 'Edit', history: 'History', notes: 'Notes' };
 export const QUALITIES = [
   ['default', '1080p'],
   ['medium', '720p'],
@@ -63,11 +64,25 @@ function Effort({ lesson }) {
   );
 }
 
+/** Which chapter the Storyboard, Edit and History tabs show, for a lesson in chapters. */
+export function ChapterPicker({ chapters, value, onChange }) {
+  const i = Math.max(0, chapters.findIndex((c) => c.id === value));
+  return (
+    <div className="chapter-picker row" role="group" aria-label="Chapter">
+      <button type="button" className="btn small" disabled={i === 0} aria-label="Previous chapter" onClick={() => onChange(chapters[i - 1].id)}>‹</button>
+      <select className="input" aria-label="Chapter" value={chapters[i].id} onChange={(e) => onChange(e.target.value)}>
+        {chapters.map((c, n) => <option key={c.id} value={c.id}>Chapter {n + 1}: {c.title}</option>)}
+      </select>
+      <button type="button" className="btn small" disabled={i === chapters.length - 1} aria-label="Next chapter" onClick={() => onChange(chapters[i + 1].id)}>›</button>
+    </div>
+  );
+}
+
 /**
  * A lesson, full width: watch it, look over its storyboard, read what it was made from.
  * Opened at #lesson/<id>/<tab>, so a link can open a lesson at the right place.
  */
-export default function Workspace({ id, tab, autoplay, summary, voices = [], onClose, onPatch, onDelete, onCancel, onRetry, onApprove, toast }) {
+export default function Workspace({ id, tab: asked, autoplay, summary, voices = [], onClose, onPatch, onDelete, onCancel, onRetry, onApprove, toast }) {
   const videoRef = useRef(null);
   const askRef = useRef(null);
   const [scope, setScope] = useState({ kind: 'lesson' });
@@ -76,6 +91,8 @@ export default function Workspace({ id, tab, autoplay, summary, voices = [], onC
   const [title, setTitle] = useState('');
   const [versions, setVersions] = useState(null);
   const [quality, setQuality] = useState('');
+  const [picked, setPicked] = useState(null); // the chapter shown, for a lesson in chapters
+  const editDirty = useRef(false); // the Edit tab has unsaved changes
 
   // The full record (with its script) on opening, and again when its status or version moves.
   useEffect(() => {
@@ -116,10 +133,19 @@ export default function Workspace({ id, tab, autoplay, summary, voices = [], onC
 
   const s = g?.settings;
   const lesson = s?.lesson;
+  const tab = g && !tabsFor(g).includes(asked) ? 'watch' : asked; // the outline only for a lesson in chapters
   const narration = lesson?.phase === 'script'; // waiting on its narration, before the scenes are written
-  const canRevise = !!lesson && g.version > 0 && !narration && !isActive(g);
+  const outlining = lesson?.phase === 'outline'; // waiting on its outline, before the chapters are written
+  const canRevise = !!lesson && g.version > 0 && !narration && !outlining && !isActive(g);
+  const chapters = lesson?.chaptered && !outlining ? lesson.chapters || [] : [];
+  const chapter = chapters.length ? (chapters.some((c) => c.id === picked) ? picked : chapters[0].id) : null;
+  const pickChapter = (id) => {
+    if (tab === 'edit' && editDirty.current && !window.confirm('This chapter has changes you have not saved. Leave them?')) return;
+    editDirty.current = false;
+    setPicked(id);
+  };
   const changeBlock = (block) => {
-    setScope({ kind: 'block', id: block.id });
+    setScope({ kind: 'block', id: block.id, ...(chapter ? { chapter } : {}) });
     askRef.current?.focus();
   };
   const current = versions?.versions?.find((v) => v.n === versions.current);
@@ -181,9 +207,11 @@ export default function Workspace({ id, tab, autoplay, summary, voices = [], onC
                 <select className="input" aria-label="Quality" value={quality} onChange={(e) => setQuality(e.target.value)}>
                   {QUALITIES.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
                 </select>
-                {narration
-                  ? <button className="btn primary" onClick={() => onApprove(g, { quality, action: 'scenes' })}>Approve the narration</button>
-                  : <button className="btn primary" onClick={() => onApprove(g, { quality })}>Approve and render</button>}
+                {outlining
+                  ? tab !== 'outline' && <a className="btn primary" href={tabLink('outline')}>Review the outline</a>
+                  : narration
+                    ? <button className="btn primary" onClick={() => onApprove(g, { quality, action: 'scenes' })}>Approve the narration</button>
+                    : <button className="btn primary" onClick={() => onApprove(g, { quality })}>Approve and render</button>}
               </div>
             )}
             {(isActive(g) || needsYou(g)) && <button className="btn" onClick={() => onCancel(g)}>{needsYou(g) ? 'Don’t render' : 'Cancel'}</button>}
@@ -194,6 +222,7 @@ export default function Workspace({ id, tab, autoplay, summary, voices = [], onC
                 {g.videoUrl && <a href={`${g.videoUrl}?download=1`} download>Video (MP4)</a>}
                 {g.videoUrl && <a href={`/api/generations/${g.id}/captions.srt?download=1`} download>Captions (SRT)</a>}
                 {g.videoUrl && <a href={`/api/generations/${g.id}/captions.vtt?download=1`} download>Captions (VTT)</a>}
+                {g.videoUrl && lesson?.chaptered && <a href={`/api/generations/${g.id}/chapters.vtt`} download={`${s.project}.chapters.vtt`}>Chapters (VTT)</a>}
                 <a href={`/api/generations/${g.id}/script?download=1`} download>Narration (text)</a>
               </div>
             </details>
@@ -202,10 +231,10 @@ export default function Workspace({ id, tab, autoplay, summary, voices = [], onC
           </header>
 
           <nav className="ws-tabs" role="tablist" aria-label="Lesson views">
-            {WORKSPACE_TABS.map((t) => (
+            {tabsFor(g).map((t) => (
               <a key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'on' : ''} href={tabLink(t)}>
                 {TAB_LABELS[t]}
-                {t === 'storyboard' && needsYou(g) && <span className="dot-note" aria-label="waiting for you" />}
+                {t === (outlining ? 'outline' : 'storyboard') && needsYou(g) && <span className="dot-note" aria-label="waiting for you" />}
               </a>
             ))}
           </nav>
@@ -222,11 +251,13 @@ export default function Workspace({ id, tab, autoplay, summary, voices = [], onC
                 ) : (
                   <div className={`status-box ${g.status}`}>
                     <p>
-                      {narration
-                        ? 'The narration is written. Read it below, change it in the Edit tab if you like, then approve it and the scenes are written for it.'
-                        : needsYou(g) ? 'Nothing is rendered yet. Look over the storyboard, then approve it to render.' : 'The video appears here once it is built.'}
+                      {outlining
+                        ? `The outline is ready: ${lesson.chapters?.length || 'its'} chapters. Look it over, change it if you like, then approve it and each chapter is written.`
+                        : narration
+                          ? 'The narration is written. Read it below, change it in the Edit tab if you like, then approve it and the scenes are written for it.'
+                          : needsYou(g) ? 'Nothing is rendered yet. Look over the storyboard, then approve it to render.' : 'The video appears here once it is built.'}
                     </p>
-                    {needsYou(g) && !narration && <a className="btn primary" href={tabLink('storyboard')}>Open the storyboard</a>}
+                    {needsYou(g) && !narration && <a className="btn primary" href={tabLink(outlining ? 'outline' : 'storyboard')}>{outlining ? 'Open the outline' : 'Open the storyboard'}</a>}
                     {narration && <pre className="script narration-review">{g.text}</pre>}
                   </div>
                 )}
@@ -253,12 +284,17 @@ export default function Workspace({ id, tab, autoplay, summary, voices = [], onC
                 </section>
               </div>
             )}
-            {tab === 'storyboard' && <Storyboard id={g.id} refreshKey={`${g.version}-${g.status}`} onChangeBlock={canRevise ? changeBlock : undefined} />}
+            {outlining && ['storyboard', 'edit', 'history'].includes(tab) && (
+              <p className="status-box">The chapters are written once you approve the <a href={tabLink('outline')}>outline</a>.</p>
+            )}
+            {chapters.length > 1 && ['storyboard', 'edit', 'history'].includes(tab) && <ChapterPicker chapters={chapters} value={chapter} onChange={pickChapter} />}
+            {tab === 'storyboard' && !outlining && <Storyboard id={g.id} chapter={chapter} refreshKey={`${g.version}-${g.status}`} onChangeBlock={canRevise ? changeBlock : undefined} />}
             <Suspense fallback={<p className="hint">Loading…</p>}>
-              {tab === 'edit' && <EditTab g={g} voices={voices} toast={toast} />}
-              {tab === 'history' && <History g={g} toast={toast} />}
+              {tab === 'outline' && <Outline g={g} quality={quality} onApprove={onApprove} toast={toast} />}
+              {tab === 'edit' && !outlining && <EditTab key={chapter || 'lesson'} g={g} chapter={chapter} voices={voices} toast={toast} dirtyRef={editDirty} />}
+              {tab === 'history' && !outlining && <History g={g} chapter={chapter} toast={toast} />}
             </Suspense>
-            {canRevise && <RevisionBar key={g.id} g={g} scope={scope} setScope={setScope} videoRef={tab === 'watch' ? videoRef : null} toast={toast} inputRef={askRef} />}
+            {canRevise && <RevisionBar key={g.id} g={g} chapters={chapters} chapter={chapter} scope={scope} setScope={setScope} videoRef={tab === 'watch' ? videoRef : null} toast={toast} inputRef={askRef} />}
             {tab === 'notes' && (
               <div className="ws-notes">
                 {lesson && (
@@ -267,7 +303,7 @@ export default function Workspace({ id, tab, autoplay, summary, voices = [], onC
                     <dl className="details">
                       <dt>Topic</dt><dd>{lesson.topic}</dd>
                       {lesson.goal && <><dt>To understand</dt><dd>{lesson.goal}</dd></>}
-                      <dt>Length</dt><dd>about {lesson.minutes} minute{lesson.minutes === 1 ? '' : 's'}</dd>
+                      <dt>Length</dt><dd>about {lesson.minutes} minute{lesson.minutes === 1 ? '' : 's'}{lesson.chapters?.length ? `, in ${lesson.chapters.length} chapters` : ''}</dd>
                     </dl>
                   </section>
                 )}

@@ -203,6 +203,11 @@ test('the estimate gives a range, free on this Mac, unknown without a rate', () 
   assert.equal(estimateLesson(local, { minutes: 2 }).free, true);
   const openai = { steps: Object.fromEntries(['read', 'write', 'fix', 'polish', 'outline'].map((s) => [s, { provider: 'openai', kind: 'openai', label: 'OpenAI', model: 'gpt-x', effort: '', rate: null }])) };
   assert.deepEqual(estimateLesson(openai, { minutes: 2 }).unknown, ['OpenAI · gpt-x']);
+  // A long lesson is an outline and its chapters: more per minute than a short one.
+  const long = estimateLesson(settings.resolveWriter(), { minutes: 20, notesChars: 8000 });
+  assert.equal(long.chapters, 5);
+  assert.equal(cc.chapters, null);
+  assert.ok(long.lowUsd > cc.lowUsd * 8 && long.tokens > cc.tokens * 8, 'about ten times the work');
 });
 
 test('the settings API never sends a key, and gives Claude its limits', async () => {

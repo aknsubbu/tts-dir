@@ -73,7 +73,7 @@ describe('the Edit tab', () => {
     api.saveSource.mockResolvedValue({ ...SOURCE, speed: 1.1, hash: 'h3', draft: true });
     api.buildEdit.mockResolvedValue({});
     fireEvent.click(screen.getByRole('button', { name: 'Render v2' }));
-    await waitFor(() => expect(api.buildEdit).toHaveBeenCalledWith('g1', 'default'));
+    await waitFor(() => expect(api.buildEdit).toHaveBeenCalledWith('g1', 'default', null));
     expect(api.saveSource).toHaveBeenCalledWith('g1', expect.objectContaining({ speed: 1.1 }));
   });
 

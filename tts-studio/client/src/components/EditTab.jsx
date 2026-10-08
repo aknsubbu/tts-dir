@@ -17,7 +17,7 @@ function problemsFor(file, report, fallback) {
  * speaks changed blocks and runs every scene without drawing; Render makes the next version and
  * builds it; Discard goes back to the current version.
  */
-export default function EditTab({ g, voices, toast }) {
+export default function EditTab({ g, chapter = null, voices, toast, dirtyRef }) {
   const [src, setSrc] = useState(null); // what the server last said
   const [draft, setDraft] = useState(null); // { script, scenes, voice, speed } as edited here
   const [state, setState] = useState('idle'); // idle | saving | starting
@@ -29,7 +29,7 @@ export default function EditTab({ g, voices, toast }) {
 
   const load = useCallback(async () => {
     try {
-      const s = await api.source(g.id);
+      const s = await api.source(g.id, chapter);
       setSrc(s);
       setDraft(fromSource(s));
       setError('');
@@ -38,7 +38,7 @@ export default function EditTab({ g, voices, toast }) {
       setError(e.message);
       return null;
     }
-  }, [g.id]);
+  }, [g.id, chapter]);
 
   useEffect(() => {
     load();
@@ -51,7 +51,7 @@ export default function EditTab({ g, voices, toast }) {
   useEffect(() => {
     if (lastMoved.current === moved) return;
     lastMoved.current = moved;
-    api.source(g.id).then((s) => {
+    api.source(g.id, chapter).then((s) => {
       setSrc(s);
       setDraft((d) => {
         if (!d || s.hash === d.hash || !dirtyOf(d, src)) return fromSource(s);
@@ -62,6 +62,7 @@ export default function EditTab({ g, voices, toast }) {
   }, [moved]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const dirty = !!(draft && src && dirtyOf(draft, src));
+  if (dirtyRef) dirtyRef.current = dirty;
   useEffect(() => {
     if (!dirty) return undefined;
     const warn = (e) => {
@@ -77,7 +78,7 @@ export default function EditTab({ g, voices, toast }) {
     setState('saving');
     try {
       const base = overwrite ? stale?.hash : draft.hash;
-      const s = await api.saveSource(g.id, { base, script: draft.script, scenes: draft.scenes, voice: draft.voice, speed: draft.speed });
+      const s = await api.saveSource(g.id, { base, chapter, script: draft.script, scenes: draft.scenes, voice: draft.voice, speed: draft.speed });
       setSrc(s);
       setDraft((d) => ({ ...d, hash: s.hash }));
       setStale(null);
@@ -95,8 +96,8 @@ export default function EditTab({ g, voices, toast }) {
     if (dirty && !(await save())) return;
     setState('starting');
     try {
-      if (what === 'build') await api.buildEdit(g.id, g.settings?.quality);
-      else await api.checkEdit(g.id);
+      if (what === 'build') await api.buildEdit(g.id, g.settings?.quality, chapter);
+      else await api.checkEdit(g.id, chapter);
       toast({ kind: 'success', text: what === 'build' ? `Checking, then rendering v${(g.version || 0) + 1}.` : 'Checking: the narration is spoken and every scene is run. The storyboard updates when it ends.' });
     } catch (e) {
       toast({ kind: 'error', text: e.message, ms: 9000 });
@@ -106,9 +107,9 @@ export default function EditTab({ g, voices, toast }) {
   };
 
   const discard = async () => {
-    if (!window.confirm(`Throw away every change since v${src.version}?`)) return;
+    if (!window.confirm(`Throw away every change since v${src.version}${src.chapters?.length ? ', in every chapter' : ''}?`)) return;
     try {
-      const s = await api.discard(g.id);
+      const s = chapter ? (await api.discard(g.id), await api.source(g.id, chapter)) : await api.discard(g.id);
       setSrc(s);
       setDraft(fromSource(s));
       setStale(null);

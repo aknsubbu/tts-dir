@@ -121,7 +121,10 @@ export function fmtUsd(n) {
   return `$${Number(n) < 0.1 && Number(n) > 0 ? Number(n).toFixed(3) : Number(n).toFixed(2)}`;
 }
 
-export const WORKSPACE_TABS = ['watch', 'storyboard', 'edit', 'history', 'notes'];
+export const WORKSPACE_TABS = ['watch', 'outline', 'storyboard', 'edit', 'history', 'notes'];
+
+/** A lesson's tabs: the outline only for a lesson in chapters. */
+export const tabsFor = (g) => WORKSPACE_TABS.filter((t) => t !== 'outline' || g?.settings?.lesson?.chaptered);
 
 const BLOCK_LINE = /^\s*\[([A-Za-z0-9_-]+)\]\s*$/;
 export const MARK = /<mark\s+name\s*=\s*["']([A-Za-z0-9_-]+)["']\s*\/>/g;
@@ -140,6 +143,9 @@ export function parseScript(source) {
   });
   return blocks.map((b) => ({ id: b.id, line: b.line, text: b.lines.join('\n').trim() }));
 }
+
+/** The scene classes in a scenes.py, in order. */
+export const sceneNames = (source) => [...String(source || '').matchAll(/^class\s+(\w+)\s*\(([^)]*Scene[^)]*)\)\s*:/gm)].map((m) => m[1]);
 
 /** What is spoken: the text without its marks. */
 export const spoken = (text) => String(text || '').replace(MARK, '').replace(/\s+/g, ' ').trim();

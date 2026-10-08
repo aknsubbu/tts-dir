@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import * as z from 'zod';
 import { EFFORTS, WRITER_STEPS } from '../shared/providers.js';
-import { LESSON_MINUTES, MAX_FILES, MAX_NOTES, VIDEO_QUALITIES } from '../shared/limits.js';
+import { CHAPTERS_FROM, LESSON_MINUTES, MAX_FILES, MAX_NOTES, VIDEO_QUALITIES } from '../shared/limits.js';
 import { FileRuleError, readNoteFiles } from './files.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -82,6 +82,12 @@ export function createMcpServer({ baseUrl = DEFAULT_URL, linkBase = baseUrl.repl
   const link = (id) => `${linkBase}/#lesson/${id}`;
   const money = (v) => (v == null ? null : `$${Number(v).toFixed(2)}`);
 
+  const WAITING = {
+    script: 'the person: the narration is ready to read and approve',
+    outline: 'the person: the outline is ready to look over, change and approve',
+    storyboard: 'the person: the storyboard is ready to look over and approve',
+  };
+
   /** What a lesson is doing, in a sentence, with the facts beside it. */
   function describe(g) {
     const lesson = g.settings?.lesson || {};
@@ -96,7 +102,8 @@ export function createMcpServer({ baseUrl = DEFAULT_URL, linkBase = baseUrl.repl
       costUsd: lesson.costUsd ?? null,
       writtenBy: lesson.writtenBy || null,
       error: g.error,
-      waitingOn: g.status === 'awaiting' ? (lesson.phase === 'script' ? 'the person: the narration is ready to read and approve' : 'the person: the storyboard is ready to look over and approve') : null,
+      waitingOn: g.status === 'awaiting' ? WAITING[lesson.phase] || WAITING.storyboard : null,
+      chapters: lesson.chaptered ? (lesson.chapters || []).map(({ id, title, minutes }) => ({ id, title, minutes })) : null,
       lastRevision: g.settings?.lastRevision || null,
       durationSec: g.durationSec,
       link: link(g.id),
@@ -104,7 +111,10 @@ export function createMcpServer({ baseUrl = DEFAULT_URL, linkBase = baseUrl.repl
     const what = {
       queued: 'Waiting its turn to be built.',
       processing: g.stage ? `${g.stage}${facts.progress ? ` (${facts.progress})` : ''}.` : `Building${facts.progress ? ` ${facts.progress}` : ''}.`,
-      awaiting: lesson.phase === 'script' ? 'The narration is written; waiting for the person to read and approve it before the scenes are written.' : 'Written and checked; waiting for the person to look over the storyboard and approve it.',
+      awaiting: {
+        script: 'The narration is written; waiting for the person to read and approve it before the scenes are written.',
+        outline: `The outline is written (${lesson.chapters?.length || 'its'} chapters); waiting for the person to look it over and approve it before the chapters are written.`,
+      }[lesson.phase] || 'Written and checked; waiting for the person to look over the storyboard and approve it.',
       done: `Done${g.durationSec ? `: ${Math.floor(g.durationSec / 60)} min ${String(Math.round(g.durationSec % 60)).padStart(2, '0')} s` : ''}${lesson.costUsd != null ? `, ${money(lesson.costUsd)} to write` : ''}.`,
       error: `Failed: ${g.error}`,
       cancelled: 'Cancelled.',
@@ -129,6 +139,7 @@ export function createMcpServer({ baseUrl = DEFAULT_URL, linkBase = baseUrl.repl
       title: 'Make a lesson',
       description: [
         'Start a narrated maths video from a topic and notes. Returns at once with the lesson id; writing and building take several minutes.',
+        `From ${CHAPTERS_FROM} minutes a lesson is written in chapters: first an outline (the chapters and the notation they share), which waits for the person to approve unless outline is false, then each chapter.`,
         'Put everything useful from the conversation into notes: the derivation, notation, worked numbers, what confused the person.',
         'files are paths of images (photos of handwriting work), PDFs, Word or RTF documents or text files on this computer.',
         'Afterwards call wait_for_lesson with the id, repeatedly, and tell the person each stage.',
@@ -143,7 +154,9 @@ export function createMcpServer({ baseUrl = DEFAULT_URL, linkBase = baseUrl.repl
         voice: z.string().optional().describe('An English voice id from list_voices. Leave out for the default'),
         title: z.string().max(120).optional(),
         tags: z.array(z.string()).max(12).optional(),
-        review: z.enum(['none', 'storyboard', 'narration']).optional().describe('"storyboard" waits for the person to approve before rendering; "narration" waits for them to approve the narration before the scenes are written'),
+        review: z.enum(['none', 'storyboard', 'narration']).optional().describe('"storyboard" waits for the person to approve before rendering; "narration" waits for them to approve the narration before the scenes are written (not for lessons in chapters, whose outline is reviewed instead)'),
+        outline: z.boolean().optional().describe(`For ${CHAPTERS_FROM} minutes or more: false writes the chapters without waiting for the person to approve the outline`),
+        titleCards: z.boolean().optional().describe(`For ${CHAPTERS_FROM} minutes or more: false leaves out the title card before each chapter`),
         writer: z.object({ provider: z.string(), model: z.string().optional() }).optional().describe('A provider set up in Settings, for this lesson only (see get_settings)'),
       },
     },
@@ -163,6 +176,8 @@ export function createMcpServer({ baseUrl = DEFAULT_URL, linkBase = baseUrl.repl
         ...(a.title ? { title: a.title } : {}),
         ...(a.tags ? { tags: a.tags } : {}),
         ...(a.review ? { review: { none: 'render', storyboard: 'storyboard', narration: 'script' }[a.review] } : {}),
+        ...(a.outline !== undefined ? { outlineReview: a.outline } : {}),
+        ...(a.titleCards !== undefined ? { titleCards: a.titleCards } : {}),
         ...(a.writer ? { writer: a.writer } : {}),
       };
       const estimate = await api('POST', '/api/estimate', {
@@ -175,7 +190,7 @@ export function createMcpServer({ baseUrl = DEFAULT_URL, linkBase = baseUrl.repl
       }).catch(() => null);
       const { generation: g } = await api('POST', '/api/lessons', body);
       const { line, facts } = describe(g);
-      const range = estimate && !estimate.unknown?.length ? (estimate.free ? 'free (this Mac)' : `about ${money(estimate.lowUsd)}–${money(estimate.highUsd)}`) : null;
+      const range = estimate && !estimate.unknown?.length ? (estimate.free ? 'free (this Mac)' : `about ${money(estimate.lowUsd)}–${money(estimate.highUsd)}${estimate.chapters ? `, for an outline and about ${estimate.chapters} chapters` : ''}`) : null;
       return text(
         [
           `Started. ${line}`,
@@ -269,22 +284,29 @@ export function createMcpServer({ baseUrl = DEFAULT_URL, linkBase = baseUrl.repl
     'get_lesson',
     {
       title: 'Get a lesson',
-      description: `A lesson's brief (topic, goal, notes), narration script and scenes code. With stills: true, also up to ${MAX_STILLS} storyboard stills as images.`,
-      inputSchema: { ...idArg, stills: z.boolean().optional() },
+      description: [
+        `A lesson's brief (topic, goal, notes), narration script and scenes code. With stills: true, also up to ${MAX_STILLS} storyboard stills as images.`,
+        'A lesson in chapters also gives its outline, and the script and scenes of one chapter: the first, or the one named by chapter.',
+      ].join(' '),
+      inputSchema: { ...idArg, chapter: z.string().optional().describe('For a lesson in chapters: the chapter id, from its outline'), stills: z.boolean().optional() },
       annotations: { readOnlyHint: true },
     },
-    tool(async ({ id, stills }) => {
+    tool(async ({ id, chapter, stills }) => {
       const g = await getLesson(id);
-      const src = await api('GET', `/api/generations/${encodeURIComponent(id)}/source`).catch(() => ({}));
+      const q = chapter ? `?chapter=${encodeURIComponent(chapter)}` : '';
+      const src = await api('GET', `/api/generations/${encodeURIComponent(id)}/source${q}`).catch(() => ({}));
+      const outline = g.settings?.lesson?.chaptered ? await api('GET', `/api/generations/${encodeURIComponent(id)}/outline`).catch(() => null) : null;
       const { line, facts } = describe(g);
       const content = [
         { type: 'text', text: line },
         { type: 'text', text: `Brief:\n${JSON.stringify(src.brief ? { topic: src.brief.topic, goal: src.brief.goal, notes: src.brief.notes, minutes: src.brief.minutes } : g.settings?.lesson || {}, null, 2)}` },
+        ...(outline ? [{ type: 'text', text: `Outline${outline.waiting ? ' (waiting for the person to approve it)' : ''}:\n${JSON.stringify({ title: outline.title, through_line: outline.through_line, notation: outline.notation, chapters: outline.chapters }, null, 2)}` }] : []),
+        ...(src.chapter ? [{ type: 'text', text: `Chapter ${src.chapter} (of ${src.chapters.map((c) => c.id).join(', ')}):` }] : []),
         ...(src.script ? [{ type: 'text', text: `script.txt:\n${src.script}` }] : []),
         ...(src.scenes ? [{ type: 'text', text: `scenes.py:\n${src.scenes}` }] : []),
       ];
       if (stills) {
-        const board = await api('GET', `/api/generations/${encodeURIComponent(id)}/storyboard`).catch(() => null);
+        const board = await api('GET', `/api/generations/${encodeURIComponent(id)}/storyboard${src.chapter ? `?chapter=${encodeURIComponent(src.chapter)}` : ''}`).catch(() => null);
         const all = (board?.scenes || []).flatMap((s) => (s.blocks || []).map((b) => ({ scene: s.name, block: b.id, still: (b.stills || []).find((x) => x.mark == null) }))).filter((x) => x.still);
         const pick = all.length <= MAX_STILLS ? all : Array.from({ length: MAX_STILLS }, (_, i) => all[Math.round((i * (all.length - 1)) / (MAX_STILLS - 1))]);
         for (const x of pick) {
@@ -294,7 +316,7 @@ export function createMcpServer({ baseUrl = DEFAULT_URL, linkBase = baseUrl.repl
         }
         if (!board) content.push({ type: 'text', text: 'No storyboard yet: it appears once the scenes have been checked.' });
       }
-      return { content, structuredContent: { ...facts, project: src.project || null } };
+      return { content, structuredContent: { ...facts, project: src.project || null, chapter: src.chapter || null, outline: outline || null } };
     }),
   );
 
@@ -350,6 +372,7 @@ export function createMcpServer({ baseUrl = DEFAULT_URL, linkBase = baseUrl.repl
         'Change a written lesson: "slow down the second scene", "use my notation for the loss". The writer changes only what the request needs;',
         'the result is checked and becomes the next version, which then renders (the old video plays meanwhile). Narrow it with scope:',
         'a scene class name, a block id, or a time in seconds into the video. Returns at once; follow it with wait_for_lesson.',
+        'A lesson in chapters is changed a chapter at a time: name it with chapter (a time finds its own).',
       ].join(' '),
       inputSchema: {
         ...idArg,
@@ -359,13 +382,17 @@ export function createMcpServer({ baseUrl = DEFAULT_URL, linkBase = baseUrl.repl
         at: z.number().min(0).optional().describe('Only the block on screen this many seconds into the video'),
         files: z.array(fileSpec).max(MAX_FILES).optional().describe('New notes for the change, such as a photo of the notation to use'),
         review: z.enum(['none', 'storyboard']).optional().describe('"storyboard" waits for the person before rendering'),
+        chapter: z.string().optional().describe('For a lesson in chapters: the chapter to change, by its id'),
       },
     },
     tool(async (a) => {
       const scope = a.at !== undefined ? { kind: 'time', at: a.at } : a.block ? { kind: 'block', id: a.block } : a.scene ? { kind: 'scene', name: a.scene } : { kind: 'lesson' };
       const files = readNoteFiles(a.files || [], { cwd });
       const request = files.notes ? `${a.request}\n\n${files.notes}` : a.request;
-      const g = await api('POST', `/api/generations/${encodeURIComponent(a.id)}/revise`, { request, scope, attachments: files.attachments, review: a.review === 'storyboard' ? 'storyboard' : 'render' });
+      const g = await api('POST', `/api/generations/${encodeURIComponent(a.id)}/revise`, {
+        request, scope, attachments: files.attachments, review: a.review === 'storyboard' ? 'storyboard' : 'render',
+        ...(a.chapter && a.at === undefined ? { chapter: a.chapter } : {}),
+      });
       const { line, facts } = describe(g);
       return text(`Revising. ${line} Call wait_for_lesson to follow it; the new version renders when it passes its check.`, facts);
     }),
@@ -375,16 +402,39 @@ export function createMcpServer({ baseUrl = DEFAULT_URL, linkBase = baseUrl.repl
     'approve_lesson',
     {
       title: 'Approve a lesson',
-      description: 'Continue a lesson that waits for the person: render it after its storyboard, or write the scenes for its narration. Only when the person has said to.',
-      inputSchema: { ...idArg, quality: z.enum(VIDEO_QUALITIES).optional() },
+      description: [
+        'Continue a lesson that waits for the person: render it after its storyboard, write the scenes for its narration, or write the chapters of its outline.',
+        'Only when the person has said to. For an outline, outline may carry their changes: the outline as get_lesson gives it, edited (chapters renamed, reordered, resized, added or removed).',
+      ].join(' '),
+      inputSchema: {
+        ...idArg,
+        quality: z.enum(VIDEO_QUALITIES).optional(),
+        outline: z.object({ title: z.string(), chapters: z.array(z.object({ title: z.string() }).passthrough()).min(1) }).passthrough().optional().describe('The outline as the person wants it'),
+      },
     },
-    tool(async ({ id, quality }) => {
+    tool(async ({ id, quality, outline }) => {
       const g = await getLesson(id);
       if (g.status !== 'awaiting') return text(`${describe(g).line} It is not waiting for approval.`, describe(g).facts);
-      const narration = g.settings?.lesson?.phase === 'script';
-      const after = await api('POST', `/api/generations/${encodeURIComponent(id)}/approve`, { action: narration ? 'scenes' : 'render', ...(quality ? { quality } : {}) });
+      const phase = g.settings?.lesson?.phase;
+      const action = { script: 'scenes', outline: 'chapters' }[phase] || 'render';
+      if (outline && phase !== 'outline') return text(`${describe(g).line} Only an outline waiting for approval can be changed.`, describe(g).facts);
+      const after = await api('POST', `/api/generations/${encodeURIComponent(id)}/approve`, { action, ...(quality ? { quality } : {}), ...(outline ? { outline } : {}) });
       const { line, facts } = describe(after);
-      return text(`${narration ? 'Narration approved: the scenes are being written.' : 'Approved: rendering.'} ${line} Call wait_for_lesson to follow it.`, facts);
+      const done = { scenes: 'Narration approved: the scenes are being written.', chapters: 'Outline approved: the chapters are being written, one after another.', render: 'Approved: rendering.' }[action];
+      return text(`${done} ${line} Call wait_for_lesson to follow it.`, facts);
+    }),
+  );
+
+  server.registerTool(
+    'redo_outline',
+    {
+      title: 'Ask for another outline',
+      description: 'Have the outline of a long lesson written again, with a change the person asked for ("fewer chapters", "start from the chain rule"). Only while the outline waits for approval. Follow it with wait_for_lesson.',
+      inputSchema: { ...idArg, request: z.string().min(1).max(2000).describe('What to change, in the person\'s words') },
+    },
+    tool(async ({ id, request }) => {
+      const { line, facts } = describe(await api('POST', `/api/generations/${encodeURIComponent(id)}/outline/redo`, { request }));
+      return text(`Writing the outline again. ${line} Call wait_for_lesson to follow it.`, facts);
     }),
   );
 
@@ -535,7 +585,7 @@ export function createMcpServer({ baseUrl = DEFAULT_URL, linkBase = baseUrl.repl
     {
       title: 'Explain this as a lesson',
       description: 'Turn what this conversation worked through into a narrated video lesson.',
-      argsSchema: { topic: z.string().optional().describe('What the lesson is about, if not obvious'), minutes: z.string().optional().describe('1, 2, 3 or 5') },
+      argsSchema: { topic: z.string().optional().describe('What the lesson is about, if not obvious'), minutes: z.string().optional().describe(LESSON_MINUTES.join(', ')) },
     },
     ({ topic, minutes }) => ({
       messages: [

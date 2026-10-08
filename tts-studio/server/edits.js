@@ -2,9 +2,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { run } from '../author/proc.js';
+import { chapterDir, chaptersOf, copySources } from './versions.js';
 
 export const MAX_SOURCE = 200 * 1024; // bytes in script.txt or scenes.py
-const FILES = ['script.txt', 'scenes.py', 'project.json'];
 const pad = (n) => String(n).padStart(3, '0');
 
 export class EditError extends Error {
@@ -29,6 +29,19 @@ const readText = (file) => {
     return null;
   }
 };
+
+/** The narration the library keeps: the script, or every chapter's in order. */
+export function readProjectText(root) {
+  const chapters = chaptersOf(root);
+  const read = (dir) => {
+    try {
+      return fs.readFileSync(path.join(dir, 'script.txt'), 'utf8').trim();
+    } catch {
+      return '';
+    }
+  };
+  return chapters.length ? chapters.map((c) => read(chapterDir(root, c))).filter(Boolean).join('\n\n') : read(root);
+}
 
 /** A lesson's files in a folder: the working copy, or a version's snapshot. */
 export function filesIn(dir) {
@@ -56,6 +69,17 @@ function writeAtomic(file, body) {
  */
 export function createEdits({ store, versions, getConfig, runner, lessons }) {
   const rootOf = (row) => versions.projectRoot(row);
+  /** The folder being edited: the lesson's, or one of its chapters' (the first when none is named). */
+  const folderOf = (root, chapter) => {
+    const chapters = chaptersOf(root);
+    if (!chapters.length) {
+      if (chapter) throw new EditError('This lesson has no chapters.', 404);
+      return { dir: root, chapter: null, chapters };
+    }
+    const id = chapter || chapters[0];
+    if (!chapters.includes(id)) throw new EditError(`This lesson has no chapter “${String(id).slice(0, 60)}”.`, 404);
+    return { dir: chapterDir(root, id), chapter: id, chapters };
+  };
   const busy = (row) => ['queued', 'processing'].includes(row.status);
   const isLesson = (row) => !!JSON.parse(row.settings_json).lesson;
   const versionDir = (root, n) => path.join(root, 'versions', pad(n));
@@ -70,14 +94,18 @@ export function createEdits({ store, versions, getConfig, runner, lessons }) {
   }
 
   /** The working copy as the Edit tab shows it, with what the last checks found. */
-  function source(row) {
-    const root = guard(row, { write: false });
+  function source(row, chapter = null) {
+    const lessonRoot = guard(row, { write: false });
+    const { dir: root, chapter: id, chapters } = folderOf(lessonRoot, chapter);
     const working = filesIn(root);
-    const current = row.version ? filesIn(versionDir(root, row.version)) : null;
+    const current = row.version ? filesIn(chapterDir(versionDir(lessonRoot, row.version), id)) : null;
     const hash = hashOf(working);
     const settings = JSON.parse(row.settings_json);
+    const titles = readJson(path.join(lessonRoot, 'project.json'))?.chapter_titles || {};
     return {
-      project: path.basename(root),
+      project: path.basename(lessonRoot),
+      chapter: id,
+      chapters: chapters.map((c) => ({ id: c, title: titles[c] || c })),
       ...working,
       hash,
       version: row.version || 0,
@@ -85,7 +113,7 @@ export function createEdits({ store, versions, getConfig, runner, lessons }) {
       draft: current ? hashOf(current) !== hash : false,
       editable: isLesson(row),
       busy: busy(row),
-      brief: readJson(path.join(root, 'brief.json')),
+      brief: readJson(path.join(lessonRoot, 'brief.json')),
       static: readJson(path.join(root, 'build', 'check', 'static.json')),
       report: readJson(path.join(root, 'build', 'check', 'report.json')),
       edit: settings.edit || null,
@@ -116,7 +144,8 @@ export function createEdits({ store, versions, getConfig, runner, lessons }) {
   }
 
   async function save(row, body = {}) {
-    const root = guard(row);
+    const lessonRoot = guard(row);
+    const { dir: root, chapter } = folderOf(lessonRoot, body.chapter);
     const now = filesIn(root);
     if (body.base && body.base !== hashOf(now)) {
       throw new EditError('The files changed since you opened them: in another editor, or by a revision. Reload to see them; your edits are still in the page.', 409, { current: { ...now, hash: hashOf(now) } });
@@ -148,35 +177,25 @@ export function createEdits({ store, versions, getConfig, runner, lessons }) {
       writeAtomic(path.join(root, 'project.json'), `${JSON.stringify({ ...project, voice: next.voice, speed: next.speed }, null, 2)}\n`);
     }
     const report = await staticCheck(root);
-    return { ...source(store.getRaw(row.id)), report };
+    return { ...source(store.getRaw(row.id), chapter), report };
   }
 
   /** A full check (narration and every scene, no drawing); with build, the next version renders if it passes. */
-  async function check(row, { build = false, quality = null } = {}) {
-    guard(row);
+  async function check(row, { build = false, quality = null, chapter = null } = {}) {
+    const lessonRoot = guard(row);
+    const { chapter: id } = folderOf(lessonRoot, chapter);
     if (!lessons) throw new EditError('Lessons are not set up on this server.', 503);
-    await lessons.checkEdit(row.id, { then: build ? 'build' : null, quality });
+    await lessons.checkEdit(row.id, { then: build ? 'build' : null, quality, chapter: id });
     return store.get(row.id);
   }
 
-  /** The working copy back to the current version. */
+  /** The working copy back to the current version, every chapter included. */
   function discard(row) {
     const root = guard(row);
     if (!row.version) throw new EditError('There is no saved version to go back to.', 409);
-    const dir = versionDir(root, row.version);
-    for (const f of FILES) if (fs.existsSync(path.join(dir, f))) fs.copyFileSync(path.join(dir, f), path.join(root, f));
-    restoreStoryboard(root, dir);
-    fs.rmSync(path.join(root, 'build', 'check', 'static.json'), { force: true });
+    copySources(versionDir(root, row.version), root, 'in');
+    for (const dir of [root, ...chaptersOf(root).map((c) => chapterDir(root, c))]) fs.rmSync(path.join(dir, 'build', 'check', 'static.json'), { force: true });
     return source(store.getRaw(row.id));
-  }
-
-  function restoreStoryboard(root, dir) {
-    const from = path.join(dir, 'storyboard');
-    if (!fs.existsSync(path.join(from, 'storyboard.json'))) return;
-    const to = path.join(root, 'build', 'check');
-    fs.mkdirSync(path.join(to, 'frames'), { recursive: true });
-    fs.copyFileSync(path.join(from, 'storyboard.json'), path.join(to, 'storyboard.json'));
-    if (fs.existsSync(path.join(from, 'frames'))) fs.cpSync(path.join(from, 'frames'), path.join(to, 'frames'), { recursive: true });
   }
 
   /**
@@ -188,10 +207,9 @@ export function createEdits({ store, versions, getConfig, runner, lessons }) {
     const v = store.versions.get(row.id, n);
     const dir = versionDir(root, n);
     if (!v || !fs.existsSync(dir)) throw new EditError(`There is no version ${n}.`, 404);
-    for (const f of FILES) if (fs.existsSync(path.join(dir, f))) fs.copyFileSync(path.join(dir, f), path.join(root, f));
-    restoreStoryboard(root, dir);
+    copySources(dir, root, 'in');
     const m = versions.snapshot(row.id, { source: 'restored', note: `Restored from v${n}`, check: v.check_ok == null ? null : { ok: !!v.check_ok, warnings: v.warnings } });
-    const script = filesIn(root).script || '';
+    const script = readProjectText(root);
     const settings = JSON.parse(row.settings_json);
     store.update(row.id, { text: script, char_count: script.length, word_count: script.split(/\s+/).filter(Boolean).length });
     if (versions.adopt(row.id, n, m)) {
@@ -204,12 +222,14 @@ export function createEdits({ store, versions, getConfig, runner, lessons }) {
     return store.get(row.id);
   }
 
-  /** Version n's files, for History's comparisons. */
-  function versionSource(row, n) {
+  /** Version n's files (one chapter's, for a lesson in chapters), for History's comparisons. */
+  function versionSource(row, n, chapter = null) {
     const root = guard(row, { write: false });
     const dir = versionDir(root, n);
     if (!store.versions.get(row.id, n) || !fs.existsSync(dir)) throw new EditError(`There is no version ${n}.`, 404);
-    return { n, ...filesIn(dir) };
+    const chapters = chaptersOf(dir);
+    const id = chapters.length ? (chapters.includes(chapter) ? chapter : chapters[0]) : null;
+    return { n, chapter: id, chapters, ...filesIn(chapterDir(dir, id)) };
   }
 
   return { source, save, check, discard, restore, versionSource, staticCheck };

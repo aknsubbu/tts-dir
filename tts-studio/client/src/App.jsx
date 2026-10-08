@@ -365,10 +365,14 @@ export default function App() {
   };
   const cancelItem = act(api.cancel);
   const retryItem = act(api.retry);
-  const approveItem = async (g, { quality, action } = {}) => {
+  const approveItem = async (g, { quality, action, outline, chapters } = {}) => {
     try {
-      await api.approve(g.id, { quality, ...(action ? { action } : {}) });
-      toast({ kind: 'success', text: action === 'scenes' ? `Writing the scenes for “${g.title}”.` : `Rendering “${g.title}”. It plays here when it is done.` });
+      await api.approve(g.id, { quality, ...(action ? { action } : {}), ...(outline ? { outline } : {}) });
+      const done = {
+        scenes: `Writing the scenes for “${g.title}”.`,
+        chapters: `Writing the ${chapters ? `${chapters} ` : ''}chapters of “${g.title}”, one after another. It plays here when they are built.`,
+      };
+      toast({ kind: 'success', text: done[action] || `Rendering “${g.title}”. It plays here when it is done.` });
       window.location.hash = routeHash(g.id, 'watch');
     } catch (e) {
       toast({ kind: 'error', text: e.message });
@@ -381,7 +385,7 @@ export default function App() {
     const item = list.items.find((i) => i.id === id);
     if (item?.kind === 'video') {
       setAutoplay(play);
-      window.location.hash = routeHash(id, needsYou(item) ? 'storyboard' : 'watch');
+      window.location.hash = routeHash(id, !needsYou(item) ? 'watch' : item.settings?.lesson?.phase === 'outline' ? 'outline' : 'storyboard');
     } else {
       setSelected({ id, autoplay: play });
     }

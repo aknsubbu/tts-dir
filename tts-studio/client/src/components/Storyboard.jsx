@@ -71,7 +71,7 @@ function BlockCard({ block, current, onPlay, playingHere, onChange }) {
  * its marks and at its end, its narration and its problems. Played as an animatic, the
  * narration runs block after block and the picture changes on the marked words.
  */
-export default function Storyboard({ id, version, refreshKey, onChangeBlock }) {
+export default function Storyboard({ id, version, chapter = null, refreshKey, onChangeBlock }) {
   const [board, setBoard] = useState(null);
   const [error, setError] = useState('');
   const audio = useRef(null);
@@ -80,14 +80,17 @@ export default function Storyboard({ id, version, refreshKey, onChangeBlock }) {
   useEffect(() => {
     let live = true;
     setError('');
+    // Another chapter is another storyboard: what was playing stops.
+    audio.current?.pause();
+    setAnim({ playing: false, index: 0, t: 0, single: false });
     api
-      .storyboard(id, version || undefined)
+      .storyboard(id, version || undefined, chapter || undefined)
       .then((b) => live && setBoard(b))
       .catch((e) => live && (setBoard(null), setError(e.message)));
     return () => {
       live = false;
     };
-  }, [id, version, refreshKey]);
+  }, [id, version, chapter, refreshKey]);
 
   const blocks = useMemo(
     () => (board?.scenes || []).flatMap((scene) => (scene.blocks || []).map((b) => ({ ...b, scene: scene.name }))),

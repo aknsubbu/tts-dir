@@ -94,7 +94,7 @@ export function createRunner({ store, engine, video, versions = null }) {
     builds.add(id);
     store.update(id, { status: 'processing', progress_done: 0, progress_total: 0, error: null });
     // The video first, then captions, a poster for its card, and its words timed for the transcript.
-    const kinds = ['mp4', 'srt', 'vtt', 'jpg', 'words.json'];
+    const kinds = ['mp4', 'srt', 'vtt', 'jpg', 'words.json', 'chapters.vtt'];
     const outputs = kinds.map((ext) => store.videoPath(id, ext));
     // Written beside the current files and swapped in only once the build has succeeded, so a
     // failed rebuild of a lesson leaves its last video playing.
@@ -110,7 +110,7 @@ export function createRunner({ store, engine, video, versions = null }) {
       if (cancelled.has(id)) throw Object.assign(new Error('Cancelled'), { cancelled: true });
       // The build folder is overwritten by the next build, so the library keeps its own copy.
       for (const [i, ext] of kinds.entries()) {
-        const from = result.files[ext === 'words.json' ? 'words' : ext];
+        const from = result.files[{ 'words.json': 'words', 'chapters.vtt': 'chapters' }[ext] || ext];
         if (from && fs.existsSync(from)) fs.copyFileSync(from, fresh[i]);
       }
       const version = store.getRaw(id)?.version || 0;

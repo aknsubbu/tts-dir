@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { fmtBytes, fmtNumber, fmtUsd, useDebounced } from '../utils.js';
 // The server enforces these; they are one file so the two cannot disagree.
-import { DOC_EXT, IMAGE_EXT, MAX_BYTES, MAX_FILES, MAX_NOTES, TEXT_EXT } from '../../../shared/limits.js';
+import { CHAPTERS_FROM, DOC_EXT, IMAGE_EXT, MAX_BYTES, MAX_FILES, MAX_NOTES, TEXT_EXT } from '../../../shared/limits.js';
 
 const PREVIEWABLE = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp']; // HEIC and TIFF do not show in a browser
 const ACCEPT = [...TEXT_EXT, ...IMAGE_EXT, 'pdf', ...DOC_EXT].map((e) => `.${e}`).join(',');
@@ -12,6 +12,10 @@ const LENGTHS = [
   [2, 'About 2 minutes'],
   [3, 'About 3 minutes'],
   [5, 'About 5 minutes'],
+  [10, 'About 10 minutes, in chapters'],
+  [15, 'About 15 minutes, in chapters'],
+  [20, 'About 20 minutes, in chapters'],
+  [30, 'About 30 minutes, in chapters'],
 ];
 const QUALITIES = [
   ['default', '1080p'],
@@ -71,11 +75,13 @@ function Attachment({ a, onRemove, onChange }) {
 const writerName = (w) => (w ? (w.model && w.provider !== 'claude-code' ? `${w.label} · ${w.model}` : w.label) : '');
 
 /** Who will write this lesson, about what it will cost, and where the notes go; and a choice for this lesson only. */
-function WriterLine({ estimate, providers, choice, setChoice }) {
+function WriterLine({ estimate, providers, choice, setChoice, capUsd }) {
   if (!estimate) return null;
   const w = estimate.writer;
   const names = [...new Set(['read', 'write', 'fix'].map((k) => writerName(w[k])))];
-  const cost = estimate.free ? 'free' : estimate.unknown?.length ? `cost unknown for ${estimate.unknown.join(', ')}` : `about ${fmtUsd(estimate.lowUsd)}–${fmtUsd(estimate.highUsd)}`;
+  const cost = (estimate.free ? 'free' : estimate.unknown?.length ? `cost unknown for ${estimate.unknown.join(', ')}` : `about ${fmtUsd(estimate.lowUsd)}–${fmtUsd(estimate.highUsd)}`)
+    + (estimate.chapters ? ` for an outline and about ${estimate.chapters} chapters` : '');
+  const capped = capUsd != null && !estimate.free && estimate.highUsd > capUsd;
   const choices = providers.filter((p) => p.configured).flatMap((p) => {
     const tested = Object.keys(p.test?.caps || {}).filter(Boolean);
     const models = tested.length ? tested : p.kind === 'claude-code' ? [''] : (p.models || []).slice(0, 1);
@@ -94,6 +100,7 @@ function WriterLine({ estimate, providers, choice, setChoice }) {
         {cost}{estimate.note ? '. ' : ''}{estimate.note}
         {estimate.notesGo?.length ? ` Notes go to ${estimate.notesGo.filter((g) => !g.local).map((g) => g.where).join(' and ') || 'nobody: everything runs on this Mac'}.` : ''}
       </span>
+      {capped && <span className="hint">It could reach the cap of {fmtUsd(capUsd)} a lesson, where it stops. Raise it in <a href="#settings/costs">Settings → Costs</a> if it is worth more.</span>}
       {estimate.problem && <span className="hint over-limit">{estimate.problem}</span>}
     </div>
   );
@@ -116,7 +123,7 @@ export default function LessonPanel({ voices, defaultVoiceId, engineReady, onQue
   const [attached, setAttached] = useState([]); // [{ key, name, kind, file, url }]
   // The form starts from the defaults in Settings; what is changed here is for this lesson only.
   const defaults = studio?.values?.['lesson.defaults'];
-  const [prefs, setPrefs] = useState(() => ({ minutes: 2, quality: 'default', voiceId: '', review: 'render', visualReview: false, ...(defaults || {}) }));
+  const [prefs, setPrefs] = useState(() => ({ minutes: 2, quality: 'default', voiceId: '', review: 'render', visualReview: false, outlineReview: true, titleCards: true, ...(defaults || {}) }));
   const touched = useRef(false);
   const change = (fn) => {
     touched.current = true;
@@ -214,6 +221,9 @@ export default function LessonPanel({ voices, defaultVoiceId, engineReady, onQue
   };
 
   const bytes = attached.reduce((n, a) => n + a.file.size, 0);
+  // A long lesson is written in chapters, after an outline; its narration is not reviewed on its own.
+  const chaptered = prefs.minutes >= CHAPTERS_FROM;
+  const review = chaptered && prefs.review === 'script' ? 'render' : prefs.review;
   const tooLong = notes.length > MAX_NOTES;
   const tooBig = bytes > MAX_BYTES;
   const ready = topic.trim() && voiceId && !tooLong && !tooBig && !busy && !estimate?.problem;
@@ -241,10 +251,13 @@ export default function LessonPanel({ voices, defaultVoiceId, engineReady, onQue
       );
       await api.createLesson({
         topic, goal, notes, minutes: prefs.minutes, quality: prefs.quality, voiceId, attachments,
-        review: prefs.review, visualReview: prefs.visualReview,
+        review, visualReview: prefs.visualReview,
+        ...(chaptered ? { outlineReview: prefs.outlineReview, titleCards: prefs.titleCards } : {}),
         ...(choice ? { writer: JSON.parse(choice) } : {}),
       });
-      const after = { storyboard: 'It waits for you at its storyboard.', script: 'It waits for you once the narration is written.' }[prefs.review] || 'Follow it in the library; it takes a few minutes.';
+      const after = chaptered && prefs.outlineReview
+        ? 'It waits for you once the outline is written.'
+        : { storyboard: 'It waits for you at its storyboard.', script: 'It waits for you once the narration is written.' }[review] || (chaptered ? 'Follow it in the library; a long lesson takes a while.' : 'Follow it in the library; it takes a few minutes.');
       const by = choice ? JSON.parse(choice) : null;
       const who = by ? studio?.providers?.find((p) => p.id === by.provider)?.label || 'The writer' : writerName(estimate?.writer?.write) || 'Claude';
       toast({ kind: 'success', text: `${who} is writing “${topic.trim()}”. ${after}`, ms: 8000 });
@@ -363,20 +376,32 @@ export default function LessonPanel({ voices, defaultVoiceId, engineReady, onQue
           {[
             ['render', 'Render right away'],
             ['storyboard', 'Show me the storyboard'],
-            ['script', 'Show me the narration first'],
+            ...(chaptered ? [] : [['script', 'Show me the narration first']]),
           ].map(([v, label]) => (
-            <label key={v} className={prefs.review === v ? 'on' : ''}>
-              <input type="radio" name="lesson-review" value={v} checked={prefs.review === v} onChange={() => change((p) => ({ ...p, review: v }))} />
+            <label key={v} className={review === v ? 'on' : ''}>
+              <input type="radio" name="lesson-review" value={v} checked={review === v} onChange={() => change((p) => ({ ...p, review: v }))} />
               {label}
             </label>
           ))}
         </div>
       </fieldset>
+      {chaptered && (
+        <>
+          <label className="check">
+            <input type="checkbox" checked={!!prefs.outlineReview} onChange={(e) => change((p) => ({ ...p, outlineReview: e.target.checked }))} />
+            <span>Show me the outline before writing the chapters <span className="hint">(the chapters, what each covers, and the notation they share)</span></span>
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={!!prefs.titleCards} onChange={(e) => change((p) => ({ ...p, titleCards: e.target.checked }))} />
+            <span>A title card before each chapter</span>
+          </label>
+        </>
+      )}
       <label className="check">
         <input type="checkbox" checked={!!prefs.visualReview} onChange={(e) => change((p) => ({ ...p, visualReview: e.target.checked }))} />
         <span>Let the writer look over its own frames <span className="hint">(one more request, a few cents)</span></span>
       </label>
-      {studio && <WriterLine estimate={estimate} providers={studio.providers || []} choice={choice} setChoice={setChoice} />}
+      {studio && <WriterLine estimate={estimate} providers={studio.providers || []} choice={choice} setChoice={setChoice} capUsd={studio.values?.costs?.lessonCapUsd} />}
       <button className="btn primary big" disabled={!ready} onClick={submit}>
         {busy ? (attached.length ? 'Sending your notes…' : 'Starting…') : 'Make the video'}
       </button>

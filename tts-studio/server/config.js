@@ -79,7 +79,8 @@ export function loadConfig() {
     authorParallel: Math.max(1, Number(pick('TTS_AUTHOR_PARALLEL', 2)) || 1), // requests to Claude at once
     notesImageEdge: Math.max(800, Number(pick('TTS_NOTES_IMAGE_EDGE', 1400)) || 1400), // pixels on a photo's long side
     keepRenders: Math.max(1, Number(pick('TTS_KEEP_RENDERS', 3)) || 3), // videos kept per lesson, the current one included
-    lessonReview: String(pick('TTS_LESSON_REVIEW', 'render')) === 'storyboard' ? 'storyboard' : 'render', // default for new lessons
+    maxChapters: Math.min(12, Math.max(1, Number(pick('TTS_MAX_CHAPTERS', 8)) || 8)), // chapters in a long lesson
+    lessonReview: ['storyboard', 'script'].includes(String(pick('TTS_LESSON_REVIEW', 'render'))) ? String(pick('TTS_LESSON_REVIEW', 'render')) : 'render', // default for new lessons
     authorCheck: pick('TTS_AUTHOR_CHECK', '') ? [String(pick('TTS_AUTHOR_CHECK', '')).trim()] : null,
     // What one lesson may cost before the writer stops, in US dollars (Settings → Costs otherwise).
     lessonCapUsd: given('TTS_AUTHOR_MAX_COST_USD') ? Math.max(0, Number(pick('TTS_AUTHOR_MAX_COST_USD', 15)) || 0) : null,

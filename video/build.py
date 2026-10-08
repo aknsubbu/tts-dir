@@ -259,10 +259,130 @@ def transcript(manifest, scenes):
     return {"version": 1, "blocks": blocks}
 
 
+# ---------- lessons in chapters ----------
+
+def _stamp_vtt(seconds):
+    ms = max(0, round(seconds * 1000))
+    h, ms = divmod(ms, 3_600_000)
+    m, ms = divmod(ms, 60_000)
+    s, ms = divmod(ms, 1000)
+    return f"{h:02}:{m:02}:{s:02}.{ms:03}"
+
+
+def ffmetadata(chapters):
+    """Chapter markers in ffmpeg's metadata format, for the MP4 itself."""
+    out = [";FFMETADATA1"]
+    for c in chapters:
+        title = c["title"].replace("\\", "\\\\").replace("=", "\\=").replace(";", "\\;").replace("#", "\\#").replace("\n", " ")
+        out += ["[CHAPTER]", "TIMEBASE=1/1000", f"START={round(c['start'] * 1000)}", f"END={round(c['end'] * 1000)}", f"title={title}"]
+    return "\n".join(out) + "\n"
+
+
+def chapters_vtt(chapters):
+    """The same markers as WebVTT chapters, for the page's player."""
+    return "WEBVTT\n\n" + "".join(f"{_stamp_vtt(c['start'])} --> {_stamp_vtt(c['end'])}\n{c['title']}\n\n" for c in chapters)
+
+
+def shift_chapter(words, chapter, start):
+    """A chapter's transcript blocks and captions, moved to where the chapter starts in the lesson."""
+    blocks, cues = [], []
+    for b in words.get("blocks", []):
+        timed = [[t, round(a + start, 3), round(e + start, 3)] for t, a, e in b.get("words", [])]
+        blocks.append({**b, "chapter": chapter, "start": round(b["start"] + start, 3), "end": round(b["end"] + start, 3), "words": timed})
+        if b.get("words"):
+            cues += group_cues([{"text": t, "start": a, "end": e} for t, a, e in b["words"]], start)
+        else:
+            cues += block_cues(b.get("text", ""), start + b["start"], b["end"] - b["start"])
+    return blocks, cues
+
+
+def title_card(root, n, title, quality):
+    """The card before chapter n, rendered from cards.py and kept until its text or quality changes."""
+    if not Path(MANIMGL).exists():
+        raise BuildError(f"No manimgl at {MANIMGL}. Set up video/.venv (see video/README.md), or set MANIMGL.")
+    cards = root / "build" / "cards"
+    key = hashlib.sha256(json.dumps([n, title, quality, (HERE / "cards.py").read_text(encoding="utf-8"), manim_fingerprint()]).encode()).hexdigest()[:16]
+    out = cards / f"card-{n:02}-{key}.mp4"
+    if out.is_file():
+        print(f"$ cached title card {n}", file=sys.stderr, flush=True)
+        return out
+    env, manim_args, limits = sandbox.prepare(root, {
+        "TITLE_CARD_NUMBER": f"Chapter {n}", "TITLE_CARD_TITLE": title,
+        "PYTHONPATH": os.pathsep.join(filter(None, [str(HERE), os.environ.get("PYTHONPATH")])),
+    })
+    started = time.time()
+    run(sandbox.wrap([MANIMGL, HERE / "cards.py", "TitleCard", "-w", *QUALITY[quality], "--video_dir", cards / "render", *manim_args], root),
+        failed=f"rendering the title card for chapter {n} failed", timeout=600, cwd=root, env=env, preexec_fn=limits)
+    found = [p for p in (cards / "render").rglob("TitleCard.mp4") if p.stat().st_mtime >= started - 1]
+    if not found:
+        raise BuildError("manimgl finished but wrote no title card")
+    shutil.copyfile(max(found, key=lambda p: p.stat().st_mtime), out)
+    return out
+
+
+def join_chapters(root, parts):
+    """Join built chapters into the lesson: one MP4 with chapter markers, captions and a
+    transcript across every chapter, and chapters.vtt for the page. `parts` is
+    [{"id", "title", "video", "words", "card"}] in order, `card` a title card video or None."""
+    build_dir = root / "build"
+    build_dir.mkdir(parents=True, exist_ok=True)
+    clips, cues, blocks, chapters, offset = [], [], [], [], 0.0
+    for p in parts:
+        if p.get("card"):
+            info = probe(p["card"])
+            clips.append((p["card"], info["duration"], info["audio"]))
+            offset += info["duration"]
+        info = probe(p["video"])
+        clips.append((p["video"], info["duration"], info["audio"]))
+        words = json.loads(Path(p["words"]).read_text(encoding="utf-8")) if p.get("words") and Path(p["words"]).is_file() else {}
+        b, c = shift_chapter(words, p["id"], offset)
+        blocks += b
+        cues += c
+        chapters.append({"id": p["id"], "title": p["title"], "start": round(offset, 3), "end": round(offset + info["duration"], 3)})
+        offset += info["duration"]
+    name = root.name
+    video, joined, tmp = build_dir / f"{name}.mp4", build_dir / f".{name}.joined.mp4", build_dir / f".{name}.part.mp4"
+    run(concat_args(clips, joined))
+    meta = build_dir / "chapters.ffmeta"
+    meta.write_text(ffmetadata(chapters), encoding="utf-8")
+    run(["ffmpeg", "-y", "-v", "error", "-i", joined, "-i", meta, "-map", "0", "-map_metadata", "1", "-map_chapters", "1",
+         "-c", "copy", "-movflags", "+faststart", tmp])
+    tmp.replace(video)
+    joined.unlink(missing_ok=True)
+    (build_dir / f"{name}.srt").write_text(to_srt(cues), encoding="utf-8")
+    (build_dir / f"{name}.vtt").write_text(to_vtt(cues), encoding="utf-8")
+    (build_dir / f"{name}.words.json").write_text(json.dumps({"version": 1, "chapters": chapters, "blocks": blocks}, ensure_ascii=False), encoding="utf-8")
+    (build_dir / f"{name}.chapters.vtt").write_text(chapters_vtt(chapters), encoding="utf-8")
+    result = {"video": video.name, "duration": probe(video)["duration"], "scenes": [], "chapters": chapters}
+    result["poster"] = poster(video, result["duration"], build_dir / f"{name}.jpg")
+    (build_dir / "build.json").write_text(json.dumps(result, indent=1), encoding="utf-8")
+    return result
+
+
+def build_chapters(root, config, quality="default", narrate_first=True, use_cache=True):
+    """A lesson in chapters: each is a project in chapters/<id>/, built as any other (with its
+    own scene cache), then joined, with a title card before each when project.json asks."""
+    ids = config["chapters"]
+    titles = config.get("chapter_titles") or {}
+    parts = []
+    for n, cid in enumerate(ids, 1):
+        ch = root / "chapters" / cid
+        if not (ch / "project.json").is_file():
+            raise BuildError(f"chapter {cid} has no project.json in {ch}")
+        print(f"$ chapter {n} of {len(ids)}: {cid}", file=sys.stderr, flush=True)
+        result = build(ch, quality, narrate_first, use_cache)
+        title = titles.get(cid) or json.loads((ch / "project.json").read_text(encoding="utf-8")).get("title") or cid
+        card = title_card(root, n, title, quality) if config.get("title_cards") else None
+        parts.append({"id": cid, "title": title, "video": ch / "build" / result["video"], "words": ch / "build" / f"{cid}.words.json", "card": card})
+    return join_chapters(root, parts)
+
+
 # ---------- command ----------
 
 def build(root, quality="default", narrate_first=True, use_cache=True):
     config = json.loads((root / "project.json").read_text(encoding="utf-8"))
+    if config.get("chapters"):
+        return build_chapters(root, config, quality, narrate_first, use_cache)
     config.setdefault("scenes_file", "scenes.py")
     if not config.get("scenes"):
         raise BuildError('project.json needs "scenes": the scene classes to render, in order')
@@ -334,8 +454,10 @@ def main(argv=None):
     except BuildError as e:
         sys.exit(f"error: {e}")
     out = root.resolve() / "build"
-    print(f"\n{result['video']}: {result['duration']:.2f}s, {len(result['scenes'])} scenes, built in {time.time() - t0:.0f}s", file=sys.stderr)
-    for f in (result["video"], f"{root.name}.srt", f"{root.name}.vtt", result.get("poster"), f"{root.name}.words.json"):
+    parts = f"{len(result['chapters'])} chapters" if result.get("chapters") else f"{len(result['scenes'])} scenes"
+    print(f"\n{result['video']}: {result['duration']:.2f}s, {parts}, built in {time.time() - t0:.0f}s", file=sys.stderr)
+    for f in (result["video"], f"{root.name}.srt", f"{root.name}.vtt", result.get("poster"), f"{root.name}.words.json",
+              f"{root.name}.chapters.vtt" if result.get("chapters") else None):
         if f:
             print(out / f)
     return 0

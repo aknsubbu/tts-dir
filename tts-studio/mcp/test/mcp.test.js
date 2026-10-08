@@ -17,7 +17,7 @@ import { createVersions } from '../../server/versions.js';
 import { createSecrets } from '../../server/secrets.js';
 import { createSettings } from '../../server/settings.js';
 import { createAuthorApp } from '../../author/app.js';
-import { answer, sandbox, until } from '../../author/test/fakes.js';
+import { answer, sandbox, SCRIPT, scenes, until } from '../../author/test/fakes.js';
 import { squarePng } from '../../author/writers/probe.js';
 import { createMcpServer } from '../server.js';
 import { mcpHandler } from '../http.js';
@@ -95,7 +95,7 @@ const said = (r) => r.content.filter((c) => c.type === 'text').map((c) => c.text
 test('the tools are listed, read-only ones marked', async () => {
   const { tools } = await client.listTools();
   const names = tools.map((t) => t.name).sort();
-  assert.deepEqual(names, ['approve_lesson', 'cancel_lesson', 'get_lesson', 'get_settings', 'get_video', 'lesson_status', 'list_voices', 'make_lesson', 'retry_lesson', 'revise_lesson', 'search_lessons', 'test_writer', 'update_settings', 'wait_for_lesson']);
+  assert.deepEqual(names, ['approve_lesson', 'cancel_lesson', 'get_lesson', 'get_settings', 'get_video', 'lesson_status', 'list_voices', 'make_lesson', 'redo_outline', 'retry_lesson', 'revise_lesson', 'search_lessons', 'test_writer', 'update_settings', 'wait_for_lesson']);
   assert.equal(tools.find((t) => t.name === 'wait_for_lesson').annotations.readOnlyHint, true);
   const { prompts } = await client.listPrompts();
   assert.deepEqual(prompts.map((p) => p.name), ['explain']);
@@ -149,6 +149,48 @@ test('make a lesson from notes and a photo, follow it, and get the video', async
   }, 20_000);
   assert.equal(revised.lastRevision.summary, 'Slower');
   assert.match(box.asked().at(-1).stdin, /about the scene Intro/);
+});
+
+test('a long lesson: its outline waits for the person, is changed, approved, and written in chapters', async () => {
+  const OUTLINE = {
+    title: 'Backpropagation',
+    through_line: 'Why it is cheap',
+    notation: [{ tex: 'w', meaning: 'weights', color: 'BLUE' }],
+    chapters: [
+      { id: 'one-neuron', title: 'One neuron', minutes: 5, goal: 'g', covers: ['a'], from_notes: '', files: [], starts_from: '', ends_with: '' },
+      { id: 'chain', title: 'The chain rule', minutes: 5, goal: 'g', covers: ['b'], from_notes: '', files: [], starts_from: '', ends_with: '' },
+    ],
+  };
+  const follow = async (id) => {
+    for (let i = 0; i < 30; i += 1) {
+      const r = await call('wait_for_lesson', { id });
+      if (['awaiting', 'done', 'error', 'cancelled'].includes(r.structuredContent.status)) return r;
+    }
+    throw new Error('the lesson did not settle');
+  };
+  box.answers([OUTLINE]);
+  const made = await call('make_lesson', { topic: 'Backprop', minutes: 10, quality: 'low' });
+  assert.ok(!made.isError, said(made));
+  assert.match(said(made), /for an outline and about 3 chapters/);
+  const id = made.structuredContent.id;
+  const waiting = await follow(id);
+  assert.equal(waiting.structuredContent.status, 'awaiting', said(waiting));
+  assert.match(waiting.structuredContent.waitingOn, /outline/);
+  assert.match(said(waiting), /The outline is written \(2 chapters\)/);
+
+  const got = await call('get_lesson', { id });
+  assert.match(said(got), /Outline \(waiting for the person to approve it\)/);
+  const { outline } = got.structuredContent;
+  assert.deepEqual(outline.chapters.map((c) => c.id), ['01-one-neuron', '02-chain']);
+
+  box.answers([{ title: 'Chains', script: SCRIPT, scenes: scenes() }, { title: 'One neuron', script: SCRIPT, scenes: scenes() }]);
+  const approved = await call('approve_lesson', { id, outline: { ...outline, chapters: [{ ...outline.chapters[1], title: 'Chains' }, outline.chapters[0]] } });
+  assert.match(said(approved), /Outline approved: the chapters are being written/);
+  const done = await follow(id);
+  assert.equal(done.structuredContent.status, 'done', said(done));
+  assert.deepEqual(done.structuredContent.chapters.map((c) => [c.id, c.title]), [['02-chain', 'Chains'], ['01-one-neuron', 'One neuron']]);
+  const second = await call('get_lesson', { id, chapter: '01-one-neuron' });
+  assert.match(said(second), /Chapter 01-one-neuron \(of 02-chain, 01-one-neuron\)/);
 });
 
 test('files from private folders, of the wrong kind, or missing are refused', async () => {

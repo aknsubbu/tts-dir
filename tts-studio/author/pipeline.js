@@ -3,11 +3,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { LESSON_SCHEMA } from './claude.js';
 import { AuthorError, run } from './proc.js';
-import { guide, lessonPrompt, readPrompt, repairPrompt, revisePrompt, scenesPrompt } from './prompts.js';
+import { chapterPrompt, guide, lessonPrompt, outlinePrompt, readPrompt, repairPrompt, revisePrompt, scenesPrompt } from './prompts.js';
 import { askWriter } from './writers/index.js';
 import { normalizeWriter, sameModel, who } from './writers/plan.js';
 import { createSecrets } from '../server/secrets.js';
 import { pageTexts } from '../server/pdf.js';
+import { CHAPTERS_FROM, MAX_CHAPTERS } from '../shared/limits.js';
 
 export const PROJECT_NAME = /^[A-Za-z0-9_-]{1,80}$/;
 const HEADER = ['from manimlib import *', 'from voiceover import VoiceoverScene'];
@@ -69,6 +70,72 @@ export const EDIT_SCHEMA = {
   required: ['summary', 'blocks', 'remove_blocks', 'classes', 'remove_classes', 'preamble', 'whole_script', 'whole_scenes'],
   additionalProperties: false,
 };
+
+const text = (description) => ({ type: 'string', ...(description ? { description } : {}) });
+const texts = { type: 'array', items: { type: 'string' } };
+
+/** The plan of a lesson in chapters (see prompts/outline.md). */
+export const OUTLINE_SCHEMA = {
+  type: 'object',
+  properties: {
+    title: text('The video\'s title, at most 60 characters'),
+    through_line: text('The question the whole video answers'),
+    notation: { type: 'array', items: item({ tex: text('LaTeX for the symbol'), meaning: text(), color: text('A ManimGL colour constant, like BLUE') }, 'A symbol every chapter shares') },
+    chapters: {
+      type: 'array',
+      items: item({
+        id: text('A short slug'), title: text(), minutes: { type: 'number' }, goal: text(), covers: texts,
+        from_notes: text('Exactly what it takes from the notes, quoted'), files: texts, starts_from: text(), ends_with: text(),
+      }, 'One chapter, in order'),
+    },
+  },
+  required: ['title', 'through_line', 'notation', 'chapters'],
+  additionalProperties: false,
+};
+
+const COLOR = /^(?:(?:BLUE|GREEN|YELLOW|RED|ORANGE|PURPLE|TEAL|PINK|GREY|GOLD|MAROON)(?:_[A-E])?|WHITE)$/;
+const PALETTE = ['BLUE', 'GREEN', 'YELLOW', 'RED', 'ORANGE', 'PURPLE', 'TEAL', 'PINK'];
+const line = (v, n = 400) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
+
+/**
+ * An outline as kept in outline.json: chapters numbered in order with ids that are folder names,
+ * lengths within reason, and notation whose colours are ones ManimGL has. An id the person kept
+ * while editing stays, so its chapter folder still matches.
+ */
+export function normalizeOutline(raw, { maxChapters = MAX_CHAPTERS } = {}) {
+  const used = new Set();
+  const chapters = (Array.isArray(raw?.chapters) ? raw.chapters : []).slice(0, maxChapters).map((c, i) => {
+    let id = /^\d{2}-[a-z0-9-]{1,40}$/.test(String(c.id)) ? String(c.id) : `${String(i + 1).padStart(2, '0')}-${line(c.id || c.title, 60).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'chapter'}`;
+    while (used.has(id)) id = `${id}-x`;
+    used.add(id);
+    const minutes = Math.min(8, Math.max(1, Math.round(Number(c.minutes) || 3)));
+    const list = (v, n) => (Array.isArray(v) ? v : []).map((x) => line(x, n)).filter(Boolean);
+    return {
+      id,
+      title: line(c.title, 80) || `Chapter ${i + 1}`,
+      minutes,
+      goal: line(c.goal, 400),
+      covers: list(c.covers, 200).slice(0, 12),
+      from_notes: String(c.from_notes ?? '').trim().slice(0, 8000),
+      files: list(c.files, 120).map((f) => path.basename(f)),
+      starts_from: line(c.starts_from, 300),
+      ends_with: line(c.ends_with, 300),
+    };
+  });
+  if (!chapters.length) throw new AuthorError('The outline has no chapters.');
+  const notation = (Array.isArray(raw.notation) ? raw.notation : [])
+    .map((n, i) => ({
+      tex: String(n.tex ?? '').replace(/["\n]/g, '').replace(/\\+$/, '').trim().slice(0, 40),
+      meaning: line(n.meaning, 120),
+      color: COLOR.test(String(n.color)) ? String(n.color) : PALETTE[i % PALETTE.length],
+    }))
+    .filter((n) => n.tex)
+    .slice(0, 16);
+  return { title: line(raw.title, 120) || chapters[0].title, through_line: line(raw.through_line, 300), notation, chapters };
+}
+
+/** The shared notation as one line of scenes.py, given word for word to every chapter. */
+export const colorsLine = (notation) => `COLORS = {${notation.map((n) => `R"${n.tex}": ${n.color}`).join(', ')}}`;
 
 const stripFence = (s) => s.replace(/^\s*```[a-z]*\n/, '').replace(/\n```\s*$/, '');
 
@@ -220,9 +287,9 @@ export function createAuthor({ getConfig, ask = askWriter, check = runCheck, aut
       return `${String(step).padStart(2, '0')}-${name}`;
     };
 
-    const consult = async (name, w, prompt, attachments = [], schema = LESSON_SCHEMA, nonEmpty = undefined) => {
+    const consult = async (name, w, prompt, attachments = [], schema = LESSON_SCHEMA, nonEmpty = undefined, logName = name) => {
       overCap();
-      const tag = tagged(name);
+      const tag = tagged(logName);
       fs.writeFileSync(path.join(log, `${tag}-prompt.md`), prompt);
       const record = (usage, extra = {}) => {
         const used = { step: name, provider: w.provider, label: w.label, effort: w.effort || null, ...(usage || {}), model: usage?.model || w.model || null, costUsd: Number(usage?.costUsd) || 0, ...extra };
@@ -242,161 +309,209 @@ export function createAuthor({ getConfig, ask = askWriter, check = runCheck, aut
       return out.answer;
     };
 
-    const has = (f) => fs.existsSync(path.join(root, f));
-    const read = (f) => (has(f) ? fs.readFileSync(path.join(root, f), 'utf8') : '');
-    const current = () => ({ title: readJson(path.join(root, 'project.json'))?.title || job.topic || job.project, script: read('script.txt'), scenes: read('scenes.py') });
-    const saveProject = (title, voice) => {
-      const old = readJson(path.join(root, 'project.json')) || {};
-      const project = { ...old, title: title ?? old.title, voice: voice || old.voice || 'af_heart', speed: old.speed ?? 1.0, script: 'script.txt', scenes_file: 'scenes.py', scenes: old.scenes || [] };
-      fs.writeFileSync(path.join(root, 'project.json'), `${JSON.stringify(project, null, 2)}\n`);
-    };
-    const saveDraft = (draft, voice) => {
-      fs.writeFileSync(path.join(root, 'script.txt'), draft.script);
-      if (draft.scenes != null) fs.writeFileSync(path.join(root, 'scenes.py'), draft.scenes);
-      saveProject(draft.title, voice);
-    };
-
-    /** Write an edit answer to disk. Returns { ok, errors, changed, summary }. */
-    const applyEdit = async (answer) => {
-      const edit = readEdit(answer);
-      if (edit.whole) {
-        if (edit.whole.script.trim()) fs.writeFileSync(path.join(root, 'script.txt'), `${stripFence(edit.whole.script).trim()}\n`);
-        if (edit.whole.scenes.trim()) fs.writeFileSync(path.join(root, 'scenes.py'), withHeader(edit.whole.scenes));
-        if (!has('project.json')) saveProject(answer.title);
-        return { ok: true, errors: [], changed: { whole: true }, summary: edit.summary };
-      }
-      if (isEmptyEdit(edit)) return { ok: true, errors: [], changed: {}, summary: edit.summary, empty: true };
-      const tag = tagged('splice');
-      fs.writeFileSync(path.join(log, `${tag}.json`), JSON.stringify(edit.parts, null, 2));
-      const result = await splice(root, edit.parts, { config, signal });
-      return { ...result, summary: edit.summary };
-    };
-
-    const inspect = async (label) => {
-      const report = await inTurn(root, { config, signal, onStage, label });
-      fs.writeFileSync(path.join(log, `${tagged('check')}.json`), JSON.stringify(report, null, 2));
-      return report;
-    };
-
     const autofixed = [];
-    const tryAutofix = async (report) => {
-      let result;
-      try {
-        result = await autofix(root, report, { config, signal });
-      } catch (e) {
-        if (e.code === 'aborted') throw e;
-        return false; // the fixer is a shortcut; without it the writer fixes everything as before
-      }
-      if (!result?.changed) return false;
-      fs.writeFileSync(path.join(log, `${tagged('autofix')}.json`), JSON.stringify(result, null, 2));
-      autofixed.push(...result.fixes);
-      return true;
-    };
-
     /**
-     * The check, then automatic fixes, fix rounds and the polish, until the project passes.
-     * Returns { report, fixes, polished }.
+     * What works on one project folder: the lesson's own, or one of its chapters' (whose stages
+     * are prefixed "Chapter 2 of 6: " and whose log files "ch02-"). The budget, the writers and
+     * the log are the lesson's.
      */
-    const improve = async (brief, { label = 'Checking the scenes' } = {}) => {
-      let report = await inspect(label);
-      let fixes = 0;
-      // Hand-back: a fixing writer other than the main one gets plan.handBack.after tries, then
-      // the main writer takes over with rounds of its own.
-      const main = plan.steps.write;
-      const canHandBack = plan.handBack.after > 0 && !sameModel(plan.steps.fix, main);
-      let handedBack = false;
-      let failedFixes = 0;
-      let allowed = config.authorMaxFixes;
-      let unusable = null; // why the last answer could not be applied, told to the next round
-      const fixer = () => (handedBack ? { ...main, effort: plan.steps.fix.effort } : plan.steps.fix);
-      while (!report.ok) {
-        if (!unusable && (await tryAutofix(report))) {
-          report = await inspect('Checking the automatic fixes');
-          if (report.ok) break;
-        }
-        if (canHandBack && !handedBack && failedFixes >= plan.handBack.after) {
-          handedBack = true;
-          allowed = fixes + config.authorMaxFixes;
-          onStage(`Handing the fixes back to ${who(main)}`);
-        }
-        if (fixes >= allowed) {
-          const first = unusable ? { where: 'The last fix', message: unusable } : report.errors[0];
-          throw new AuthorError(
-            `The scenes still fail after ${fixes} fix${fixes === 1 ? '' : 'es'}. ${first.where}: ${first.message.trim().split('\n').pop()}`,
-          );
-        }
-        fixes += 1;
-        const w = fixer();
-        onStage(`Fixing the scenes (${fixes} of ${allowed})${sameModel(w, main) ? '' : ` with ${who(w)}`}`);
-        const errors = unusable ? [{ where: 'your last answer', message: `It could not be applied: ${unusable}` }, ...report.errors] : report.errors;
-        let applied;
-        try {
-          applied = await applyEdit(await consult('fix', w, repairPrompt({ ...brief, ...current(), errors, warnings: report.warnings }), [], EDIT_SCHEMA, []));
-        } catch (e) {
-          // A cheaper writer that cannot even answer counts as a failed fix, while there is someone to hand back to.
-          if (e.code === 'aborted' || e.code === 'cap' || !canHandBack || handedBack) throw e;
-          failedFixes += 1;
-          continue;
-        }
-        if (!applied.ok || applied.empty) {
-          unusable = applied.ok ? 'It changed nothing.' : applied.errors.join(' ');
-          if (!handedBack) failedFixes += 1;
-          continue;
-        }
-        unusable = null;
-        report = await inspect('Checking the scenes');
-        if (!report.ok && !handedBack) failedFixes += 1;
-      }
+    const at = (root, { prefix = '', logPrefix = '' } = {}) => {
+      const stage = (message) => onStage(`${prefix}${message}`);
+      const has = (f) => fs.existsSync(path.join(root, f));
+      const read = (f) => (has(f) ? fs.readFileSync(path.join(root, f), 'utf8') : '');
+      const current = () => ({ title: readJson(path.join(root, 'project.json'))?.title || job.topic || job.project, script: read('script.txt'), scenes: read('scenes.py') });
+      const saveProject = (title, voice) => {
+        const old = readJson(path.join(root, 'project.json')) || {};
+        const project = { ...old, title: title ?? old.title, voice: voice || old.voice || 'af_heart', speed: old.speed ?? 1.0, script: 'script.txt', scenes_file: 'scenes.py', scenes: old.scenes || [] };
+        fs.writeFileSync(path.join(root, 'project.json'), `${JSON.stringify(project, null, 2)}\n`);
+      };
+      const saveDraft = (draft, voice) => {
+        fs.writeFileSync(path.join(root, 'script.txt'), draft.script);
+        if (draft.scenes != null) fs.writeFileSync(path.join(root, 'scenes.py'), draft.scenes);
+        saveProject(draft.title, voice);
+      };
 
-      let polished = false;
-      const visual = brief.visualReview ?? config.authorVisualReview;
-      const polisher = handedBack ? { ...main, effort: plan.steps.polish.effort } : plan.steps.polish;
-      // Stills go only to a polisher that can see; one that cannot gets the warnings alone.
-      const stills = visual && polisher.caps?.images ? reviewStills(root) : [];
-      const atCap = capUsd && spent() >= capUsd; // it passes; polishing is not worth going over
-      const worth = config.authorPolish && report.warnings.length && !onlySmallOverruns(report.warnings);
-      if (!atCap && (worth || stills.length)) {
-        const before = Object.fromEntries(FILES.map((f) => [f, fs.readFileSync(path.join(root, f))]));
-        onStage(stills.length ? 'Looking over the frames' : 'Polishing timing and layout');
-        // Only the scenes the warnings are in, unless the frames are being looked over.
-        const named = [...new Set(report.warnings.map((x) => x.scene || x.where).filter((s) => /^[A-Z]\w*$/.test(String(s))))];
-        const files = current();
-        const only = !stills.length && named.length ? named : null;
-        const shown = only ? sceneParts(files.scenes, only) : files.scenes;
+      /** Write an edit answer to disk. Returns { ok, errors, changed, summary }. */
+      const applyEdit = async (answer) => {
+        const edit = readEdit(answer);
+        if (edit.whole) {
+          if (edit.whole.script.trim()) fs.writeFileSync(path.join(root, 'script.txt'), `${stripFence(edit.whole.script).trim()}\n`);
+          if (edit.whole.scenes.trim()) fs.writeFileSync(path.join(root, 'scenes.py'), withHeader(edit.whole.scenes));
+          if (!has('project.json')) saveProject(answer.title);
+          return { ok: true, errors: [], changed: { whole: true }, summary: edit.summary };
+        }
+        if (isEmptyEdit(edit)) return { ok: true, errors: [], changed: {}, summary: edit.summary, empty: true };
+        const tag = tagged(`${logPrefix}splice`);
+        fs.writeFileSync(path.join(log, `${tag}.json`), JSON.stringify(edit.parts, null, 2));
+        const result = await splice(root, edit.parts, { config, signal });
+        return { ...result, summary: edit.summary };
+      };
+
+      const inspect = async (label) => {
+        const report = await inTurn(root, { config, signal, onStage: stage, label });
+        fs.writeFileSync(path.join(log, `${tagged(`${logPrefix}check`)}.json`), JSON.stringify(report, null, 2));
+        return report;
+      };
+
+      const tryAutofix = async (report) => {
+        let result;
         try {
-          await applyEdit(await consult('polish', polisher, repairPrompt({ ...brief, ...files, scenes: shown, only, errors: [], warnings: report.warnings, pictures: stills.length }), stills, EDIT_SCHEMA, []));
+          result = await autofix(root, report, { config, signal });
         } catch (e) {
-          // It already passes: a polish that cannot be had leaves it as it is.
           if (e.code === 'aborted') throw e;
+          return false; // the fixer is a shortcut; without it the writer fixes everything as before
         }
-        // project.json is rewritten by every check in its own format, so only the two files the writer writes count.
-        const changed = ['script.txt', 'scenes.py'].some((f) => !fs.readFileSync(path.join(root, f)).equals(before[f]));
-        const after = changed ? await inspect('Checking the polish') : report;
-        // A visual review may fix what no warning names, so it only has to break nothing.
-        const better = stills.length ? after.warnings.length <= report.warnings.length : after.warnings.length < report.warnings.length;
-        if (changed && after.ok && better) {
-          report = after;
-          polished = true;
-        } else {
-          // It broke something or fixed nothing: the version that passed stands.
-          for (const [f, body] of Object.entries(before)) fs.writeFileSync(path.join(root, f), body);
+        if (!result?.changed) return false;
+        fs.writeFileSync(path.join(log, `${tagged(`${logPrefix}autofix`)}.json`), JSON.stringify(result, null, 2));
+        autofixed.push(...result.fixes);
+        return true;
+      };
+
+      /**
+       * The check, then automatic fixes, fix rounds and the polish, until the project passes.
+       * Returns { report, fixes, polished }.
+       */
+      const improve = async (brief, { label = 'Checking the scenes' } = {}) => {
+        let report = await inspect(label);
+        let fixes = 0;
+        // Hand-back: a fixing writer other than the main one gets plan.handBack.after tries, then
+        // the main writer takes over with rounds of its own.
+        const main = plan.steps.write;
+        const canHandBack = plan.handBack.after > 0 && !sameModel(plan.steps.fix, main);
+        let handedBack = false;
+        let failedFixes = 0;
+        let allowed = config.authorMaxFixes;
+        let unusable = null; // why the last answer could not be applied, told to the next round
+        const fixer = () => (handedBack ? { ...main, effort: plan.steps.fix.effort } : plan.steps.fix);
+        while (!report.ok) {
+          if (!unusable && (await tryAutofix(report))) {
+            report = await inspect('Checking the automatic fixes');
+            if (report.ok) break;
+          }
+          if (canHandBack && !handedBack && failedFixes >= plan.handBack.after) {
+            handedBack = true;
+            allowed = fixes + config.authorMaxFixes;
+            stage(`Handing the fixes back to ${who(main)}`);
+          }
+          if (fixes >= allowed) {
+            const first = unusable ? { where: 'The last fix', message: unusable } : report.errors[0];
+            throw new AuthorError(
+              `The scenes still fail after ${fixes} fix${fixes === 1 ? '' : 'es'}. ${first.where}: ${first.message.trim().split('\n').pop()}`,
+            );
+          }
+          fixes += 1;
+          const w = fixer();
+          stage(`Fixing the scenes (${fixes} of ${allowed})${sameModel(w, main) ? '' : ` with ${who(w)}`}`);
+          const errors = unusable ? [{ where: 'your last answer', message: `It could not be applied: ${unusable}` }, ...report.errors] : report.errors;
+          let applied;
+          try {
+            applied = await applyEdit(await consult('fix', w, repairPrompt({ ...brief, ...current(), errors, warnings: report.warnings }), [], EDIT_SCHEMA, [], `${logPrefix}fix`));
+          } catch (e) {
+            // A cheaper writer that cannot even answer counts as a failed fix, while there is someone to hand back to.
+            if (e.code === 'aborted' || e.code === 'cap' || !canHandBack || handedBack) throw e;
+            failedFixes += 1;
+            continue;
+          }
+          if (!applied.ok || applied.empty) {
+            unusable = applied.ok ? 'It changed nothing.' : applied.errors.join(' ');
+            if (!handedBack) failedFixes += 1;
+            continue;
+          }
+          unusable = null;
+          report = await inspect('Checking the scenes');
+          if (!report.ok && !handedBack) failedFixes += 1;
         }
-      }
-      return { report, fixes, polished };
+
+        let polished = false;
+        const visual = brief.visualReview ?? config.authorVisualReview;
+        const polisher = handedBack ? { ...main, effort: plan.steps.polish.effort } : plan.steps.polish;
+        // Stills go only to a polisher that can see; one that cannot gets the warnings alone.
+        const stills = visual && polisher.caps?.images ? reviewStills(root) : [];
+        const atCap = capUsd && spent() >= capUsd; // it passes; polishing is not worth going over
+        const worth = config.authorPolish && report.warnings.length && !onlySmallOverruns(report.warnings);
+        if (!atCap && (worth || stills.length)) {
+          const before = Object.fromEntries(FILES.map((f) => [f, fs.readFileSync(path.join(root, f))]));
+          stage(stills.length ? 'Looking over the frames' : 'Polishing timing and layout');
+          // Only the scenes the warnings are in, unless the frames are being looked over.
+          const named = [...new Set(report.warnings.map((x) => x.scene || x.where).filter((s) => /^[A-Z]\w*$/.test(String(s))))];
+          const files = current();
+          const only = !stills.length && named.length ? named : null;
+          const shown = only ? sceneParts(files.scenes, only) : files.scenes;
+          try {
+            await applyEdit(await consult('polish', polisher, repairPrompt({ ...brief, ...files, scenes: shown, only, errors: [], warnings: report.warnings, pictures: stills.length }), stills, EDIT_SCHEMA, [], `${logPrefix}polish`));
+          } catch (e) {
+            // It already passes: a polish that cannot be had leaves it as it is.
+            if (e.code === 'aborted') throw e;
+          }
+          // project.json is rewritten by every check in its own format, so only the two files the writer writes count.
+          const changed = ['script.txt', 'scenes.py'].some((f) => !fs.readFileSync(path.join(root, f)).equals(before[f]));
+          const after = changed ? await inspect('Checking the polish') : report;
+          // A visual review may fix what no warning names, so it only has to break nothing.
+          const better = stills.length ? after.warnings.length <= report.warnings.length : after.warnings.length < report.warnings.length;
+          if (changed && after.ok && better) {
+            report = after;
+            polished = true;
+          } else {
+            // It broke something or fixed nothing: the version that passed stands.
+            for (const [f, body] of Object.entries(before)) fs.writeFileSync(path.join(root, f), body);
+          }
+        }
+        return { report, fixes, polished };
+      };
+      return { root, has, read, current, saveDraft, saveProject, applyEdit, inspect, improve };
     };
+    const here = at(root);
 
     /** Totals, the record in author.json, and the budget cleared for the next job. */
     const finish = (extra) => {
       const usage = totalUsage(requests);
       if (spentBefore) usage.earlierAttemptsUsd = Math.round(spentBefore * 1000) / 1000;
       usage.costUsd = Math.round(spent() * 1000) / 1000;
-      const result = { project: job.project, title: current().title, script: current().script, autofixed, costUsd: usage.costUsd, usage, writtenBy: writtenBy(requests), ...extra };
+      const result = { project: job.project, title: here.current().title, script: here.current().script, autofixed, costUsd: usage.costUsd, usage, writtenBy: writtenBy(requests), ...extra };
       fs.writeFileSync(path.join(root, 'author.json'), `${JSON.stringify({ ...result, script: undefined, finishedAt: new Date().toISOString() }, null, 2)}\n`);
       fs.rmSync(spentFile, { force: true });
       return result;
     };
 
-    return { config, root, log, plan, consult, current, has, saveDraft, applyEdit, improve, finish, onStage };
+    return { config, root, log, plan, consult, finish, onStage, at, ...here };
+  }
+
+  /**
+   * The notes as the writer gets them: typed notes, the text of PDFs it cannot read, and, when
+   * another writer reads the attachments, their transcript. Returns { notes, send }, `send` the
+   * files the writer is shown itself.
+   */
+  async function notesFor(s, brief, writer) {
+    const { root, plan, onStage } = s;
+    // Pictures and PDFs go with the first request only. A fix is about code that failed,
+    // and by then what they said is in the script.
+    const attachments = (brief.attachments || []).map((a) => {
+      const file = path.join(root, 'notes', path.basename(a.file));
+      if (!fs.existsSync(file)) throw new AuthorError(`The attached file ${a.name} is missing from the project's notes folder.`);
+      return { ...a, path: file };
+    });
+    const together = sameModel(plan.steps.read, writer);
+    let notes = brief.notes;
+    let send = [];
+    if (attachments.length) {
+      // The writer reads the files itself when it is also the reader; otherwise the reader
+      // writes them out first. Either way, PDFs a model cannot take go as their text.
+      const reader = together ? writer : plan.steps.read;
+      const { files, text: pdfText } = await usableBy(reader, attachments);
+      if (pdfText) notes = [notes, pdfText].filter(Boolean).join('\n\n');
+      if (together) send = files;
+      else if (files.length) {
+        const cache = path.join(root, 'notes', 'transcribed.md');
+        let transcript = fs.existsSync(cache) ? fs.readFileSync(cache, 'utf8').trim() : '';
+        if (!transcript) {
+          onStage(`Reading the notes with ${who(reader)}`);
+          transcript = String((await s.consult('read', reader, readPrompt({ topic: brief.topic, attachments: files }), files, READ_SCHEMA)).notes).trim();
+          fs.writeFileSync(cache, `${transcript}\n`);
+        }
+        notes = [notes, `# From the attached files (${files.map((f) => f.name).join(', ')}), as read by ${who(reader)}\n\n${transcript}`].filter(Boolean).join('\n\n');
+      }
+    }
+    return { notes, send };
   }
 
   async function write(job, { signal, onStage = () => {} } = {}) {
@@ -408,6 +523,7 @@ export function createAuthor({ getConfig, ask = askWriter, check = runCheck, aut
     if (!brief?.topic) throw new AuthorError('There is no brief for this project, so there is nothing to write from.');
     fs.writeFileSync(briefFile, `${JSON.stringify(brief, null, 2)}\n`);
     fs.rmSync(path.join(root, 'author.json'), { force: true });
+    if (Number(brief.minutes) >= CHAPTERS_FROM) return writeInChapters(s, brief, job);
     const phase = ['script', 'scenes'].includes(job.phase) ? job.phase : 'all';
     const writer = plan.steps.write;
 
@@ -423,32 +539,7 @@ export function createAuthor({ getConfig, ask = askWriter, check = runCheck, aut
       // A project that already has its files (a retry after a failure) goes straight to the check.
       // Pictures and PDFs go with the first request only. A fix is about code that failed,
       // and by then what they said is in the script.
-      const attachments = (brief.attachments || []).map((a) => {
-        const file = path.join(root, 'notes', path.basename(a.file));
-        if (!fs.existsSync(file)) throw new AuthorError(`The attached file ${a.name} is missing from the project's notes folder.`);
-        return { ...a, path: file };
-      });
-      const together = sameModel(plan.steps.read, writer);
-      let notes = brief.notes;
-      let send = [];
-      if (attachments.length) {
-        // The writer reads the files itself when it is also the reader; otherwise the reader
-        // writes them out first. Either way, PDFs a model cannot take go as their text.
-        const reader = together ? writer : plan.steps.read;
-        const { files, text } = await usableBy(reader, attachments);
-        if (text) notes = [notes, text].filter(Boolean).join('\n\n');
-        if (together) send = files;
-        else if (files.length) {
-          const cache = path.join(root, 'notes', 'transcribed.md');
-          let transcript = fs.existsSync(cache) ? fs.readFileSync(cache, 'utf8').trim() : '';
-          if (!transcript) {
-            onStage(`Reading the notes with ${who(reader)}`);
-            transcript = String((await s.consult('read', reader, readPrompt({ topic: brief.topic, attachments: files }), files, READ_SCHEMA)).notes).trim();
-            fs.writeFileSync(cache, `${transcript}\n`);
-          }
-          notes = [notes, `# From the attached files (${files.map((f) => f.name).join(', ')}), as read by ${who(reader)}\n\n${transcript}`].filter(Boolean).join('\n\n');
-        }
-      }
+      const { notes, send } = await notesFor(s, brief, writer);
       if (phase === 'script') {
         onStage(send.length ? 'Reading the notes and writing the narration' : 'Writing the narration');
         const answer = await s.consult('write', writer, lessonPrompt({ ...brief, notes, attachments: send, phase }), send, SCRIPT_SCHEMA);
@@ -468,14 +559,117 @@ export function createAuthor({ getConfig, ask = askWriter, check = runCheck, aut
   }
 
   /**
+   * A long lesson: an outline (stopping there when the person reviews it), then each chapter
+   * written, checked and fixed in its own project, chapters/<id>/. A chapter that already passed
+   * (it has an author.json) is kept, so a retry continues at the chapter that stopped. Each
+   * chapter is given the outline, its part of the notes and files, the shared COLORS line, and
+   * the end of the chapter before it with its last picture. With more than one request allowed at
+   * once, the next chapter is written while this one is checked.
+   */
+  async function writeInChapters(s, brief, job) {
+    const { root, plan, config, onStage } = s;
+    const maxChapters = Math.max(1, Number(config.maxChapters) || MAX_CHAPTERS);
+    fs.rmSync(path.join(root, 'author.json'), { force: true });
+    const outlineFile = path.join(root, 'outline.json');
+    let outline = readJson(outlineFile);
+    const writer = plan.steps.write;
+    if (!outline || job.redo) {
+      const { notes, send } = await notesFor(s, brief, plan.steps.outline);
+      onStage(job.redo ? 'Redoing the outline' : 'Writing the outline');
+      const raw = await s.consult('outline', plan.steps.outline, outlinePrompt({ ...brief, notes, attachments: send, redo: job.redo || null, previous: outline, maxChapters }), send, OUTLINE_SCHEMA, ['title']);
+      outline = normalizeOutline(raw, { maxChapters });
+      fs.writeFileSync(outlineFile, `${JSON.stringify(outline, null, 2)}\n`);
+    } else {
+      outline = normalizeOutline(outline, { maxChapters }); // as the person may have edited it
+    }
+    // The lesson's own project.json lists its chapters; build.py joins them.
+    const project = readJson(path.join(root, 'project.json')) || {};
+    fs.writeFileSync(path.join(root, 'project.json'), `${JSON.stringify({
+      ...project,
+      title: outline.title,
+      voice: brief.voice || project.voice || 'af_heart',
+      speed: project.speed ?? 1.0,
+      chapters: outline.chapters.map((c) => c.id),
+      chapter_titles: Object.fromEntries(outline.chapters.map((c) => [c.id, c.title])),
+      title_cards: brief.titleCards !== false,
+      scenes: [],
+    }, null, 2)}\n`);
+    if (job.phase === 'outline') return s.finish({ phase: 'outline', outline, scenes: [], warnings: [], fixes: 0, polished: false, narrationSec: null });
+
+    const colors = colorsLine(outline.notation);
+    const n = outline.chapters.length;
+    const dirOf = (i) => path.join(root, 'chapters', outline.chapters[i].id);
+    const nn = (i) => String(i + 1).padStart(2, '0');
+    const notesDir = path.join(root, 'notes');
+    const filesFor = (c) => (brief.attachments || [])
+      .filter((a) => c.files.includes(path.basename(a.file)) || c.files.includes(a.name))
+      .map((a) => ({ ...a, path: path.join(notesDir, path.basename(a.file)) }))
+      .filter((a) => fs.existsSync(a.path) && (a.kind === 'image' ? writer.caps?.images : writer.caps?.pdf));
+    const previousOf = (i, withStill) => {
+      if (i === 0) return null;
+      const dir = dirOf(i - 1);
+      const script = fs.existsSync(path.join(dir, 'script.txt')) ? fs.readFileSync(path.join(dir, 'script.txt'), 'utf8') : '';
+      const still = withStill && writer.caps?.images ? reviewStills(dir).at(-1) : null;
+      return { title: outline.chapters[i - 1].title, script, still: still ? { ...still, name: `${outline.chapters[i - 1].title}: its last frame` } : null };
+    };
+    const writeChapter = (i, previous) => {
+      const files = filesFor(outline.chapters[i]);
+      const shown = [...files, ...(previous?.still ? [previous.still] : [])];
+      return s.consult('write', writer, chapterPrompt({ brief, outline, index: i, colors, previous, attachments: files }), shown, LESSON_SCHEMA, undefined, `ch${nn(i)}-write`);
+    };
+    const ahead = new Map(); // chapter index -> its answer, written while the one before was checked
+    const pipeline = (Number(config.authorParallel) || 1) > 1;
+    const results = [];
+    for (let i = 0; i < n; i += 1) {
+      const c = outline.chapters[i];
+      const dir = dirOf(i);
+      const done = readJson(path.join(dir, 'author.json'));
+      if (done) {
+        results.push(done);
+        continue;
+      }
+      fs.mkdirSync(dir, { recursive: true });
+      const ch = s.at(dir, { prefix: `Chapter ${i + 1} of ${n}: `, logPrefix: `ch${nn(i)}-` });
+      if (!FILES.every((f) => ch.has(f))) {
+        onStage(`Writing chapter ${i + 1} of ${n}: ${c.title}`);
+        const answer = ahead.has(i) ? await ahead.get(i) : await writeChapter(i, previousOf(i, true));
+        ch.saveDraft({ ...normalizeDraft(answer), title: c.title }, brief.voice);
+      }
+      if (pipeline && i + 1 < n && !ahead.has(i + 1) && !fs.existsSync(path.join(dirOf(i + 1), 'scenes.py'))) {
+        const next = writeChapter(i + 1, { title: c.title, script: ch.read('script.txt'), still: null });
+        next.catch(() => {}); // if this chapter fails, the next one's answer is simply not used
+        ahead.set(i + 1, next);
+      }
+      const notation = ch.read('scenes.py').includes(colors) ? null : `Chapter ${i + 1} does not use the outline's COLORS line word for word, so its colours may differ.`;
+      const { report, fixes, polished } = await ch.improve(brief);
+      const summary = { id: c.id, title: c.title, fixes, polished, warnings: report.warnings, scenes: report.scenes, duration: report.duration ?? null, notation };
+      fs.writeFileSync(path.join(dir, 'author.json'), `${JSON.stringify(summary, null, 2)}\n`);
+      results.push(summary);
+    }
+    return s.finish({
+      phase: 'chapters',
+      outline,
+      chapters: results.map(({ id, title, fixes, polished, duration, notation, warnings }) => ({ id, title, fixes, polished, duration, notation, warnings: warnings?.length || 0 })),
+      scenes: [],
+      warnings: results.flatMap((r) => (r.warnings || []).map((w) => ({ ...w, chapter: r.id }))),
+      fixes: results.reduce((t, r) => t + (r.fixes || 0), 0),
+      polished: results.some((r) => r.polished),
+      narrationSec: results.reduce((t, r) => t + (Number(r.duration) || 0), 0) || null,
+    });
+  }
+
+  /**
    * A change to a lesson that was written: the request, its scope ({ kind: 'lesson' }, { kind:
    * 'scene', name } or { kind: 'block', id, scene, at }), the last few requests with their
    * summaries, and any new notes. The writer answers with what changes; splice.py applies it, and
    * then the check, fixes and polish run as for a new lesson.
    */
   async function revise(job, { signal, onStage = () => {} } = {}) {
-    const s = session(job, { signal, onStage });
-    const { root, plan } = s;
+    const lesson = session(job, { signal, onStage });
+    const { root, plan } = lesson;
+    // A lesson in chapters is revised a chapter at a time.
+    if (job.chapter !== undefined && !/^\d{2}-[a-z0-9-]{1,48}$/.test(String(job.chapter))) throw new AuthorError('That chapter is not one of this lesson\'s.');
+    const s = job.chapter ? { ...lesson, ...lesson.at(path.join(root, 'chapters', job.chapter), { prefix: 'Chapter: ', logPrefix: `${job.chapter.slice(0, 2)}-` }) } : lesson;
     if (!FILES.every((f) => s.has(f))) throw new AuthorError('This lesson has no script and scenes to change yet.');
     const request = String(job.request || '').trim();
     if (!request) throw new AuthorError('Say what to change.');
@@ -491,7 +685,7 @@ export function createAuthor({ getConfig, ask = askWriter, check = runCheck, aut
       .filter((a) => fs.existsSync(a.path));
     const { files, text } = await usableBy(writer, notes);
     const inScope = scope.kind === 'scene' ? scope.blocks : scope.kind === 'block' ? [scope.id] : null;
-    const stills = writer.caps?.images ? reviewStills(root, inScope).slice(0, 8) : [];
+    const stills = writer.caps?.images ? reviewStills(s.root, inScope).slice(0, 8) : [];
     const history = (Array.isArray(job.history) ? job.history : []).slice(-3).map((h) => ({ request: String(h.request || ''), summary: String(h.summary || '') }));
 
     onStage(`Revising: ${request.length > 60 ? `${request.slice(0, 57)}…` : request}`);
@@ -508,8 +702,9 @@ export function createAuthor({ getConfig, ask = askWriter, check = runCheck, aut
     const outside = changed.whole ? [] : outsideScope(scope, changed, before.scenes);
 
     const { report, fixes, polished } = await s.improve(brief, { label: 'Checking the revision' });
-    return s.finish({
+    return lesson.finish({
       kind: 'revise',
+      chapter: job.chapter || null,
       request,
       summary: applied.summary || '',
       scope: job.scope || { kind: 'lesson' },
@@ -530,7 +725,9 @@ export function createAuthor({ getConfig, ask = askWriter, check = runCheck, aut
   async function checkOnly(job, { signal, onStage = () => {} } = {}) {
     const config = getConfig();
     if (!PROJECT_NAME.test(job.project)) throw new AuthorError('That project name is not usable.');
-    const root = path.join(config.videoDir, 'projects', job.project);
+    const lessonRoot = path.join(config.videoDir, 'projects', job.project);
+    if (job.chapter !== undefined && !/^\d{2}-[a-z0-9-]{1,48}$/.test(String(job.chapter))) throw new AuthorError('That chapter is not one of this lesson\'s.');
+    const root = job.chapter ? path.join(lessonRoot, 'chapters', job.chapter) : lessonRoot;
     if (!FILES.every((f) => fs.existsSync(path.join(root, f)))) throw new AuthorError('This project has no script and scenes to check yet.');
     fs.mkdirSync(path.join(root, 'build', 'author'), { recursive: true });
     return inTurn(root, { config, signal, onStage, label: 'Checking the scenes' });
@@ -683,6 +880,7 @@ function pickBrief(job) {
     minutes: Number(job.minutes) || 2,
     voice: job.voice || 'af_heart',
     ...(job.visualReview === undefined ? {} : { visualReview: !!job.visualReview }),
+    ...(job.titleCards === undefined ? {} : { titleCards: !!job.titleCards }),
     // Saved into notes/ by the dashboard; only names come here.
     attachments: (Array.isArray(job.attachments) ? job.attachments : [])
       .filter((a) => a && ['image', 'pdf'].includes(a.kind) && typeof a.file === 'string')

@@ -2,8 +2,52 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { PROJECT_NAME } from './video.js';
 
-const SOURCES = ['script.txt', 'scenes.py', 'project.json'];
-export const RENDER_EXTS = ['mp4', 'srt', 'vtt', 'jpg', 'words.json'];
+const SOURCES = ['script.txt', 'scenes.py', 'project.json', 'outline.json'];
+const CHAPTER = /^\d{2}-[a-z0-9-]{1,48}$/;
+
+/** The chapters a lesson's project.json lists, as folder names; [] for a lesson in one piece. */
+export function chaptersOf(dir) {
+  try {
+    const list = JSON.parse(fs.readFileSync(path.join(dir, 'project.json'), 'utf8')).chapters;
+    return Array.isArray(list) ? list.filter((c) => CHAPTER.test(String(c))) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Where one chapter's files are: the lesson's folder or a snapshot's, then chapters/<id>. */
+export const chapterDir = (dir, chapter) => (chapter ? path.join(dir, 'chapters', chapter) : dir);
+
+/**
+ * Copy a lesson's sources between its working copy and a snapshot, each chapter's too, with the
+ * storyboard each was last checked with. `boards` says which way the storyboards go:
+ * 'out' from build/check into storyboard/, 'in' back again.
+ */
+export function copySources(from, to, boards) {
+  const one = (src, dest) => {
+    fs.mkdirSync(dest, { recursive: true });
+    for (const f of SOURCES) if (fs.existsSync(path.join(src, f))) fs.copyFileSync(path.join(src, f), path.join(dest, f));
+    const [bFrom, bTo] = boards === 'out' ? [path.join(src, 'build', 'check'), path.join(dest, 'storyboard')] : [path.join(src, 'storyboard'), path.join(dest, 'build', 'check')];
+    const board = path.join(bFrom, 'storyboard.json');
+    if (!fs.existsSync(board)) return;
+    if (boards === 'out') fs.rmSync(bTo, { recursive: true, force: true });
+    fs.mkdirSync(path.join(bTo, 'frames'), { recursive: true });
+    fs.copyFileSync(board, path.join(bTo, 'storyboard.json'));
+    let listed;
+    try {
+      listed = stillsOf(JSON.parse(fs.readFileSync(board, 'utf8')));
+    } catch {
+      listed = new Set();
+    }
+    for (const file of listed) {
+      const still = path.join(bFrom, 'frames', file);
+      if (fs.existsSync(still)) fs.copyFileSync(still, path.join(bTo, 'frames', file));
+    }
+  };
+  one(from, to);
+  for (const c of chaptersOf(from)) one(path.join(from, 'chapters', c), path.join(to, 'chapters', c));
+}
+export const RENDER_EXTS = ['mp4', 'srt', 'vtt', 'jpg', 'words.json', 'chapters.vtt'];
 const pad = (n) => String(n).padStart(3, '0');
 
 /**
@@ -26,20 +70,6 @@ export function createVersions({ store, getConfig }) {
   const renderDir = (id) => path.join(path.dirname(store.videoPath(id)), id);
   const archived = (id, n, ext) => path.join(renderDir(id), `v${n}.${ext}`);
 
-  /** Copy the storyboard the last check left (its JSON and the stills it lists) to `dest`. */
-  function copyStoryboard(root, dest) {
-    const board = path.join(root, 'build', 'check', 'storyboard.json');
-    if (!fs.existsSync(board)) return false;
-    fs.rmSync(dest, { recursive: true, force: true });
-    fs.mkdirSync(path.join(dest, 'frames'), { recursive: true });
-    fs.copyFileSync(board, path.join(dest, 'storyboard.json'));
-    for (const file of stillsOf(JSON.parse(fs.readFileSync(board, 'utf8')))) {
-      const from = path.join(root, 'build', 'check', 'frames', file);
-      if (fs.existsSync(from)) fs.copyFileSync(from, path.join(dest, 'frames', file));
-    }
-    return true;
-  }
-
   /**
    * Make the next version of lesson `id` from its project's files as they are now.
    * `source` says what made it: written, edited, revised or restored. Returns its number.
@@ -50,11 +80,7 @@ export function createVersions({ store, getConfig }) {
     if (!root || !fs.existsSync(root)) throw new Error('This lesson has no project folder to take a version of.');
     const n = store.versions.next(id);
     const dir = versionDir(root, n);
-    fs.mkdirSync(dir, { recursive: true });
-    for (const f of SOURCES) {
-      if (fs.existsSync(path.join(root, f))) fs.copyFileSync(path.join(root, f), path.join(dir, f));
-    }
-    copyStoryboard(root, path.join(dir, 'storyboard'));
+    copySources(root, dir, 'out');
     const createdAt = Date.now();
     fs.writeFileSync(
       path.join(dir, 'version.json'),
@@ -129,10 +155,10 @@ export function createVersions({ store, getConfig }) {
    * Where a storyboard lives: the working copy's (the last check) or a version's snapshot.
    * Returns { dir, frames, board } or null when there is none.
    */
-  function storyboard(row, version) {
+  function storyboard(row, version, chapter = null) {
     const root = projectRoot(row);
-    if (!root) return null;
-    const dir = version ? path.join(versionDir(root, version), 'storyboard') : path.join(root, 'build', 'check');
+    if (!root || (chapter && !CHAPTER.test(String(chapter)))) return null;
+    const dir = version ? path.join(chapterDir(versionDir(root, version), chapter), 'storyboard') : path.join(chapterDir(root, chapter), 'build', 'check');
     const file = path.join(dir, 'storyboard.json');
     if (!fs.existsSync(file)) return null;
     try {
@@ -147,24 +173,17 @@ export function createVersions({ store, getConfig }) {
     fs.rmSync(renderDir(id), { recursive: true, force: true });
   }
 
-  /** The working copy back to version n's files and storyboard, after a revision that failed. */
+  /** The working copy back to version n's files and storyboards, after a revision that failed. */
   function resetTo(id, n) {
     const row = store.getRaw(id);
     const root = row && projectRoot(row);
     const dir = root && versionDir(root, n);
     if (!dir || !fs.existsSync(dir)) return false;
-    for (const f of SOURCES) if (fs.existsSync(path.join(dir, f))) fs.copyFileSync(path.join(dir, f), path.join(root, f));
-    const board = path.join(dir, 'storyboard');
-    if (fs.existsSync(path.join(board, 'storyboard.json'))) {
-      const to = path.join(root, 'build', 'check');
-      fs.mkdirSync(path.join(to, 'frames'), { recursive: true });
-      fs.copyFileSync(path.join(board, 'storyboard.json'), path.join(to, 'storyboard.json'));
-      if (fs.existsSync(path.join(board, 'frames'))) fs.cpSync(path.join(board, 'frames'), path.join(to, 'frames'), { recursive: true });
-    }
+    copySources(dir, root, 'in');
     return true;
   }
 
-  return { snapshot, archiveCurrent, built, adopt, resetTo, renderFile, storyboard, removeRenders, projectRoot };
+  return { snapshot, archiveCurrent, built, adopt, resetTo, renderFile, storyboard, removeRenders, projectRoot, versionDir };
 }
 
 /** Every still file a storyboard lists. */

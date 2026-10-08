@@ -53,6 +53,8 @@ The build does four things:
 3. **Join.** Concatenates the scene videos in the listed order with ffmpeg. Each scene's audio is padded or cut to its picture's length, so sound cannot drift.
 4. **Caption.** Writes SRT and VTT from the word timings. Each caption is placed at the start time its scene recorded for the block, plus the real lengths of the earlier scenes as reported by ffprobe. The same times go into `<name>.words.json`, every spoken word with its start and end in the finished video, block by block, which the dashboard shows as a transcript beside the player.
 
+A project in chapters is built a chapter at a time: each chapter is a project of its own in `chapters/<id>/`, built as above with its own cache, and the chapters are then joined in order into one MP4 with chapter markers (players such as QuickTime and VLC list them), captions and `<name>.words.json` across every chapter (each block names its chapter), and `<name>.chapters.vtt` with the chapters' start times. With `"title_cards": true`, a three-second card rendered from `cards.py` ("Chapter 2", then its title) comes before each chapter, kept in `build/cards/` until its text or the quality changes.
+
 The Narrated Proofs dashboard can run builds too: on its **Lessons** tab open **Narrated video** under the lesson form, pick a project and a quality, and the finished video lands in the library with its captions. Builds share the dashboard's queue, so audio jobs wait while one runs.
 
 Use `--no-narrate` to reuse the manifest as it is. `$KOKORO_PYTHON` and `$MANIMGL` override where the two environments are.
@@ -118,6 +120,28 @@ A project the dashboard's lesson writer made also has `brief.json` (the topic an
 ```json
 { "voice": "af_heart", "speed": 1.0, "script": "script.txt", "scenes_file": "scenes.py", "scenes": ["Slope", "SyncCheck"] }
 ```
+
+### A lesson in chapters
+
+A long lesson's `project.json` lists its chapters instead of scenes, and each chapter folder is a project like the one above:
+
+```json
+{ "title": "Backpropagation", "voice": "af_heart", "speed": 1.0, "scenes": [],
+  "chapters": ["01-one-neuron", "02-chain"],
+  "chapter_titles": { "01-one-neuron": "One neuron", "02-chain": "The chain rule" },
+  "title_cards": true }
+```
+
+```
+projects/backprop-1/
+  project.json   the chapters in order, their titles, and whether each gets a title card
+  outline.json   the outline the chapters were written from (lessons only)
+  chapters/01-one-neuron/   project.json, script.txt, scenes.py, build/
+  chapters/02-chain/        the same
+  build/         the joined video, captions, transcript and chapters
+```
+
+`check.py` checks one chapter at a time: `python3 check.py projects/backprop-1/chapters/02-chain`.
 
 ### Writing a script
 

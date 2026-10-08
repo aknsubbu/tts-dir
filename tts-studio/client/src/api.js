@@ -45,18 +45,23 @@ export const api = {
   buildVideo: (body) => req('/videos', { method: 'POST', body }),
   createLesson: (body) => req('/lessons', { method: 'POST', body }),
   approve: (id, body = {}) => req(`/generations/${id}/approve`, { method: 'POST', body: { action: 'render', ...body } }),
-  storyboard: (id, version) => req(`/generations/${id}/storyboard${query({ version })}`),
+  storyboard: (id, version, chapter) => req(`/generations/${id}/storyboard${query({ version, chapter })}`),
   versions: (id) => req(`/generations/${id}/versions`),
   // Editing a lesson: its working copy, a save checked at once, a full check, a render, and versions.
-  source: (id) => req(`/generations/${id}/source`),
+  // A lesson in chapters is edited a chapter at a time: `chapter` names it.
+  source: (id, chapter) => req(`/generations/${id}/source${query({ chapter })}`),
   saveSource: (id, body) => req(`/generations/${id}/source`, { method: 'PUT', body }),
-  checkEdit: (id) => req(`/generations/${id}/check`, { method: 'POST' }),
-  buildEdit: (id, quality) => req(`/generations/${id}/build`, { method: 'POST', body: { quality } }),
+  checkEdit: (id, chapter) => req(`/generations/${id}/check`, { method: 'POST', body: { chapter } }),
+  buildEdit: (id, quality, chapter) => req(`/generations/${id}/build`, { method: 'POST', body: { quality, chapter } }),
   discard: (id) => req(`/generations/${id}/discard`, { method: 'POST' }),
   restore: (id, version) => req(`/generations/${id}/restore`, { method: 'POST', body: { version } }),
-  versionSource: (id, n) => req(`/generations/${id}/versions/${n}/source`),
+  versionSource: (id, n, chapter) => req(`/generations/${id}/versions/${n}/source${query({ chapter })}`),
   transcript: (id) => req(`/generations/${id}/transcript`),
   revise: (id, body) => req(`/generations/${id}/revise`, { method: 'POST', body }),
+  // A long lesson's outline: read, changed while it waits, redone on request.
+  outline: (id) => req(`/generations/${id}/outline`),
+  saveOutline: (id, outline) => req(`/generations/${id}/outline`, { method: 'PUT', body: { outline } }),
+  redoOutline: (id, request) => req(`/generations/${id}/outline/redo`, { method: 'POST', body: { request } }),
   // Settings: who writes lessons, defaults, Claude's limits, costs. Keys go in and never come back.
   settings: () => req('/settings'),
   patchSettings: (body) => req('/settings', { method: 'PATCH', body }),

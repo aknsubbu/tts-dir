@@ -59,7 +59,7 @@ export function ScenesDiff({ a, b }) {
  * built; any two compared (narration word by word, scenes line by line); and Restore, which makes
  * an earlier version the next one, at once when its render is still kept.
  */
-export default function History({ g, toast }) {
+export default function History({ g, chapter = null, toast }) {
   const [list, setList] = useState(null);
   const [pair, setPair] = useState(null); // [older, newer]
   const [files, setFiles] = useState({});
@@ -78,13 +78,15 @@ export default function History({ g, toast }) {
     };
   }, [g.id, g.version, g.builtVersion, g.status]);
 
+  // Each version's files, one chapter's for a lesson in chapters.
+  const keyOf = (n) => `${n}:${chapter || ''}`;
   useEffect(() => {
     if (!pair) return;
     for (const n of pair) {
-      if (files[n]) continue;
-      api.versionSource(g.id, n).then((s) => setFiles((f) => ({ ...f, [n]: s }))).catch(() => {});
+      if (files[keyOf(n)]) continue;
+      api.versionSource(g.id, n, chapter || undefined).then((s) => setFiles((f) => ({ ...f, [keyOf(n)]: s }))).catch(() => {});
     }
-  }, [pair, g.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pair, g.id, chapter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const restore = async (n) => {
     if (!window.confirm(`Make v${n} the lesson again? It becomes v${(list.current || 0) + 1}; nothing is deleted.`)) return;
@@ -99,8 +101,9 @@ export default function History({ g, toast }) {
   if (!list) return <p className="hint">Loading…</p>;
   if (!list.versions.length) return <p className="status-box">No versions yet. The first appears once the lesson is written.</p>;
   const [a, b] = pair || [];
-  const A = files[a];
-  const B = files[b];
+  const A = files[keyOf(a)];
+  const B = files[keyOf(b)];
+  const titleOf = (id) => g.settings?.lesson?.chapters?.find((c) => c.id === id)?.title || id;
   const options = list.versions.map((v) => <option key={v.n} value={v.n}>v{v.n} · {SOURCE[v.source] || v.source}</option>);
 
   return (
@@ -121,6 +124,7 @@ export default function History({ g, toast }) {
               <div className="revision-note">
                 <q>{v.details.request}</q>
                 {v.details.summary && <span> {v.details.summary}.</span>}
+                {v.details.chapter && <span className="hint"> In chapter “{titleOf(v.details.chapter)}”.</span>}
                 {v.details.scope && v.details.scope.kind !== 'lesson' && <span className="hint"> Asked about {v.details.scope.kind === 'scene' ? `scene ${v.details.scope.name}` : `block [${v.details.scope.id}]`}.</span>}
                 {v.details.outsideScope?.length > 0 && <span className="hint warn"> Also changed outside it: {v.details.outsideScope.join(', ')}.</span>}
               </div>
@@ -140,12 +144,14 @@ export default function History({ g, toast }) {
       {pair && (
         <section className="block compare">
           <div className="row wrap">
-            <h4>Compare</h4>
+            <h4>Compare{chapter ? ` chapter “${titleOf(chapter)}”` : ''}</h4>
             <select className="input" aria-label="Older version" value={a} onChange={(e) => setPair([Number(e.target.value), b])}>{options}</select>
             <span>with</span>
             <select className="input" aria-label="Newer version" value={b} onChange={(e) => setPair([a, Number(e.target.value)])}>{options}</select>
           </div>
-          {!A || !B ? <p className="hint">Loading…</p> : (
+          {!A || !B ? <p className="hint">Loading…</p> : chapter && (A.chapter !== chapter || B.chapter !== chapter) ? (
+            <p className="hint">v{A.chapter !== chapter ? a : b} has no chapter “{titleOf(chapter)}”.</p>
+          ) : (
             <>
               {(A.voice !== B.voice || A.speed !== B.speed) && (
                 <p className="hint">{A.voice !== B.voice ? `Voice: ${A.voice} → ${B.voice}. ` : ''}{A.speed !== B.speed ? `Speed: ${A.speed}× → ${B.speed}×.` : ''}</p>

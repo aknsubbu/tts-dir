@@ -3,7 +3,8 @@ import path from 'node:path';
 import { countWords } from './text.js';
 import { readProject } from './video.js';
 import { VIDEO_QUALITIES } from '../shared/limits.js';
-import { filesIn, hashOf } from './edits.js';
+import { filesIn, hashOf, readProjectText } from './edits.js';
+import { chapterDir } from './versions.js';
 
 /**
  * Follows lessons through the lesson writer (author/), a separate small server.
@@ -39,14 +40,28 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
     store.update(id, { status: 'error', error: message, stage: null, finished_at: Date.now() });
   }
 
-  /** True once the project's scenes are written and passed their check, so a retry only needs to build it. */
+  /**
+   * True once the project's scenes (every chapter's, for a long lesson) are written and passed
+   * their check, so a retry only needs to build it. An outline or a narration alone is not.
+   */
   function isWritten(project) {
     const root = path.join(getConfig().videoDir, 'projects', project);
-    return fs.existsSync(path.join(root, 'author.json')) && fs.existsSync(path.join(root, 'scenes.py'));
+    try {
+      const done = JSON.parse(fs.readFileSync(path.join(root, 'author.json'), 'utf8'));
+      return !['outline', 'script'].includes(done.phase);
+    } catch {
+      return false;
+    }
   }
 
-  /** For a lesson whose narration is approved first: the narration now, or the scenes once it is approved. */
-  const phaseOf = (lesson) => (lesson?.review === 'script' ? (lesson.scriptApproved ? 'scenes' : 'script') : undefined);
+  /**
+   * What the writer does next: for a long lesson, its outline (when the person reviews it) and then
+   * its chapters; for a narration approved first, the narration and then the scenes.
+   */
+  const phaseOf = (lesson) => {
+    if (lesson?.chaptered) return lesson.outlineReview && !lesson.outlineApproved ? 'outline' : undefined;
+    return lesson?.review === 'script' ? (lesson.scriptApproved ? 'scenes' : 'script') : undefined;
+  };
 
   /**
    * Who writes each step, and what the lesson may still spend, from Settings as they are now.
@@ -70,7 +85,7 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
    * Hand a lesson to the writer and start following it. `brief` is { topic, goal, notes,
    * minutes, voice, visualReview }; leave it out to retry with the brief saved in the project.
    */
-  async function start(id, brief) {
+  async function start(id, brief, extra = {}) {
     const row = store.getRaw(id);
     const { project, lesson } = JSON.parse(row.settings_json);
     store.update(id, {
@@ -86,7 +101,7 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
     let job;
     try {
       const phase = phaseOf(lesson);
-      ({ job } = await call('POST', '/lessons', { project, ...brief, ...plan, ...(phase ? { phase } : {}) }));
+      ({ job } = await call('POST', '/lessons', { project, ...brief, ...plan, ...(phase ? { phase } : {}), ...extra }));
     } catch (e) {
       return fail(id, e.cause ? unreachable() : e.message); // fetch sets .cause when it could not connect
     }
@@ -147,6 +162,23 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
     const settings = JSON.parse(row.settings_json);
     const project = readProject(getConfig().videoDir, settings.project);
     const script = project?.script || result.script || row.text;
+    if (result.phase === 'outline') {
+      // A long lesson waits for its outline to be looked over before any chapter is written.
+      const o = result.outline;
+      const minutes = o.chapters.reduce((t, c) => t + c.minutes, 0);
+      settings.lesson = {
+        ...settings.lesson,
+        phase: 'outline',
+        outlineCostUsd: Math.round(((settings.lesson.outlineCostUsd || 0) + (result.costUsd || 0)) * 1000) / 1000,
+        chapters: o.chapters.map(({ id, title, minutes: m }) => ({ id, title, minutes: m })),
+      };
+      return store.update(id, {
+        ...(settings.lesson.ownTitle ? {} : { title: String(o.title || row.title).slice(0, 120) }),
+        settings_json: JSON.stringify(settings),
+        status: 'awaiting',
+        stage: `Outline ready: ${o.chapters.length} chapters, about ${minutes} minutes`,
+      });
+    }
     // The totals stay on the row; each request's figures are in the version and in author.json.
     const usage = result.usage ? { ...result.usage } : null;
     if (usage) delete usage.requests;
@@ -163,8 +195,9 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
         stage: 'Narration ready: have a look',
       });
     }
-    // A narration approved first cost something too.
-    const costUsd = result.costUsd == null ? null : Math.round((result.costUsd + (settings.lesson.scriptCostUsd || 0)) * 1000) / 1000;
+    // A narration approved first, or an outline, cost something too.
+    const before = (settings.lesson.scriptCostUsd || 0) + (settings.lesson.outlineCostUsd || 0);
+    const costUsd = result.costUsd == null ? null : Math.round((result.costUsd + before) * 1000) / 1000;
     Object.assign(settings, {
       scenes: result.scenes,
       lesson: {
@@ -176,6 +209,7 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
         costUsd,
         usage,
         phase: null,
+        ...(result.chapters ? { chapters: result.chapters } : {}),
         ...(result.writtenBy ? { writtenBy: [...(settings.lesson.writtenBy || []).filter((w) => w.step === 'write' && settings.lesson.phase === 'script'), ...result.writtenBy] } : {}),
       },
     });
@@ -209,50 +243,51 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
    * version and builds it. Either way the lesson goes back to where it was while it is checked,
    * so a built lesson keeps playing its video.
    */
-  async function checkEdit(id, { then = null, quality = null } = {}) {
+  async function checkEdit(id, { then = null, quality = null, chapter = null } = {}) {
     const row = store.getRaw(id);
     const { project } = JSON.parse(row.settings_json);
     const prior = { status: row.status, stage: row.stage, error: row.error, finished_at: row.finished_at };
     store.update(id, { status: 'processing', stage: then === 'build' ? 'Checking your changes before rendering' : 'Checking your changes', error: null, progress_done: 0, progress_total: 0 });
     let job;
     try {
-      ({ job } = await call('POST', '/lessons', { project, kind: 'check' }));
+      ({ job } = await call('POST', '/lessons', { project, kind: 'check', ...(chapter ? { chapter } : {}) }));
     } catch (e) {
       store.update(id, prior);
       throw Object.assign(new Error(e.cause ? unreachable() : e.message), { status: 503 });
     }
-    watching.set(id, { jobId: job.id, misses: 0, kind: 'check', prior, then, quality });
+    watching.set(id, { jobId: job.id, misses: 0, kind: 'check', prior, then, quality, chapter });
     schedule(id);
   }
 
-  function saveCheck(id, report, summary) {
+  function saveCheck(id, report, summary, chapter = null) {
     const row = store.getRaw(id);
     if (!row) return null;
     const settings = JSON.parse(row.settings_json);
-    const root = path.join(getConfig().videoDir, 'projects', settings.project);
+    const lessonRoot = path.join(getConfig().videoDir, 'projects', settings.project);
+    const root = chapterDir(lessonRoot, chapter);
     if (report) {
       fs.mkdirSync(path.join(root, 'build', 'check'), { recursive: true });
       fs.writeFileSync(path.join(root, 'build', 'check', 'report.json'), JSON.stringify({ ...report, at: Date.now() }));
-      if (report.scenes?.length) settings.scenes = report.scenes;
+      if (report.scenes?.length && !chapter) settings.scenes = report.scenes;
     }
-    settings.edit = { checkedAt: Date.now(), ...summary };
-    return { settings, root };
+    settings.edit = { checkedAt: Date.now(), ...summary, ...(chapter ? { chapter } : {}) };
+    return { settings, root, lessonRoot };
   }
 
   /** The check finished: keep its report, then build the edit as the next version or go back to where it was. */
   function finishCheck(id, report, watch) {
     watching.delete(id);
-    const saved = saveCheck(id, report, { ok: !!report.ok, errors: report.errors?.length || 0, warnings: report.warnings?.length || 0 });
+    const saved = saveCheck(id, report, { ok: !!report.ok, errors: report.errors?.length || 0, warnings: report.warnings?.length || 0 }, watch.chapter);
     if (!saved) return;
-    const { settings, root } = saved;
+    const { settings, root, lessonRoot } = saved;
     if (watch.then === 'build' && report.ok) {
-      const script = readProject(getConfig().videoDir, settings.project)?.script || fs.readFileSync(path.join(root, 'script.txt'), 'utf8');
+      const script = readProject(getConfig().videoDir, settings.project)?.script || readProjectText(lessonRoot);
       if (VIDEO_QUALITIES.includes(watch.quality)) settings.quality = watch.quality;
       store.update(id, { settings_json: JSON.stringify(settings), text: script, char_count: script.length, word_count: countWords(script) });
       try {
         // Files the same as the current version (one whose build failed, say) build that version again.
         const row = store.getRaw(id);
-        const current = row.version ? path.join(root, 'versions', String(row.version).padStart(3, '0')) : null;
+        const current = row.version ? chapterDir(path.join(lessonRoot, 'versions', String(row.version).padStart(3, '0')), watch.chapter) : null;
         const same = current && fs.existsSync(current) && hashOf(filesIn(current)) === hashOf(filesIn(root));
         if (!same) versions?.snapshot(id, { source: 'edited', note: 'Edited in the dashboard', check: { ok: true, warnings: report.warnings?.length || 0 } });
       } catch (e) {
@@ -266,7 +301,7 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
 
   function endCheck(id, watch, failure) {
     watching.delete(id);
-    const saved = failure ? saveCheck(id, null, failure) : null;
+    const saved = failure ? saveCheck(id, null, failure, watch.chapter) : null;
     store.update(id, { ...(saved ? { settings_json: JSON.stringify(saved.settings) } : {}), ...watch.prior });
   }
 
@@ -275,7 +310,7 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
    * review }. The lesson keeps playing its built video meanwhile; a revision that fails or is
    * cancelled leaves the files as the current version has them.
    */
-  async function revise(id, { request, scope, attachments = [], history = [], review = 'render' }) {
+  async function revise(id, { request, scope, chapter = null, attachments = [], history = [], review = 'render' }) {
     const row = store.getRaw(id);
     const settings = JSON.parse(row.settings_json);
     const prior = { status: row.status, stage: row.stage, error: row.error, finished_at: row.finished_at };
@@ -283,12 +318,12 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
     let job;
     try {
       const plan = await writerFor(settings.lesson);
-      ({ job } = await call('POST', '/lessons', { project: settings.project, kind: 'revise', request, scope, attachments, history, ...plan }));
+      ({ job } = await call('POST', '/lessons', { project: settings.project, kind: 'revise', request, scope, attachments, history, ...(chapter ? { chapter } : {}), ...plan }));
     } catch (e) {
       store.update(id, prior);
       throw Object.assign(new Error(e.cause ? unreachable() : e.message), { status: e.cause ? 503 : 400 });
     }
-    watching.set(id, { jobId: job.id, misses: 0, kind: 'revise', prior, review, request, scope });
+    watching.set(id, { jobId: job.id, misses: 0, kind: 'revise', prior, review, request, scope, chapter });
     schedule(id);
   }
 
@@ -302,7 +337,7 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
     const script = project?.script || row.text;
     const usage = result.usage ? { ...result.usage } : null;
     if (usage) delete usage.requests;
-    settings.scenes = result.scenes || settings.scenes;
+    if (!watch.chapter) settings.scenes = result.scenes || settings.scenes;
     settings.lastRevision = { request: watch.request, summary: result.summary || '', at: Date.now(), ok: true };
     store.update(id, { text: script, char_count: script.length, word_count: countWords(script), settings_json: JSON.stringify(settings) });
     try {
@@ -316,6 +351,7 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
           request: watch.request,
           summary: result.summary || '',
           scope: result.scope || watch.scope || { kind: 'lesson' },
+          ...(watch.chapter ? { chapter: watch.chapter } : {}),
           changed: result.changed || {},
           outsideScope: result.outsideScope || [],
           fixes: result.fixes || 0,

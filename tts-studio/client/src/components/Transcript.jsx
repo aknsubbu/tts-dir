@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
+import { fmtDuration } from '../utils.js';
 
 /** The index of the word being spoken at `t`: the last one started at or before it, or -1. */
 export function wordAt(words, t) {
@@ -19,6 +20,7 @@ export function wordAt(words, t) {
 /**
  * The narration beside the player, with the word being spoken marked. Click a word to jump
  * there. The times come from the build's word timings, so they match the video exactly.
+ * A lesson in chapters lists them first, and heads each chapter's narration with its title.
  */
 export default function Transcript({ id, builtVersion, videoRef }) {
   const [data, setData] = useState(null);
@@ -71,18 +73,38 @@ export default function Transcript({ id, builtVersion, videoRef }) {
   }, [current?.[3]]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (data === false || !data?.blocks?.length) return null;
+  const chapters = data.chapters || [];
+  const titles = Object.fromEntries(chapters.map((c, i) => [c.id, `${i + 1}. ${c.title}`]));
+  const inChapter = current ? data.blocks[current[3]]?.chapter : null;
   const seek = (t) => {
     const video = videoRef.current;
     if (!video) return;
     video.currentTime = t + 0.01;
-    video.play?.().catch(() => {});
+    Promise.resolve(video.play?.()).catch(() => {});
   };
   return (
     <section className="block transcript-block">
+      {chapters.length > 0 && (
+        <nav aria-label="Chapters">
+          <h4>Chapters</h4>
+          <ol className="chapter-list">
+            {chapters.map((c) => (
+              <li key={c.id}>
+                <button type="button" className={`link ${inChapter === c.id ? 'now' : ''}`} aria-current={inChapter === c.id ? 'true' : undefined} onClick={() => seek(c.start)}>
+                  <span>{c.title}</span>
+                  <span className="hint tabular">{fmtDuration(c.start)}</span>
+                </button>
+              </li>
+            ))}
+          </ol>
+        </nav>
+      )}
       <h4>Transcript</h4>
       <div className="transcript" ref={box} aria-label="Transcript: click a word to jump to it">
         {data.blocks.map((b, bi) => (
-          <p key={b.id} className={current && current[3] === bi ? 'on' : ''}>
+          <Fragment key={`${b.chapter || ''}/${b.id}`}>
+          {b.chapter && b.chapter !== data.blocks[bi - 1]?.chapter && <h5 className="transcript-chapter">{titles[b.chapter] || b.chapter}</h5>}
+          <p className={current && current[3] === bi ? 'on' : ''}>
             {b.words.length
               ? b.words.map((w, wi) => (
                   <span key={wi}>
@@ -91,6 +113,7 @@ export default function Transcript({ id, builtVersion, videoRef }) {
                 ))
               : <button type="button" className="word" onClick={() => seek(b.start)}>{b.text}</button>}
           </p>
+          </Fragment>
         ))}
       </div>
     </section>

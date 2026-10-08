@@ -49,6 +49,7 @@ export function VideoPlayer({ g, autoplay, videoRef }) {
     <div className="player">
       <video ref={videoRef} key={g.videoUrl} src={g.videoUrl} controls preload="metadata" autoPlay={autoplay} playsInline>
         <track kind="captions" src={`/api/generations/${g.id}/captions.vtt`} srcLang="en" label="Captions" default />
+        {g.settings?.lesson?.chaptered && <track kind="chapters" src={`/api/generations/${g.id}/chapters.vtt`} srcLang="en" label="Chapters" />}
       </video>
     </div>
   );

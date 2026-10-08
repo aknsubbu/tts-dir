@@ -52,7 +52,7 @@ export function createAuthorApp({ getConfig, author = createAuthor({ getConfig }
     const work = job.kind === 'check' ? author.check(job.input, options) : job.kind === 'revise' ? author.revise(job.input, options) : author.write(job.input, options);
     work
       .then(
-        (result) => Object.assign(job, { status: 'done', stage: job.kind === 'check' ? 'Checked' : result?.phase === 'script' ? 'Narration ready' : 'Ready to build', result }),
+        (result) => Object.assign(job, { status: 'done', stage: job.kind === 'check' ? 'Checked' : { script: 'Narration ready', outline: 'Outline ready' }[result?.phase] || 'Ready to build', result }),
         (e) => Object.assign(job, e.code === 'aborted' ? { status: 'cancelled', stage: 'Cancelled' } : { status: 'error', stage: 'Failed', error: e.message }),
       )
       .finally(() => {
@@ -100,8 +100,10 @@ export function createAuthorApp({ getConfig, author = createAuthor({ getConfig }
         writer: b.writer,
         capUsd: b.capUsd,
         phase: b.phase,
+        chapter: b.chapter,
+        redo: b.redo ? String(b.redo).slice(0, 2000) : undefined,
         ...(kind === 'revise' ? { request: String(b.request).slice(0, 4000), scope: b.scope, history: b.history, attachments: b.attachments } : {}),
-        ...(resume ? {} : { topic: b.topic, goal: b.goal, notes: b.notes, minutes: b.minutes, voice: b.voice, attachments: b.attachments, visualReview: b.visualReview }),
+        ...(resume ? {} : { topic: b.topic, goal: b.goal, notes: b.notes, minutes: b.minutes, voice: b.voice, attachments: b.attachments, visualReview: b.visualReview, titleCards: b.titleCards }),
       },
     };
     jobs.set(job.id, job);

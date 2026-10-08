@@ -147,3 +147,62 @@ export function scenesPrompt({ topic, goal, notes, script }) {
     script,
   });
 }
+
+/** The outline of a lesson in chapters. `redo` is a request to change an earlier outline. */
+export function outlinePrompt({ topic, goal, notes, minutes, attachments, redo = null, previous = null, maxChapters = 8 }) {
+  return fill(read('outline.md'), {
+    topic,
+    goal: goal || 'A clear understanding of the topic.',
+    notes: notes || (attachments?.length ? '(nothing typed; see the attached files)' : '(none given)'),
+    attachments: attachmentNote(attachments),
+    redo: redo
+      ? `An earlier outline is below, and the person asked for it to be redone: “${redo}”. Do what they ask and keep what they did not mention.\n\n\`\`\`json\n${JSON.stringify(previous, null, 2)}\n\`\`\``
+      : '',
+    minutes,
+    chapters_min: Math.max(2, Math.round(minutes / 5)),
+    chapters_max: Math.min(maxChapters, Math.max(3, Math.round(minutes / 2.5))),
+  });
+}
+
+/** An outline as the chapter prompts show it: titles, goals and the notation, without the quotes from the notes. */
+function outlineText(outline) {
+  return [
+    `${outline.title}: ${outline.through_line}`,
+    '',
+    ...outline.chapters.map((c, i) => `${i + 1}. ${c.title} (${c.minutes} min): ${c.goal}`),
+    '',
+    `Notation: ${outline.notation.map((n) => `${n.tex} = ${n.meaning}`).join('; ') || 'none'}`,
+  ].join('\n');
+}
+
+/** One chapter of a lesson in chapters. */
+export function chapterPrompt({ brief, outline, index, colors, previous = null, attachments = [] }) {
+  const c = outline.chapters[index];
+  const next = outline.chapters[index + 1];
+  const words = c.minutes * WORDS_PER_MINUTE;
+  return fill(read('chapter.md'), {
+    number: index + 1,
+    count: outline.chapters.length,
+    topic: brief.topic,
+    goal: brief.goal || outline.through_line,
+    outline: outlineText(outline),
+    title: c.title,
+    chapter_goal: c.goal,
+    covers: c.covers.join('; '),
+    starts_from: index === 0 ? 'nothing: this is the first chapter' : c.starts_from,
+    ends_with: next ? c.ends_with : 'the result of the whole video: this is the last chapter',
+    from_notes: c.from_notes || '(nothing in particular)',
+    attachments: attachmentNote(attachments),
+    previous: previous
+      ? `The chapter before, "${previous.title}", ends like this${previous.still ? ' (and the picture attached last shows its final frame)' : ''}. Pick up from here:\n\n\`\`\`\n${previous.script.trim().split('\n').slice(-12).join('\n')}\n\`\`\``
+      : '',
+    next: next ? `The next chapter is "${next.title}": end so that it can start from ${next.starts_from}.` : 'This is the last chapter: end on the result the whole video has been building to.',
+    colors,
+    minutes: minutesLabel(c.minutes),
+    words_min: Math.round((words * 0.85) / 10) * 10,
+    words_max: Math.round((words * 1.1) / 10) * 10,
+    blocks_min: Math.max(3, Math.round(words / 40)),
+    blocks_max: Math.max(4, Math.round(words / 25)),
+    voice: brief.voice,
+  });
+}

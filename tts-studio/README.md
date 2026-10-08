@@ -62,9 +62,9 @@ The **Lessons** tab makes a narrated, animated explainer from a topic and your n
 
 1. Type a **topic** and what you want to understand.
 2. Add your **notes**: type or paste them, drop files anywhere on the page, or paste a screenshot. Notes are optional, but with them the video uses your notation and your examples.
-3. Pick a length, a quality and an English voice. Under **Before it renders**, choose **Render right away**, or **Show me the storyboard** to look the lesson over first. Then press **Make the video**.
+3. Pick a length (1 to 30 minutes), a quality and an English voice. Under **Before it renders**, choose **Render right away**, or **Show me the storyboard** to look the lesson over first. Then press **Make the video**.
 
-The card in the library shows each stage. Click it to open the lesson's workspace, a full-width page with five tabs, each with its own address (`#lesson/<id>/watch`, `/storyboard`, `/edit`, `/history`, `/notes`):
+The card in the library shows each stage. Click it to open the lesson's workspace, a full-width page with five tabs, each with its own address (`#lesson/<id>/watch`, `/storyboard`, `/edit`, `/history`, `/notes`), and a sixth, **Outline**, for a lesson in chapters:
 
 - **Watch**: the video with captions, or what is happening to it. Below it, what writing the lesson took: who wrote each step, the cost, the tokens read (and how many came from the cache) and written, how many fixes the writer made and how many common mistakes were fixed without it.
 - **Storyboard**: every narration block, scene by scene, with a still of the screen at each marked word and at the end of the block, its narration with the marks shown, any timing or layout problem, and a button to hear it. **Play as animatic** plays the narration block after block and changes the picture on the marked words, so a lesson can be judged before it is rendered. The stills come from the check, which skips animations, so each shows where things end up, not how they move.
@@ -75,6 +75,8 @@ The card in the library shows each stage. Click it to open the lesson's workspac
 **Ask for a change** sits at the bottom of every tab of a written lesson: "slow down the second scene", "use my notation for the loss". Narrow it to a scene or a block (or press **Change this…** on a storyboard card), or to the moment the video is paused at; attach notes, such as a photo of your notation; and tick **Show me the storyboard first** to look before it renders. The writer answers with only the blocks and scene classes it changes, which `../video/splice.py` puts in place, so unchanged narration is reused as recorded and unchanged scenes are not rendered again: a small change takes minutes. The result is checked and fixed like a new lesson, becomes the next version with the request, the writer's one-line summary, its cost and anything it changed outside the part you picked, and renders while the old video plays. A revision that fails, or is cancelled, leaves the lesson and its files as they were. Each request is sent with the last three requests and their summaries, so "undo that" makes sense.
 
 **Show me the narration first** (in the form's **Before it renders**) stops after the narration is written. Read it on the Watch tab, change it in the Edit tab if you like, then **Approve the narration** and the scenes are written for it. Animation code is paid for only once the direction is right.
+
+**Long lessons, in chapters.** A lesson of 10 minutes or more is written in chapters. First the writer reads your notes and writes an **outline**: the lesson's title and the thread through it, the notation every chapter shares (each symbol with its meaning and one colour, kept from the first chapter to the last), and the chapters in order, each with a length of 1 to 8 minutes, what you should understand by its end, what it covers, which of your attached files it uses, and how it picks up from the one before. With **Show me the outline before writing the chapters** ticked (the default), the lesson waits at its **Outline** tab: rename, resize, reorder, add or remove chapters, change a symbol's colour, then **Write the N chapters**; or say what to change and **Write it again**. Each chapter is then written on its own as a full lesson project in `chapters/<id>/`, checked, fixed and polished like a short lesson, with the outline's notation as one shared `COLORS` line and the end of the chapter before it (its narration, and its last frame for a writer that can see) so it picks up where that one stopped. While one chapter is checked, the next is already being written. The build joins the chapters into one MP4 with chapter markers, captions and a transcript across all of them, with a title card before each chapter unless you untick **A title card before each chapter**. In the workspace, **Storyboard**, **Edit** and **History** show one chapter at a time, picked above them; a change you ask for names its chapter (a paused moment finds its own), and a rebuild renders only what changed. Beside the video, the chapters are listed with their start times; click one to go there. A long lesson costs more per minute than a short one, since every chapter reads the guide again (from the cache after the first), so the form shows the estimate for the outline and the chapters, and warns when it could reach the cap per lesson in **Settings → Costs** ($15 unless you change it). At most 8 chapters (`TTS_MAX_CHAPTERS`).
 
 Beside the video, the **transcript** marks each word as it is spoken; click a word to jump there. It comes from the build's word timings, so lessons built before this release show none until they are built again.
 
@@ -106,6 +108,9 @@ A lesson takes up to 12 attached files and 20 MB in total, and 60,000 characters
 | Looking over the frames | The same, with the storyboard's stills, when you asked Claude to look over its own frames |
 | Storyboard ready: have a look | Waiting for you to approve it |
 | Narration ready: have a look | Waiting for you to read and approve the narration; the scenes come after |
+| Writing the outline (or Redoing the outline) | A long lesson: the writer plans its chapters and their shared notation |
+| Outline ready: 4 chapters, about 18 minutes | Waiting for you to look over the outline and approve it |
+| Writing chapter 2 of 4: The chain rule | Each chapter is written, then checked, fixed and polished, as a short lesson is |
 | Revising: … | The writer is making a change you asked for; then the check, as above |
 | Building 2/5 | Rendering each scene and joining them, as for any narrated video. A scene unchanged since an earlier build is reused |
 
@@ -127,6 +132,7 @@ A two-minute video takes roughly five to ten minutes from start to finish. Most 
 | `author/prompts/revise.md` | A change asked for after the lesson was made |
 | `author/prompts/edit-format.md` | How fixes, the polish and revisions answer: only what changes |
 | `author/prompts/read.md`, `scenes.md` | Writing out attached notes for another writer; the scenes for an approved narration |
+| `author/prompts/outline.md`, `chapter.md` | A long lesson's outline, and each of its chapters |
 | `author/prompts/example/` | The worked example shown to Claude. `npm test` checks it still passes |
 
 **Good to know**
@@ -186,11 +192,12 @@ For the desktop app, add the entry Settings shows to `~/Library/Application Supp
 
 | Tool | Does |
 | --- | --- |
-| `make_lesson` | Start a lesson: topic, goal, notes, file paths (with PDF pages or text only), length, quality, voice, title, tags, review (none, storyboard or narration), and optionally a set-up writer. Returns at once with its id, link and estimated cost |
-| `revise_lesson` | Ask for a change, narrowed to a scene, a block or a time in the video, with new note files; it becomes the next version |
-| `approve_lesson` | Continue a lesson waiting on its storyboard or its narration, when the person says so |
+| `make_lesson` | Start a lesson: topic, goal, notes, file paths (with PDF pages or text only), length (up to 30 minutes; from 10 in chapters), quality, voice, title, tags, review (none, storyboard or narration), whether a long lesson's outline waits for the person (`outline`) and has title cards, and optionally a set-up writer. Returns at once with its id, link and estimated cost |
+| `revise_lesson` | Ask for a change, narrowed to a scene, a block or a time in the video, with new note files; for a lesson in chapters, the chapter. It becomes the next version |
+| `approve_lesson` | Continue a lesson waiting on its storyboard, its narration or its outline, when the person says so; an outline can be sent back with their changes |
+| `redo_outline` | Have a long lesson's outline written again with a change the person asked for |
 | `wait_for_lesson` | Waits up to 50 seconds and returns as soon as the lesson's stage changes, with progress notifications while it waits. Claude calls it again until the lesson is done |
-| `lesson_status`, `search_lessons`, `get_lesson` | Where a lesson is; the library's search; its brief, script and scenes, and up to 12 storyboard stills as images |
+| `lesson_status`, `search_lessons`, `get_lesson` | Where a lesson is; the library's search; its brief, outline, script and scenes (one chapter's, for a lesson in chapters), and up to 12 storyboard stills as images |
 | `get_video` | The MP4's path, its captions and poster, its length and link, with the poster as an image |
 | `cancel_lesson`, `retry_lesson`, `list_voices` | As the buttons do; the English voices |
 | `get_settings`, `update_settings`, `test_writer` | Settings as Claude may see and change them (never keys); a provider's Test |
@@ -238,6 +245,7 @@ All optional. Put them in a `.env` in this folder or the one above it, or in the
 | `TTS_CLAUDE_READ_EFFORT` | `medium` | Effort for writing out attached notes, when another writer reads them |
 | `TTS_CLAUDE_OUTLINE_EFFORT` | `medium` | Effort for outlines of long lessons |
 | `TTS_AUTHOR_MAX_COST_USD` | Settings ($15) | What one lesson may cost before it stops |
+| `TTS_MAX_CHAPTERS` | `8` | Most chapters in a long lesson (up to 12) |
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GROQ_API_KEY` | none | Provider keys; they win over keys saved in Settings |
 | `TTS_KEYCHAIN` | `1` | `0` keeps keys in `data/secrets.json` instead of the macOS Keychain |
 | `NARRATED_PROOFS_URL` | `http://127.0.0.1:8787` | Where the stdio MCP connector and the bake-off find the dashboard |
@@ -296,17 +304,18 @@ Other useful routes:
 | `GET /api/generations/:id/notes/:file` | An image or PDF attached to a lesson |
 | `POST /api/videos` | Build a project in `../video/projects/`: `{ project, quality }` |
 | `POST /api/generations/:id/retry`, `/cancel` | Retry a failed or cancelled item, or stop a running one. Cancelling a lesson that waits at its storyboard means "don't render" |
-| `POST /api/generations/:id/approve` | Continue a lesson that waits for you: `{ action: "render", quality }` after its storyboard, `{ action: "scenes" }` after its narration |
-| `POST /api/generations/:id/revise` | Ask for a change: `{ request, scope, attachments, review }`, with `scope` `{ kind: "lesson" }`, `{ kind: "scene", name }`, `{ kind: "block", id }` or `{ kind: "time", at }` |
-| `GET /api/generations/:id/storyboard` | The storyboard: per scene and block, the narration, marks, stills and problems. `?version=n` for an earlier version's |
+| `POST /api/generations/:id/approve` | Continue a lesson that waits for you: `{ action: "render", quality }` after its storyboard, `{ action: "scenes" }` after its narration, `{ action: "chapters", outline }` after its outline (with your changes, if any) |
+| `GET /api/generations/:id/outline`, `PUT` the same, `POST …/outline/redo` | A long lesson's outline with which chapters are written; changed while it waits for you; written again with `{ request }` |
+| `POST /api/generations/:id/revise` | Ask for a change: `{ request, scope, attachments, review, chapter }`, with `scope` `{ kind: "lesson" }`, `{ kind: "scene", name }`, `{ kind: "block", id }` or `{ kind: "time", at }`. A lesson in chapters needs `chapter`, except for a time |
+| `GET /api/generations/:id/storyboard` | The storyboard: per scene and block, the narration, marks, stills and problems. `?version=n` for an earlier version's, `?chapter=<id>` for a chapter's |
 | `GET /api/generations/:id/storyboard/:file`, `/narration/:block` | A still the storyboard lists, and a block's narration as a WAV |
 | `GET /api/generations/:id/versions` | A lesson's versions: what made each, what it cost, whether it was built |
 | `GET /api/events` | Every change to the library as it happens, as Server-Sent Events |
-| `GET /api/generations/:id/source` | A lesson's working copy (script, scenes, voice, speed), its `hash`, the version, whether it is a `draft`, and the last checks' reports |
+| `GET /api/generations/:id/source` | A lesson's working copy (script, scenes, voice, speed), its `hash`, the version, whether it is a `draft`, and the last checks' reports. `?chapter=<id>` for a chapter's; the source, check, build and version routes all take a chapter the same way |
 | `PUT /api/generations/:id/source` | Save `{ base, script, scenes, voice, speed }` and run the quick check: `{ hash, report }`. 409 when `base` is stale (with the `current` files) or the lesson is busy |
 | `POST /api/generations/:id/check`, `/build`, `/discard` | The full check; the check then a render of the next version (`{ quality }`); the working copy back to the current version |
 | `POST /api/generations/:id/restore` | `{ version }` becomes the next version, at once when its render is kept |
-| `GET /api/generations/:id/versions/:n/source`, `/transcript` | A version's files; the built video's words with their times |
+| `GET /api/generations/:id/versions/:n/source`, `/transcript`, `/chapters.vtt` | A version's files; the built video's words with their times (and its chapters); a long lesson's chapters as WebVTT |
 | `GET /api/generations/:id/files` | Where a lesson's video, captions, poster and project are on disk |
 | `GET /api/settings`, `PATCH /api/settings`, `POST /api/settings/undo` | Settings (never keys), a change as `{ "lesson.defaults": { "quality": "medium" } }`, and Undo |
 | `PUT /api/providers/:id`, `PUT /api/providers/:id/key`, `POST /api/providers/:id/test` | A provider's address (`new` adds one), its key (write-only), and its Test |

@@ -153,6 +153,24 @@ describe('the lesson form', () => {
     expect(toast).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringMatching(/^This Mac: Ollama is writing/) }));
   });
 
+  it('writes a long lesson in chapters, after an outline you can review', async () => {
+    api.estimate.mockResolvedValue({ ...ESTIMATE, lowUsd: 3.6, highUsd: 16.2, chapters: 5 });
+    show({ studio: { ...STUDIO, values: { ...STUDIO.values, costs: { lessonCapUsd: 15 } } } });
+    fireEvent.change(screen.getByLabelText('Topic'), { target: { value: 'Backpropagation' } });
+    expect(screen.getByLabelText('Show me the narration first')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('Show me the narration first'));
+    fireEvent.change(screen.getByLabelText('Length'), { target: { value: '20' } });
+    expect(screen.queryByLabelText('Show me the narration first')).toBeNull(); // the outline is reviewed instead
+    expect(screen.getByLabelText(/Show me the outline before writing the chapters/).checked).toBe(true);
+    await waitFor(() => expect(screen.getByText(/for an outline and about 5 chapters/)).toBeTruthy());
+    expect(screen.getByText(/could reach the cap of \$15\.00 a lesson/)).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('A title card before each chapter'));
+    fireEvent.click(make());
+    await waitFor(() => expect(onQueued).toHaveBeenCalled());
+    expect(api.createLesson).toHaveBeenCalledWith(expect.objectContaining({ minutes: 20, review: 'render', outlineReview: true, titleCards: false }));
+    expect(toast).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringMatching(/waits for you once the outline is written/) }));
+  });
+
   it('will not start when the chosen writer is not ready', async () => {
     api.estimate.mockResolvedValue({ ...ESTIMATE, problem: 'Groq, chosen for “Writing the lesson”, has no key.' });
     show({ studio: STUDIO });

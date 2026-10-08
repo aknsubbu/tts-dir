@@ -39,7 +39,7 @@ describe('the storyboard', () => {
     expect(screen.getByText(/NameError: name 'MathTex'/)).toBeTruthy();
     expect(screen.getByText(/No scene plays \[spare\]/)).toBeTruthy();
     expect(screen.getByText(/3 blocks · 2 scenes · 3 stills · 1 warning/)).toBeTruthy();
-    expect(api.storyboard).toHaveBeenCalledWith('g1', undefined);
+    expect(api.storyboard).toHaveBeenCalledWith('g1', undefined, undefined);
   });
 
   it('says plainly when there is no storyboard yet', async () => {
@@ -59,6 +59,6 @@ describe('the storyboard', () => {
     render(<Storyboard id="g1" version={2} />);
     expect(await screen.findByText(/plays silently/)).toBeTruthy();
     expect(screen.getByRole('button', { name: /Play as animatic/ }).disabled).toBe(true);
-    expect(api.storyboard).toHaveBeenCalledWith('g1', 2);
+    expect(api.storyboard).toHaveBeenCalledWith('g1', 2, undefined);
   });
 });

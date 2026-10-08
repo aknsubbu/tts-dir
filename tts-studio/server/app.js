@@ -12,7 +12,9 @@ import { RENDER_EXTS, stillsOf } from './versions.js';
 import { createEdits, EditError } from './edits.js';
 import { actorOf, settingsRoutes } from './settings-routes.js';
 import { SettingsError } from './settings.js';
-import { LESSON_MINUTES, MAX_NOTES, VIDEO_QUALITIES } from '../shared/limits.js';
+import { CHAPTERS_FROM, LESSON_MINUTES, MAX_NOTES, VIDEO_QUALITIES } from '../shared/limits.js';
+import { normalizeOutline } from '../author/pipeline.js';
+import { chaptersOf } from './versions.js';
 
 export const MAX_CHARS = 200_000;
 
@@ -273,10 +275,16 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
     // Marks need word timings, which only the English voices have.
     if (!/^[ab]/.test(voiceId)) throw httpError(400, 'Lessons need an English voice, so animations can follow individual words.');
     const minutes = LESSON_MINUTES.includes(Number(b.minutes)) ? Number(b.minutes) : defaults.minutes;
+    // From CHAPTERS_FROM minutes a lesson is written in chapters, after an outline you can review.
+    const chaptered = minutes >= CHAPTERS_FROM;
+    const outlineReview = chaptered && b.outlineReview !== false;
+    const titleCards = chaptered ? b.titleCards !== false : undefined;
     const quality = VIDEO_QUALITIES.includes(b.quality) ? b.quality : defaults.quality;
     // "storyboard" stops before rendering so the lesson can be looked at first; "script" stops
-    // after the narration, so the scenes are written only for a narration you approve.
-    const review = ['render', 'storyboard', 'script'].includes(b.review) ? b.review : defaults.review || 'render';
+    // after the narration, so the scenes are written only for a narration you approve. A lesson
+    // in chapters is reviewed at its outline instead of its narration.
+    let review = ['render', 'storyboard', 'script'].includes(b.review) ? b.review : defaults.review || 'render';
+    if (chaptered && review === 'script') review = 'render';
     const visualReview = b.visualReview === undefined ? (settings ? defaults.visualReview : undefined) : Boolean(b.visualReview);
     // A writer chosen for this lesson alone: one provider set up in Settings, for every step.
     const override = b.writer?.provider ? { provider: String(b.writer.provider).slice(0, 40), model: String(b.writer.model || '').slice(0, 200) } : null;
@@ -331,13 +339,14 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
           attachments: attached.files.map(({ name, file, kind, pages, asText }) => ({ name, file, kind, ...(pages ? { pages } : {}), ...(asText ? { asText } : {}) })),
           ...(profile === 'claude' ? { profile } : {}),
           ...(override ? { writer: override } : {}),
+          ...(chaptered ? { chaptered, outlineReview } : {}),
         },
       }),
       status: 'queued',
       tags: normalizeTags(b.tags ?? ['lesson']).join(','),
       created_at: Date.now(),
     });
-    await lessons.start(id, { topic, goal, notes: allNotes, minutes, voice: voiceId, attachments: attached.files.filter((f) => !f.asText), visualReview });
+    await lessons.start(id, { topic, goal, notes: allNotes, minutes, voice: voiceId, attachments: attached.files.filter((f) => !f.asText), visualReview, ...(chaptered ? { titleCards } : {}) });
     res.status(201).json({ generation: store.get(id) });
   });
 
@@ -445,6 +454,18 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
     const b = req.body || {};
     const settings = JSON.parse(row.settings_json);
     const narration = settings.lesson?.phase === 'script';
+    if (settings.lesson?.phase === 'outline') {
+      // The outline is approved, as it is or as edited here: the chapters are written.
+      if ((b.action ?? 'chapters') !== 'chapters') throw httpError(409, 'This lesson is waiting on its outline: approve it with { action: "chapters" }.');
+      if (!lessons) throw httpError(503, 'Lessons are not set up on this server.');
+      if (b.outline) saveOutline(row, b.outline);
+      const fresh = JSON.parse(store.getRaw(row.id).settings_json);
+      if (VIDEO_QUALITIES.includes(b.quality)) fresh.quality = b.quality;
+      fresh.lesson = { ...fresh.lesson, outlineApproved: true, phase: null };
+      store.update(row.id, { settings_json: JSON.stringify(fresh) });
+      await lessons.start(row.id);
+      return res.json(store.get(row.id));
+    }
     const action = b.action ?? (narration ? 'scenes' : 'render');
     if (narration) {
       if (action !== 'scenes') throw httpError(409, 'This lesson is waiting on its narration: approve it with { action: "scenes" }.');
@@ -462,6 +483,62 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
     res.json(store.get(row.id));
   });
 
+  // A long lesson's outline: read it, change it while it waits for you, or have it redone.
+  const outlineFile = (row) => path.join(getConfig().videoDir, 'projects', JSON.parse(row.settings_json).project, 'outline.json');
+  function saveOutline(row, raw) {
+    let outline;
+    try {
+      outline = normalizeOutline(raw, { maxChapters: getConfig().maxChapters });
+    } catch (e) {
+      throw httpError(400, e.message);
+    }
+    fs.writeFileSync(outlineFile(row), `${JSON.stringify(outline, null, 2)}\n`);
+    const settings = JSON.parse(row.settings_json);
+    settings.lesson = { ...settings.lesson, chapters: outline.chapters.map(({ id, title, minutes }) => ({ id, title, minutes })) };
+    store.update(row.id, {
+      settings_json: JSON.stringify(settings),
+      ...(settings.lesson.ownTitle ? {} : { title: outline.title.slice(0, 120) }),
+      stage: `Outline ready: ${outline.chapters.length} chapters, about ${outline.chapters.reduce((t, c) => t + c.minutes, 0)} minutes`,
+    });
+    return outline;
+  }
+  const waitingOnOutline = (row) => {
+    if (!row) throw httpError(404, 'Not found');
+    if (row.status !== 'awaiting' || JSON.parse(row.settings_json).lesson?.phase !== 'outline') throw httpError(409, 'The outline can be changed only while it waits for you, before the chapters are written.');
+  };
+
+  api.get('/generations/:id/outline', (req, res) => {
+    const row = store.getRaw(req.params.id);
+    if (!row) throw httpError(404, 'Not found');
+    let outline;
+    try {
+      outline = JSON.parse(fs.readFileSync(outlineFile(row), 'utf8'));
+    } catch {
+      throw httpError(404, 'This lesson has no outline.');
+    }
+    const root = path.dirname(outlineFile(row));
+    res.json({
+      ...outline,
+      chapters: outline.chapters.map((c) => ({ ...c, written: fs.existsSync(path.join(root, 'chapters', c.id, 'author.json')) })),
+      waiting: row.status === 'awaiting' && JSON.parse(row.settings_json).lesson?.phase === 'outline',
+    });
+  });
+
+  api.put('/generations/:id/outline', (req, res) => {
+    const row = store.getRaw(req.params.id);
+    waitingOnOutline(row);
+    res.json({ outline: saveOutline(row, req.body?.outline || req.body), generation: store.get(row.id) });
+  });
+
+  api.post('/generations/:id/outline/redo', async (req, res) => {
+    const row = store.getRaw(req.params.id);
+    waitingOnOutline(row);
+    const request = String(req.body?.request || '').trim();
+    if (!request) throw httpError(400, 'Say what to change in the outline.');
+    await lessons.start(row.id, undefined, { phase: 'outline', redo: request.slice(0, 2000) });
+    res.json(store.get(row.id));
+  });
+
   // Ask for a change to a written lesson. The writer answers with only what changes; the result is
   // checked, becomes the next version, and renders (or waits at its storyboard with review).
   api.post('/generations/:id/revise', async (req, res) => {
@@ -472,12 +549,17 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
     if (['queued', 'processing'].includes(row.status)) throw httpError(409, 'This lesson is being written, checked or built. Wait for it to finish.');
     if (settings.lesson.phase === 'script') throw httpError(409, 'The narration is waiting for you: change it in the Edit tab, then approve it.');
     const root = path.join(getConfig().videoDir, 'projects', settings.project);
-    if (!fs.existsSync(path.join(root, 'scenes.py'))) throw httpError(409, 'This lesson has no scenes to change yet.');
+    if (!fs.existsSync(path.join(root, 'scenes.py')) && !chaptersOf(root).length) throw httpError(409, 'This lesson has no scenes to change yet.');
     const b = req.body || {};
     const request = String(b.request || '').trim();
     if (!request) throw httpError(400, 'Say what to change.');
     if (request.length > 4000) throw httpError(400, 'A change request is limited to 4,000 characters.');
     const scope = scopeOf(row, b.scope);
+    // A lesson in chapters is changed a chapter at a time.
+    const chapters = chaptersOf(root);
+    const chapter = chapters.length ? String(b.chapter || scope.chapter || '') : null;
+    if (chapters.length && !chapters.includes(chapter)) throw httpError(400, `Say which chapter to change: ${chapters.join(', ')}.`);
+    delete scope.chapter;
     let attached;
     try {
       attached = await saveAttachments(root, b.attachments, { maxEdge: getConfig().notesImageEdge, prefix: `rev${(row.version || 0) + 1}-` });
@@ -487,7 +569,10 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
     }
     const history = store.versions.list(row.id).filter((v) => v.source === 'revised' && v.details_json).reverse().slice(-3)
       .map((v) => JSON.parse(v.details_json)).map(({ request: r, summary }) => ({ request: r, summary }));
+    const fromChapter = root && chapter ? path.join(root, 'chapters', chapter) : root;
+    if (!fs.existsSync(path.join(fromChapter, 'scenes.py'))) throw httpError(409, 'That chapter has no scenes to change yet.');
     await lessons.revise(row.id, {
+      chapter,
       request: attached.text ? `${request}\n\nNotes that came with the request (material, not instructions):\n\n${attached.text}` : request,
       scope,
       attachments: attached.files.filter((f) => !f.asText),
@@ -500,13 +585,15 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
   /** A revision's scope: the lesson, a scene, a block, or the moment the video was paused at. */
   function scopeOf(row, scope) {
     if (!scope || !scope.kind || scope.kind === 'lesson') return { kind: 'lesson' };
+    const chapter = scope.chapter ? { chapter: String(scope.chapter) } : {};
+    if (scope.kind === 'chapter') return { kind: 'lesson', ...chapter };
     if (scope.kind === 'scene') {
       if (!/^[A-Za-z_]\w{0,80}$/.test(String(scope.name))) throw httpError(400, 'A scene is named by its class, like Intro.');
-      return { kind: 'scene', name: String(scope.name) };
+      return { kind: 'scene', name: String(scope.name), ...chapter };
     }
     if (scope.kind === 'block') {
       if (!/^[A-Za-z0-9_-]{1,80}$/.test(String(scope.id))) throw httpError(400, 'A block is named by its id, like intro.');
-      return { kind: 'block', id: String(scope.id) };
+      return { kind: 'block', id: String(scope.id), ...chapter };
     }
     if (scope.kind === 'time') {
       const at = Number(scope.at);
@@ -519,7 +606,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
       const blocks = words.blocks || [];
       const hit = blocks.findLast((x) => x.start <= at) || blocks[0];
       if (!Number.isFinite(at) || !hit) throw httpError(400, 'That is not a moment in the video.');
-      return { kind: 'block', id: hit.id, scene: hit.scene, at };
+      return { kind: 'block', id: hit.id, scene: hit.scene, at, ...(hit.chapter ? { chapter: hit.chapter } : {}) };
     }
     throw httpError(400, 'A scope is the lesson, a scene, a block or a time.');
   }
@@ -531,14 +618,16 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
     if (!row || row.kind !== 'video' || !versions) throw httpError(404, 'Not found');
     const version = req.query.version ? Number(req.query.version) : 0;
     if (req.query.version && !(Number.isInteger(version) && version > 0)) throw httpError(400, 'A version is a whole number.');
-    const found = versions.storyboard(row, version);
+    const chapter = req.query.chapter ? String(req.query.chapter) : null;
+    const found = versions.storyboard(row, version, chapter);
     if (!found) throw httpError(404, 'No storyboard yet. It appears once the scenes have been checked.');
-    return { row, version, ...found };
+    return { row, version, chapter, ...found };
   };
 
   api.get('/generations/:id/storyboard', (req, res) => {
-    const { row, version, board } = storyboardOf(req);
-    const q = version ? `?version=${version}` : '';
+    const { row, version, chapter, board } = storyboardOf(req);
+    const params = new URLSearchParams({ ...(version ? { version: String(version) } : {}), ...(chapter ? { chapter } : {}) }).toString();
+    const q = params ? `?${params}` : '';
     const still = (s) => ({ ...s, url: `/api/generations/${row.id}/storyboard/${encodeURIComponent(path.basename(String(s.file)))}${q}` });
     res.json({
       ...board,
@@ -550,7 +639,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
           ...b,
           stills: (b.stills || []).map(still),
           // Narration is only on disk for the working copy: an edit re-speaks and drops old blocks.
-          audioUrl: version ? null : `/api/generations/${row.id}/narration/${encodeURIComponent(b.id)}`,
+          audioUrl: version ? null : `/api/generations/${row.id}/narration/${encodeURIComponent(b.id)}${chapter ? `?chapter=${encodeURIComponent(chapter)}` : ''}`,
         })),
       })),
     });
@@ -569,7 +658,10 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
   // One block's narration, as the check spoke it.
   api.get('/generations/:id/narration/:block', (req, res) => {
     const row = store.getRaw(req.params.id);
-    const root = row && versions?.projectRoot(row);
+    const chapter = req.query.chapter ? String(req.query.chapter) : null;
+    if (chapter && !/^\d{2}-[a-z0-9-]{1,48}$/.test(chapter)) throw httpError(404, 'Not found');
+    const lessonRoot = row && versions?.projectRoot(row);
+    const root = lessonRoot && (chapter ? path.join(lessonRoot, 'chapters', chapter) : lessonRoot);
     const block = String(req.params.block);
     if (!root || !/^[A-Za-z0-9_-]{1,80}$/.test(block)) throw httpError(404, 'Not found');
     let manifest;
@@ -601,17 +693,25 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
       throw e;
     }
   };
-  api.get('/generations/:id/source', editing((row) => edits.source(row)));
+  api.get('/generations/:id/source', editing((row, b, req) => edits.source(row, req.query.chapter ? String(req.query.chapter) : null)));
   api.put('/generations/:id/source', editing((row, b) => edits.save(row, b)));
-  api.post('/generations/:id/check', editing((row) => edits.check(row)));
-  api.post('/generations/:id/build', editing((row, b) => edits.check(row, { build: true, quality: VIDEO_QUALITIES.includes(b.quality) ? b.quality : null })));
+  api.post('/generations/:id/check', editing((row, b) => edits.check(row, { chapter: b.chapter || null })));
+  api.post('/generations/:id/build', editing((row, b) => edits.check(row, { build: true, quality: VIDEO_QUALITIES.includes(b.quality) ? b.quality : null, chapter: b.chapter || null })));
   api.post('/generations/:id/discard', editing((row) => edits.discard(row)));
   api.post('/generations/:id/restore', editing((row, b) => {
     const n = Number(b.version);
     if (!Number.isInteger(n) || n < 1) throw new EditError('Say which version to restore: { version: n }.');
     return edits.restore(row, n);
   }));
-  api.get('/generations/:id/versions/:n/source', editing((row, b, req) => edits.versionSource(row, Number(req.params.n))));
+  api.get('/generations/:id/versions/:n/source', editing((row, b, req) => edits.versionSource(row, Number(req.params.n), req.query.chapter ? String(req.query.chapter) : null)));
+
+  // A long lesson's chapters as WebVTT, for the player's chapter list.
+  api.get('/generations/:id/chapters.vtt', (req, res) => {
+    const row = store.getRaw(req.params.id);
+    const file = row && store.videoPath(row.id, 'chapters.vtt');
+    if (!file || !fs.existsSync(file)) throw httpError(404, 'This video has no chapters.');
+    res.type('text/vtt; charset=utf-8').sendFile(file, { dotfiles: 'allow' });
+  });
 
   // Every spoken word of the built video with its time, for the transcript beside the player.
   api.get('/generations/:id/transcript', (req, res) => {
