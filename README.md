@@ -107,3 +107,17 @@ None of the tests call Claude, and the ones that load the real voice model are s
 | `video/projects/<name>/` | One folder per video: script, scenes, `project.json`, and `build/` | everything except `build/` |
 | `video/projects/<name>/notes/`, `brief.json` | Your notes and attached files for a lesson | no, for new lessons; the example lesson's `brief.json` is tracked |
 | `.env` | Optional settings; see [tts-studio/.env.example](tts-studio/.env.example) | no |
+
+## Future improvements
+
+None of these exist yet.
+
+- **MCP connector.** An MCP server in front of the dashboard's API, so Claude (in Claude Code, the desktop app or claude.ai) can make a lesson from inside a conversation: start one from a topic and notes, follow its stages, search the library and fetch the finished video. Today the only ways in are the web page and `curl`.
+- **Edit and rebuild in the dashboard.** Change Claude's script or scenes in the page and rebuild, instead of opening the project folder in an editor.
+- **Ask for a revision.** Tell Claude what to change in a finished lesson ("slow down the second scene", "use my notation for the loss") and have it rewrite only that.
+- **Longer lessons.** Videos are limited to about five minutes. Longer ones need a chapter outline first, with each chapter written and checked on its own.
+- **Preview before the full render.** Show the stills the check already takes at the end of each block, so a lesson can be judged before minutes are spent rendering it.
+- **Stronger isolation for scenes.** The sandbox blocks the network and outside writes, but a scene can still read most files. Reading could be limited to the project, the ManimGL install, fonts and TeX.
+- **Other platforms.** Attached photos and documents, and the sandbox, rely on tools that ship with macOS. Linux needs replacements for `sips`, `textutil` and `sandbox-exec`.
+- **Word-level sync in other languages.** Only the English voices report word timings, so lessons are English only.
+- **More of the page under test.** The lesson form, the API wrapper and the helpers are tested; the library, the details panel and drag and drop are not.
