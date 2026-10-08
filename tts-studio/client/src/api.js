@@ -42,4 +42,7 @@ export const api = {
   videoProjects: () => req('/video/projects'),
   buildVideo: (body) => req('/videos', { method: 'POST', body }),
   createLesson: (body) => req('/lessons', { method: 'POST', body }),
+  approve: (id, body = {}) => req(`/generations/${id}/approve`, { method: 'POST', body: { action: 'render', ...body } }),
+  storyboard: (id, version) => req(`/generations/${id}/storyboard${query({ version })}`),
+  versions: (id) => req(`/generations/${id}/versions`),
 };

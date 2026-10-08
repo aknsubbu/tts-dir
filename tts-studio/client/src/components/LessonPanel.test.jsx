@@ -95,11 +95,25 @@ describe('the lesson form', () => {
     await waitFor(() => expect(onQueued).toHaveBeenCalled());
     expect(api.createLesson).toHaveBeenCalledWith({
       topic: 'Chain rule', goal: 'why it multiplies', notes: '', minutes: 3, quality: 'default', voiceId: 'af_heart',
-      attachments: [{ name: 'paper.pdf', data: btoa('PDF!') }],
+      attachments: [{ name: 'paper.pdf', data: btoa('PDF!') }], review: 'render', visualReview: false,
     });
     expect(screen.getByLabelText('Topic').value).toBe('');
     expect(screen.queryByRole('list')).toBeNull();
     expect(toast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'success' }));
+  });
+
+  it('can stop at the storyboard and ask Claude to look over its frames, and remembers both', async () => {
+    show();
+    fireEvent.change(screen.getByLabelText('Topic'), { target: { value: 'Chain rule' } });
+    fireEvent.click(screen.getByLabelText('Show me the storyboard'));
+    fireEvent.click(screen.getByLabelText(/look over its own frames/));
+    fireEvent.click(make());
+    await waitFor(() => expect(onQueued).toHaveBeenCalled());
+    expect(api.createLesson).toHaveBeenCalledWith(expect.objectContaining({ review: 'storyboard', visualReview: true }));
+    expect(toast).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringMatching(/waits for you at its storyboard/) }));
+    cleanup();
+    show();
+    expect(screen.getByLabelText('Show me the storyboard').checked).toBe(true);
   });
 
   it('keeps what was typed when the server refuses', async () => {

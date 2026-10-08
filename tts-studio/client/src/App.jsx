@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api.js';
-import { isActive, stripExt, useDebounced, useLocalStorage } from './utils.js';
+import { isActive, needsYou, routeHash, stripExt, useDebounced, useLocalStorage, useRoute } from './utils.js';
 import Header from './components/Header.jsx';
 import Composer from './components/Composer.jsx';
 import Library from './components/Library.jsx';
 import Drawer from './components/Drawer.jsx';
 import VideoPanel from './components/VideoPanel.jsx';
 import LessonPanel from './components/LessonPanel.jsx';
+import Workspace from './components/Workspace.jsx';
 import Toasts from './components/Toasts.jsx';
 
 export const DEFAULT_SETTINGS = {
@@ -38,7 +39,10 @@ export default function App() {
   const [filters, setFilters] = useState({ q: '', status: '', voiceId: '', tag: '', favorite: false, sort: '' });
   const [limit, setLimit] = useState(30);
   const [list, setList] = useState({ items: [], total: 0, loaded: false, error: '' });
-  const [selected, setSelected] = useState(null); // { id, autoplay }
+  const [selected, setSelected] = useState(null); // { id, autoplay } for an audio file's panel
+  const route = useRoute(); // a lesson's workspace, from #lesson/<id>/<tab>
+  const [autoplay, setAutoplay] = useState(false);
+  const [live, setLive] = useState(false); // the server's event stream is connected
   const [toasts, setToasts] = useState([]);
 
   const debouncedQ = useDebounced(filters.q, 250);
@@ -133,17 +137,53 @@ export default function App() {
     setSettings((s) => ({ ...s, voiceId: fallback }));
   }, [health, voices, settings.voiceId, setSettings]);
 
-  // Poll while anything is generating.
+  // Live updates: each change to an item arrives as it happens, and is merged into the list.
+  // Anything the list cannot show in place (a new item, a filter it now fails) is fetched again,
+  // at most once a second.
+  const pendingRefresh = useRef(null);
+  useEffect(() => {
+    if (typeof EventSource === 'undefined') return undefined;
+    const refreshSoon = () => {
+      if (pendingRefresh.current) return;
+      pendingRefresh.current = setTimeout(() => {
+        pendingRefresh.current = null;
+        refreshList();
+        refreshStats();
+      }, 1000);
+    };
+    const es = new EventSource('/api/events');
+    es.onopen = () => setLive(true);
+    es.onerror = () => setLive(false); // the browser reconnects; until then the page polls
+    es.addEventListener('generation', (e) => {
+      const g = JSON.parse(e.data);
+      setList((l) => {
+        const at = l.items.findIndex((i) => i.id === g.id);
+        if (at === -1) return l;
+        if (g.deleted) return { ...l, items: l.items.filter((i) => i.id !== g.id), total: l.total - 1 };
+        const items = l.items.slice();
+        items[at] = { ...items[at], ...g, snippet: items[at].snippet, titleSnippet: items[at].titleSnippet };
+        return { ...l, items };
+      });
+      refreshSoon();
+    });
+    return () => {
+      es.close();
+      clearTimeout(pendingRefresh.current);
+      pendingRefresh.current = null;
+    };
+  }, [refreshList, refreshStats]);
+
+  // Poll while anything is generating, unless the event stream already says so.
   const activeCount = stats?.active ?? 0;
   const anyActive = list.items.some(isActive) || activeCount > 0;
   useEffect(() => {
-    if (!anyActive) return undefined;
+    if (!anyActive || live) return undefined;
     const t = setInterval(() => {
       refreshList();
       refreshStats();
     }, 1200);
     return () => clearInterval(t);
-  }, [anyActive, refreshList, refreshStats]);
+  }, [anyActive, live, refreshList, refreshStats]);
 
   const prevActive = useRef(0);
   useEffect(() => {
@@ -302,6 +342,7 @@ export default function App() {
     try {
       await api.remove(g.id, { project });
       if (selected?.id === g.id) setSelected(null);
+      if (route?.id === g.id) closeWorkspace();
       await Promise.all([refreshList(), refreshMeta()]);
     } catch (e) {
       toast({ kind: 'error', text: e.message });
@@ -318,6 +359,31 @@ export default function App() {
   };
   const cancelItem = act(api.cancel);
   const retryItem = act(api.retry);
+  const approveItem = async (g, { quality } = {}) => {
+    try {
+      await api.approve(g.id, { quality });
+      toast({ kind: 'success', text: `Rendering “${g.title}”. It plays here when it is done.` });
+      window.location.hash = routeHash(g.id, 'watch');
+    } catch (e) {
+      toast({ kind: 'error', text: e.message });
+    }
+    await Promise.all([refreshList(), refreshStats()]);
+  };
+
+  // Lessons open full width at #lesson/<id>/<tab>; audio files in the side panel.
+  const openItem = (id, play = false) => {
+    const item = list.items.find((i) => i.id === id);
+    if (item?.kind === 'video') {
+      setAutoplay(play);
+      window.location.hash = routeHash(id, needsYou(item) ? 'storyboard' : 'watch');
+    } else {
+      setSelected({ id, autoplay: play });
+    }
+  };
+  function closeWorkspace() {
+    setAutoplay(false);
+    window.location.hash = '';
+  }
 
   // Re-run a stored script with the voice and settings currently selected on the left.
   function regenerate(g, fullText) {
@@ -351,7 +417,17 @@ export default function App() {
         </div>
       )}
 
-      <Header health={health} stats={stats} mode={mode} setMode={(m) => { setLimit(30); setMode(m); }} />
+      <Header
+        health={health}
+        stats={stats}
+        mode={mode}
+        setMode={(m) => { setLimit(30); setMode(m); }}
+        onShowWaiting={() => {
+          setMode('lessons');
+          setLimit(30);
+          setFilters((f) => ({ ...f, status: 'awaiting' }));
+        }}
+      />
 
       {engineStatus === 'error' && (
         <div className="banner error" role="alert">
@@ -408,7 +484,7 @@ export default function App() {
           stats={stats}
           tags={tags}
           selectedId={selected?.id}
-          onOpen={(id, autoplay = false) => setSelected({ id, autoplay })}
+          onOpen={openItem}
           onFavorite={toggleFavorite}
           onDelete={removeItem}
           onCancel={cancelItem}
@@ -417,7 +493,24 @@ export default function App() {
         />
       </div>
 
-      {selected && (
+      {route && (
+        <Workspace
+          key={route.id}
+          id={route.id}
+          tab={route.tab}
+          autoplay={autoplay}
+          summary={list.items.find((i) => i.id === route.id)}
+          onClose={closeWorkspace}
+          onPatch={patchItem}
+          onDelete={removeItem}
+          onCancel={cancelItem}
+          onRetry={retryItem}
+          onApprove={approveItem}
+          toast={toast}
+        />
+      )}
+
+      {selected && !route && (
         <Drawer
           id={selected.id}
           autoplay={selected.autoplay}

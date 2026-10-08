@@ -1,4 +1,4 @@
-import { fmtDuration, fmtNumber } from '../utils.js';
+import { fmtDuration, fmtNumber, fmtUsd } from '../utils.js';
 
 function Logo() {
   return (
@@ -21,7 +21,7 @@ const MODES = [
   ['audio', 'Audio', 'Scripts read aloud as MP3s'],
 ];
 
-export default function Header({ health, stats, mode, setMode }) {
+export default function Header({ health, stats, mode, setMode, onShowWaiting }) {
   const engine = health?.engine;
   const pill = ENGINE[engine?.status] || ENGINE.error;
 
@@ -44,8 +44,16 @@ export default function Header({ health, stats, mode, setMode }) {
       </nav>
 
       <div className="topbar-right">
+        {stats?.awaiting > 0 && mode !== 'audio' && (
+          <button className="chip attention" onClick={onShowWaiting} title="Lessons waiting for you to look over their storyboard">
+            <b>{stats.awaiting}</b> need{stats.awaiting === 1 ? 's' : ''} you
+          </button>
+        )}
         {stats && (
           <div className="chips" aria-label="Library totals">
+            {mode !== 'audio' && stats.costThisMonthUsd != null && (
+              <span className="chip" title="What writing lessons with Claude cost this calendar month"><b>{fmtUsd(stats.costThisMonthUsd)}</b> Claude this month</span>
+            )}
             <span className="chip"><b>{fmtNumber(stats.files)}</b> files</span>
             <span className="chip"><b>{fmtDuration(stats.seconds)}</b> of audio</span>
             <span className="chip"><b>{fmtNumber(stats.chars)}</b> characters</span>

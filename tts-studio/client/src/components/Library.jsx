@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { fmtDuration, fmtNumber, isActive, parseSnippet, timeAgo } from '../utils.js';
+import { fmtDuration, fmtNumber, fmtUsd, isActive, needsYou, parseSnippet, timeAgo } from '../utils.js';
 
 export function Marked({ parts }) {
   return parts.map((p, i) => (p.hit ? <mark key={i}>{p.text}</mark> : <span key={i}>{p.text}</span>));
@@ -7,6 +7,7 @@ export function Marked({ parts }) {
 
 export function StatusBadge({ g }) {
   if (g.status === 'done') return null;
+  if (needsYou(g)) return <span className="badge awaiting">{g.stage || 'Needs you'}</span>;
   const label =
     g.status === 'queued'
       ? 'Queued'
@@ -24,6 +25,15 @@ export function StatusBadge({ g }) {
   return <span className={`badge ${g.status}`}>{label}</span>;
 }
 
+/** Six frames in a grid: a lesson whose storyboard is waiting to be looked over. */
+function StoryboardIcon() {
+  return (
+    <svg viewBox="0 0 18 14" width="18" height="14" aria-hidden="true">
+      {[0, 6.5, 13].map((x) => [0, 7.5].map((y) => <rect key={`${x}-${y}`} x={x} y={y} width="5" height="6.5" rx="1" fill="currentColor" />))}
+    </svg>
+  );
+}
+
 export function Progress({ g }) {
   const pct = g.progressTotal ? (g.progressDone / g.progressTotal) * 100 : 0;
   return (
@@ -36,9 +46,10 @@ export function Progress({ g }) {
 function Card({ g, selected, onOpen, onFavorite, onDelete, onCancel, onRetry }) {
   const titleParts = parseSnippet(g.titleSnippet);
   const snippetParts = parseSnippet(g.snippet);
-  const done = g.status === 'done';
+  // A lesson keeps playing its last built version while a newer one is written or built.
+  const playable = Boolean(g.audioUrl || g.videoUrl);
   const [noPoster, setNoPoster] = useState(false); // videos built before posters existed have none
-  const poster = done && g.posterUrl && !noPoster;
+  const poster = g.posterUrl && !noPoster;
   const stop = (fn) => (e) => {
     e.stopPropagation();
     fn();
@@ -58,13 +69,13 @@ function Card({ g, selected, onOpen, onFavorite, onDelete, onCancel, onRetry }) 
     >
       <button
         className={`play ${poster ? 'poster' : ''}`}
-        disabled={!done}
-        aria-label={done ? `Play ${g.title}` : 'Not ready yet'}
-        title={done ? 'Play' : 'Not ready yet'}
-        onClick={stop(() => onOpen(g.id, true))}
+        disabled={!playable && !needsYou(g)}
+        aria-label={playable ? `Play ${g.title}` : needsYou(g) ? `Look over ${g.title}` : 'Not ready yet'}
+        title={playable ? 'Play' : needsYou(g) ? 'Look over the storyboard' : 'Not ready yet'}
+        onClick={stop(() => onOpen(g.id, playable))}
       >
         {poster && <img src={g.posterUrl} alt="" loading="lazy" onError={() => setNoPoster(true)} />}
-        {done ? <span className="play-icon">▶</span> : isActive(g) ? <span className="spinner" /> : '!'}
+        {playable ? <span className="play-icon">▶</span> : isActive(g) ? <span className="spinner" /> : needsYou(g) ? <StoryboardIcon /> : '!'}
       </button>
 
       <div className="card-body">
@@ -80,9 +91,11 @@ function Card({ g, selected, onOpen, onFavorite, onDelete, onCancel, onRetry }) 
 
         <div className="card-meta">
           {g.kind === 'video' && <span className="kind">{g.settings?.lesson ? 'Lesson' : 'Video'}</span>}
+          {g.version > 1 && <span>v{g.version}</span>}
           <span>{g.voiceName || g.voiceId}</span>
           <span>{fmtNumber(g.wordCount)} words</span>
-          {done && <span>{fmtDuration(g.durationSec)}</span>}
+          {playable && <span>{fmtDuration(g.durationSec)}</span>}
+          {g.settings?.lesson?.costUsd != null && <span title="What Claude cost to write it">{fmtUsd(g.settings.lesson.costUsd)}</span>}
           <span title={new Date(g.createdAt).toLocaleString()}>{timeAgo(g.createdAt)}</span>
         </div>
 
@@ -105,7 +118,7 @@ function Card({ g, selected, onOpen, onFavorite, onDelete, onCancel, onRetry }) 
         >
           {g.favorite ? '★' : '☆'}
         </button>
-        {done && (
+        {playable && (
           <a
             className="icon-btn"
             href={`${g.audioUrl || g.videoUrl}?download=1`}
@@ -166,6 +179,7 @@ export default function Library({
         <div className="filters">
           <select className="input" value={filters.status} onChange={(e) => set({ status: e.target.value })} aria-label="Status">
             <option value="">All statuses</option>
+            {mode !== 'audio' && <option value="awaiting">Needs you</option>}
             <option value="done">Ready</option>
             <option value="processing">Generating</option>
             <option value="queued">Queued</option>

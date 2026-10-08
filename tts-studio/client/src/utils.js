@@ -114,3 +114,45 @@ export function useLocalStorage(key, initial) {
 }
 
 export const isActive = (g) => g.status === 'queued' || g.status === 'processing';
+export const needsYou = (g) => g.status === 'awaiting';
+
+export function fmtUsd(n) {
+  if (n == null || !Number.isFinite(Number(n))) return '—';
+  return `$${Number(n) < 0.1 && Number(n) > 0 ? Number(n).toFixed(3) : Number(n).toFixed(2)}`;
+}
+
+export const WORKSPACE_TABS = ['watch', 'storyboard', 'notes'];
+
+/** The lesson workspace the address shows, from "#lesson/<id>/<tab>", or null. */
+export function parseRoute(hash) {
+  const m = /^#lesson\/([\w-]+)(?:\/(\w+))?$/.exec(String(hash || ''));
+  if (!m) return null;
+  return { id: m[1], tab: WORKSPACE_TABS.includes(m[2]) ? m[2] : 'watch' };
+}
+
+export const routeHash = (id, tab = 'watch') => `#lesson/${id}/${tab}`;
+
+/** The address's lesson workspace, kept in step with the back and forward buttons. */
+export function useRoute() {
+  const [route, setRoute] = useState(() => parseRoute(window.location.hash));
+  useEffect(() => {
+    const onHash = () => setRoute(parseRoute(window.location.hash));
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+  return route;
+}
+
+/**
+ * Which still is on screen `t` seconds into block `index` of an ordered list of blocks:
+ * the last still taken at or before t, else the previous block's last still (the screen
+ * carries over from one block to the next within a scene; each scene starts empty), else null.
+ */
+export function stillAt(blocks, index, t) {
+  for (let i = index; i >= 0 && blocks[i]?.scene === blocks[index]?.scene; i -= 1) {
+    const stills = [...(blocks[i]?.stills || [])].sort((a, b) => (a.at ?? Infinity) - (b.at ?? Infinity));
+    const shown = i === index ? stills.filter((s) => s.at != null && s.at <= t + 1e-6) : stills;
+    if (shown.length) return shown[shown.length - 1];
+  }
+  return null;
+}

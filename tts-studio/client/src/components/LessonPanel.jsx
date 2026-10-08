@@ -67,7 +67,7 @@ export default function LessonPanel({ voices, defaultVoiceId, engineReady, onQue
   const [notes, setNotes] = useState('');
   const [textFiles, setTextFiles] = useState([]);
   const [attached, setAttached] = useState([]); // [{ key, name, kind, file, url }]
-  const [prefs, setPrefs] = useLocalStorage('tts-studio:lesson', { minutes: 2, quality: 'default', voiceId: '' });
+  const [prefs, setPrefs] = useLocalStorage('tts-studio:lesson', { minutes: 2, quality: 'default', voiceId: '', review: 'render', visualReview: false });
   const [busy, setBusy] = useState(false);
   const picker = useRef(null);
   const pasted = useRef(0);
@@ -163,8 +163,12 @@ export default function LessonPanel({ voices, defaultVoiceId, engineReady, onQue
     setBusy(true);
     try {
       const attachments = await Promise.all(attached.map(async (a) => ({ name: a.name, data: await base64(a.file) })));
-      await api.createLesson({ topic, goal, notes, minutes: prefs.minutes, quality: prefs.quality, voiceId, attachments });
-      toast({ kind: 'success', text: `Claude is writing “${topic.trim()}”. Follow it in the library; it takes a few minutes.`, ms: 8000 });
+      await api.createLesson({
+        topic, goal, notes, minutes: prefs.minutes, quality: prefs.quality, voiceId, attachments,
+        review: prefs.review, visualReview: prefs.visualReview,
+      });
+      const after = prefs.review === 'storyboard' ? 'It waits for you at its storyboard.' : 'Follow it in the library; it takes a few minutes.';
+      toast({ kind: 'success', text: `Claude is writing “${topic.trim()}”. ${after}`, ms: 8000 });
       clear();
       await onQueued();
     } catch (e) {
@@ -271,6 +275,24 @@ export default function LessonPanel({ voices, defaultVoiceId, engineReady, onQue
             <option key={v.voiceId} value={v.voiceId}>{v.name}{v.gender ? ` (${v.gender})` : ''} · {v.lang === 'b' ? 'British' : 'American'}</option>
           ))}
         </select>
+      </label>
+      <fieldset className="field seg-field">
+        <legend>Before it renders</legend>
+        <div className="seg" role="radiogroup" aria-label="Before it renders">
+          {[
+            ['render', 'Render right away'],
+            ['storyboard', 'Show me the storyboard'],
+          ].map(([v, label]) => (
+            <label key={v} className={prefs.review === v ? 'on' : ''}>
+              <input type="radio" name="lesson-review" value={v} checked={prefs.review === v} onChange={() => setPrefs((p) => ({ ...p, review: v }))} />
+              {label}
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      <label className="check">
+        <input type="checkbox" checked={!!prefs.visualReview} onChange={(e) => setPrefs((p) => ({ ...p, visualReview: e.target.checked }))} />
+        <span>Let Claude look over its own frames <span className="hint">(one more request, a few cents)</span></span>
       </label>
       <button className="btn primary big" disabled={!ready} onClick={submit}>
         {busy ? (attached.length ? 'Sending your notes…' : 'Starting…') : 'Make the video'}

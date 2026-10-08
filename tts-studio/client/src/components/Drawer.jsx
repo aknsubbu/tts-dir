@@ -44,7 +44,7 @@ function Player({ src, autoplay }) {
   );
 }
 
-function VideoPlayer({ g, autoplay }) {
+export function VideoPlayer({ g, autoplay }) {
   return (
     <div className="player">
       <video key={g.videoUrl} src={g.videoUrl} controls preload="metadata" autoPlay={autoplay} playsInline>
@@ -55,7 +55,7 @@ function VideoPlayer({ g, autoplay }) {
 }
 
 /** The pictures and PDFs Claude was shown with a lesson's notes. */
-function NoteFiles({ id, attachments }) {
+export function NoteFiles({ id, attachments }) {
   if (!attachments?.length) return null;
   const url = (a) => `/api/generations/${id}/notes/${encodeURIComponent(a.file.split('/').pop())}`;
   return (
