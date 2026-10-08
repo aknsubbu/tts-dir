@@ -56,19 +56,55 @@ STRICT_NAMES = FORBIDDEN_NAMES | {
 STRICT_ATTRS = {"system", "popen", "Popen", "load", "save", "savez", "savetxt", "loadtxt", "fromfile", "tofile", "memmap", "modules"}
 SCENE_TIMEOUT = 600  # seconds for one scene to run without drawing; far more than any real one needs
 
+_BLOCK_LINE = re.compile(r"^\[([A-Za-z0-9_-]+)\]\s*$")
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 _PROGRESS = re.compile(r"\d+it \[|it/s\]|\|\s*\d+/\d+")
 
 
+_LINE = re.compile(r"^line (\d+): ")
+_TRACE = re.compile(r'File "[^"]*?([^"/\\]+\.py)", line (\d+)')
+
+
 class Report:
+    """Errors and warnings. Each says `where` it is in words, and, when it can be pinned down,
+    the `file` and `line` it is on, and the `block` or `scene` it belongs to, so an editor can
+    underline it."""
+
     def __init__(self):
         self.errors, self.warnings = [], []
+        self.files = {}  # what each file is called in this project: {"script": "script.txt", "scenes": "scenes.py"}
+        self.block_lines = {"script": {}, "scenes": {}}  # block id -> its [id] line, and the line that plays it
+
+    def _locate(self, where, message, extra):
+        item = {"where": where, "message": message, **extra}
+        m = _LINE.match(message)
+        if m and "line" not in item:
+            item.setdefault("file", where)
+            item["line"] = int(m.group(1))
+        if where in (self.files.get("scenes"), "render") or "file" in item:
+            pass
+        elif where not in ("narration", "project.json", self.files.get("script")):
+            # A scene's own failure: the last line of scenes.py its traceback passes through.
+            item.setdefault("scene", where)
+            lines = [(f, int(n)) for f, n in _TRACE.findall(message) if f == self.files.get("scenes")]
+            if lines:
+                item["file"], item["line"] = lines[-1]
+        if item.get("block") and "line" not in item:
+            if item.get("file") == self.files.get("script") or where == self.files.get("script"):
+                line = self.block_lines["script"].get(item["block"])
+                if line:
+                    item.update(file=self.files["script"], line=line)
+            else:
+                line = self.block_lines["scenes"].get(item["block"])
+                if line:
+                    item.update(file=self.files.get("scenes"), line=line)
+        return item
 
     def error(self, where, message, **extra):
-        self.errors.append({"where": where, "message": message, **extra})
+        self.errors.append(self._locate(where, message, extra))
 
     def warn(self, where, message, **extra):
-        self.warnings.append({"where": where, "message": message, **extra})
+        self.warnings.append(self._locate(where, message, extra))
 
 
 # ---------- reading the files ----------
@@ -76,20 +112,26 @@ class Report:
 def read_script(root, config, report):
     """{block_id: {"marks": set, "words": int}} in script order, or None if it cannot be read."""
     name = config["script"]
+    report.files["script"] = name
     try:
-        blocks = parse_script((root / name).read_text(encoding="utf-8"))
+        source = (root / name).read_text(encoding="utf-8")
+        blocks = parse_script(source)
     except FileNotFoundError:
         return report.error(name, f"{name} is missing")
     except ScriptError as e:
         return report.error(name, str(e))
+    for n, line in enumerate(source.lstrip("\ufeff").replace("\r\n", "\n").split("\n"), 1):
+        m = _BLOCK_LINE.match(line.strip())
+        if m:
+            report.block_lines["script"].setdefault(m.group(1), n)
     out = {}
     for bid, text in blocks:
         marks = _MARK.findall(text)
         for m in sorted({m for m in marks if marks.count(m) > 1}):
-            report.error(name, f'block [{bid}] uses the mark name "{m}" more than once')
+            report.error(name, f'block [{bid}] uses the mark name "{m}" more than once', block=bid)
         spoken = _MARK.sub("", text)
         if "<" in spoken and re.search(r"<[^>]*>", spoken):
-            report.error(name, f'block [{bid}] has a tag that is not a mark; the only tag allowed is <mark name="x"/>')
+            report.error(name, f'block [{bid}] has a tag that is not a mark; the only tag allowed is <mark name="x"/>', block=bid)
         out[bid] = {"marks": set(marks), "words": len(spoken.split())}
     return out
 
@@ -105,6 +147,7 @@ def _is_call_to(node, attr):
 def read_scenes(root, config, blocks, report, strict=False):
     """Scene class names in the order they are defined, or None if the file cannot be read."""
     name = config.get("scenes_file", "scenes.py")
+    report.files["scenes"] = name
     try:
         source = (root / name).read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -155,6 +198,7 @@ def read_scenes(root, config, blocks, report, strict=False):
                 if bid in used:
                     report.error(name, f'line {node.lineno}: block "{bid}" is already played by {used[bid]}; each block may be played once')
                 used[bid] = cls.name
+                report.block_lines["scenes"].setdefault(bid, node.lineno)
                 var = item.optional_vars.id if isinstance(item.optional_vars, ast.Name) else None
                 for call in ast.walk(node):
                     if not (_is_call_to(call, "until") or _is_call_to(call, "time_of")):
@@ -171,7 +215,7 @@ def read_scenes(root, config, blocks, report, strict=False):
         report.error(name, "no scene classes found; each needs VoiceoverScene first in its bases, as in class Intro(VoiceoverScene, Scene)")
     for bid in blocks or {}:
         if bid not in used:
-            report.error(name, f'narration block "{bid}" is never played; some scene must contain: with self.voiceover("{bid}") as vo:')
+            report.error(name, f'narration block "{bid}" is never played; some scene must contain: with self.voiceover("{bid}") as vo:', block=bid, file=report.files.get("script"), line=report.block_lines["script"].get(bid))
     return scenes
 
 
@@ -222,7 +266,9 @@ def narrate(root, report):
     )
     for line in done.stdout.splitlines():
         if "warning [" in line:  # a mark that could not be placed on a word
-            report.warn("script.txt", line.strip().replace("warning ", "", 1))
+            said = line.strip().replace("warning ", "", 1)
+            block = re.match(r"\[([A-Za-z0-9_-]+)\]", said)
+            report.warn(report.files.get("script", "script.txt"), said, **({"block": block.group(1)} if block else {}))
     if done.returncode:
         report.error("narration", tidy(done.stdout, 12))
         return None
@@ -263,7 +309,7 @@ def try_scene(root, config, scene, report):
         report.error(scene, message)
         return None, message
     for issue in data.get("issues", []):
-        report.warn(scene, issue["message"], block=issue.get("block"))
+        report.warn(scene, issue["message"], block=issue.get("block"), scene=scene)
     return data, None
 
 

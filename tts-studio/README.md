@@ -64,11 +64,15 @@ The **Lessons** tab makes a narrated, animated explainer from a topic and your n
 2. Add your **notes**: type or paste them, drop files anywhere on the page, or paste a screenshot. Notes are optional, but with them the video uses your notation and your examples.
 3. Pick a length, a quality and an English voice. Under **Before it renders**, choose **Render right away**, or **Show me the storyboard** to look the lesson over first. Then press **Make the video**.
 
-The card in the library shows each stage. Click it to open the lesson's workspace, a full-width page with three tabs, each with its own address (`#lesson/<id>/watch`, `/storyboard`, `/notes`):
+The card in the library shows each stage. Click it to open the lesson's workspace, a full-width page with five tabs, each with its own address (`#lesson/<id>/watch`, `/storyboard`, `/edit`, `/history`, `/notes`):
 
 - **Watch**: the video with captions, or what is happening to it. Below it, what writing the lesson took: who wrote each step, the cost, the tokens read (and how many came from the cache) and written, how many fixes the writer made and how many common mistakes were fixed without it.
 - **Storyboard**: every narration block, scene by scene, with a still of the screen at each marked word and at the end of the block, its narration with the marks shown, any timing or layout problem, and a button to hear it. **Play as animatic** plays the narration block after block and changes the picture on the marked words, so a lesson can be judged before it is rendered. The stills come from the check, which skips animations, so each shows where things end up, not how they move.
+- **Edit**: `script.txt` and `scenes.py` in a code editor, side by side (as tabs on a narrow screen), with the voice and speed above them. Each `[block]` line shows its word count and, once checked, how long it takes to say. **⌘S** saves and runs the quick check in a moment (blocks, marks, imports, scene classes), and problems are underlined on their lines and listed below; click one to go to it. **Check** runs the full check, which speaks changed blocks and runs every scene without drawing, and refreshes the storyboard. **Render v2** does the same and, if it passes, makes the next version and builds it; with the narration and scene caches only what you changed is redone, and the old video plays meanwhile. **Discard** goes back to the current version. A save made from files that changed underneath (another editor, say) is refused with an offer to load theirs or keep yours, and nothing can be saved while the lesson is being written, checked or built. Projects written by hand stay read-only here.
+- **History**: every version, what made it (written, edited, restored), what it cost, whether it passed its check and was built. Compare any two: the narration block by block with changed words marked, and `scenes.py` as a line diff. **Restore** makes an earlier version the next one; when its render is still kept it plays at once, otherwise it is built.
 - **Notes**: what you asked for, the files you attached and the narration.
+
+Beside the video, the **transcript** marks each word as it is spoken; click a word to jump there. It comes from the build's word timings, so lessons built before this release show none until they are built again.
 
 A lesson that waits for you says **Storyboard ready** on its card, and the header counts them. In its workspace, **Approve and render** renders it at the quality you pick there, and **Don't render** cancels it (Retry renders it after all). While a lesson is rebuilt, it keeps playing its last built version.
 
@@ -105,7 +109,7 @@ A two-minute video takes roughly five to ten minutes from start to finish. Most 
 
 **What it costs, and how it is kept down.** Most of a request's cost is what Claude writes, thinking included. So each step asks with its own effort: writing at high, fixes at low (a fix is mechanical), the polish at medium (`TTS_CLAUDE_EFFORT`, `TTS_CLAUDE_FIX_EFFORT`, `TTS_CLAUDE_POLISH_EFFORT`; `auto` leaves it to Claude Code). Common mistakes are fixed by `../video/autofix.py` before Claude is asked. Every request's token counts and cost are saved beside its prompt in `build/author/`.
 
-**What you get on disk.** Every lesson is a normal project in `../video/projects/<topic>-<id>/`: `script.txt`, `scenes.py`, your `brief.json`, the attached files in `notes/`, under `build/author/` every prompt sent to Claude, every answer and what each cost, under `build/check/` the storyboard, and in `versions/001/` the files and storyboard as Claude first wrote them. Edit the script or the scenes and rebuild from the **Narrated video** panel under the lesson form, or with `python3 ../video/build.py <name>`.
+**What you get on disk.** Every lesson is a normal project in `../video/projects/<topic>-<id>/`: `script.txt`, `scenes.py`, your `brief.json`, the attached files in `notes/`, under `build/author/` every prompt sent to the writer, every answer and what each cost, under `build/check/` the storyboard and the last check's report, and in `versions/NNN/` each version's files and storyboard. Edit it in the **Edit** tab, or in your own editor and render it from there (the tab notices), or with `python3 ../video/build.py <name>`.
 
 **How it works.** The lesson writer is a second small Express server in `author/`. `npm start` runs it in the same process on port 8790; `npm run author` runs it alone. It gives Claude no tools, so Claude can only send text back, and that text is checked by `../video/check.py` before anything is built. The prompts are plain files you can edit without restarting:
 
@@ -124,7 +128,7 @@ A two-minute video takes roughly five to ten minutes from start to finish. Most 
 - Cancel works at every stage, and stops Claude, the check or the build.
 - Pictures and PDFs go to the writer with the first request only. A fix is about code that failed, so it is sent the script and scenes alone.
 - A fix from another provider that cannot even answer in the format asked for counts as a failed fix when there is a writer to hand back to; otherwise the lesson fails with the provider's message. A provider's rate limit is retried after the time it asks for; a daily limit fails with a message naming it.
-- A lesson's first version is kept in `versions/001/` beside it, with the storyboard it was approved from. Later versions (edits and revisions) are on the way.
+- Each version is kept in `versions/NNN/` beside the lesson, with its storyboard, and the renders of the last three are kept in `data/video/<id>/`. A lesson made before versions existed becomes version 1 the first time it is edited.
 
 ## Who writes your lessons: Settings
 
@@ -286,7 +290,12 @@ Other useful routes:
 | `GET /api/generations/:id/storyboard/:file`, `/narration/:block` | A still the storyboard lists, and a block's narration as a WAV |
 | `GET /api/generations/:id/versions` | A lesson's versions: what made each, what it cost, whether it was built |
 | `GET /api/events` | Every change to the library as it happens, as Server-Sent Events |
-| `GET /api/generations/:id/source`, `/files` | A lesson's brief, script and scenes; where its video, captions, poster and project are on disk |
+| `GET /api/generations/:id/source` | A lesson's working copy (script, scenes, voice, speed), its `hash`, the version, whether it is a `draft`, and the last checks' reports |
+| `PUT /api/generations/:id/source` | Save `{ base, script, scenes, voice, speed }` and run the quick check: `{ hash, report }`. 409 when `base` is stale (with the `current` files) or the lesson is busy |
+| `POST /api/generations/:id/check`, `/build`, `/discard` | The full check; the check then a render of the next version (`{ quality }`); the working copy back to the current version |
+| `POST /api/generations/:id/restore` | `{ version }` becomes the next version, at once when its render is kept |
+| `GET /api/generations/:id/versions/:n/source`, `/transcript` | A version's files; the built video's words with their times |
+| `GET /api/generations/:id/files` | Where a lesson's video, captions, poster and project are on disk |
 | `GET /api/settings`, `PATCH /api/settings`, `POST /api/settings/undo` | Settings (never keys), a change as `{ "lesson.defaults": { "quality": "medium" } }`, and Undo |
 | `PUT /api/providers/:id`, `PUT /api/providers/:id/key`, `POST /api/providers/:id/test` | A provider's address (`new` adds one), its key (write-only), and its Test |
 | `POST /api/estimate` | About what a lesson will cost: `{ minutes, notesChars, images, pdfPages, writer }` |
@@ -319,6 +328,7 @@ server/
   secrets.js      provider keys in the Keychain or a private file
   estimate.js     about what a lesson will cost before it is written
   pdf.js          PDF page counts, text and page selection
+  edits.js        the Edit tab: saving with a stale-copy check, full checks, renders, discard and restore
 shared/
   limits.js       what a lesson may be given; imported by the server and the page
   providers.js    the kinds of provider, what each can do until tested, the default writer plan
@@ -342,7 +352,8 @@ mcp/
 client/
   src/App.jsx     state, polling, drag and drop, the Lessons and Audio tabs
   src/components/ Header, LessonPanel, Composer, VideoPanel, Library, Drawer, Toasts,
-                  Workspace (a lesson, full width), Storyboard and Settings
+                  Workspace (a lesson, full width), Storyboard, EditTab with CodeEditor
+                  (CodeMirror 6), History (versions and diffs), Transcript and Settings
   src/**/*.test.* vitest tests
 scripts/
   setup.sh        creates .venv and downloads the model

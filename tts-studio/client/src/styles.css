@@ -415,3 +415,58 @@ button.chip.attention b { color: var(--warn); }
   .providers { grid-template-columns: 1fr; }
   .rates { display: block; overflow-x: auto; }
 }
+
+/* ---------- Edit, History and the transcript ---------- */
+.edit-tab, .history-tab { display: flex; flex-direction: column; gap: 14px; }
+.edit-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; position: sticky; top: 0; z-index: 2; background: var(--bg); padding: 4px 0; }
+.edit-status { font-size: 13px; color: var(--muted); }
+.pane-tabs { display: none; gap: 4px; background: var(--panel-2); border-radius: 10px; padding: 4px; }
+.pane-tabs button { flex: 1; border: none; background: transparent; padding: 6px; border-radius: 7px; color: var(--muted); font-weight: 500; }
+.pane-tabs button.on { background: var(--panel); color: var(--text); }
+.editors { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 14px; }
+.pane { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.pane h4 { margin: 0; }
+.code-editor { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; height: min(68vh, 760px); }
+.code-editor .cm-editor { height: 100%; }
+.problems { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.problems li { display: flex; gap: 10px; align-items: baseline; }
+.problems li.error .link { color: var(--err); }
+.problems li.warning .link { color: var(--warn); }
+.problems .link { white-space: nowrap; font-family: ui-monospace, Menlo, monospace; }
+@media (max-width: 900px) {
+  .pane-tabs { display: flex; }
+  .editors { grid-template-columns: 1fr; }
+  .pane { display: none; }
+  .pane.on { display: flex; }
+  .code-editor { height: 60vh; }
+}
+.versions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.versions li { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; display: flex; flex-direction: column; gap: 4px; }
+.versions li.current { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.version-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.chip.on { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+.compare .input { width: auto; }
+.narration-diff { display: flex; flex-direction: column; gap: 8px; }
+.diff-block { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; }
+.diff-block p { margin: 4px 0 0; line-height: 1.6; overflow-wrap: anywhere; }
+.diff-block.new { border-color: color-mix(in srgb, var(--ok) 40%, var(--border)); }
+.diff-block.removed { border-color: color-mix(in srgb, var(--err) 40%, var(--border)); }
+.diff-head { font-size: 12px; color: var(--muted); }
+ins { background: var(--ok-soft); color: var(--ok); text-decoration: none; border-radius: 3px; }
+del { background: var(--err-soft); color: var(--err); border-radius: 3px; }
+.line-diff { border: 1px solid var(--border); border-radius: 10px; overflow-x: auto; font-size: 12.5px; background: var(--panel); }
+.hunk-head { background: var(--panel-2); color: var(--muted); padding: 2px 10px; font-size: 11.5px; }
+.line-diff .add, .line-diff .del, .line-diff .ctx { display: flex; gap: 8px; padding: 0 10px; white-space: pre; }
+.line-diff .add { background: var(--ok-soft); }
+.line-diff .del { background: var(--err-soft); }
+.line-diff code { background: none; padding: 0; font-size: inherit; }
+.line-diff .sign { width: 10px; color: var(--muted); flex: none; }
+.watch-row { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(240px, 1fr); gap: 16px; align-items: start; }
+.transcript-block { min-width: 0; }
+.transcript { max-height: min(52vh, 520px); overflow-y: auto; padding-right: 6px; font-size: 14px; line-height: 1.7; }
+.transcript p { margin: 0 0 10px; color: var(--muted); }
+.transcript p.on { color: var(--text); }
+.transcript .word { border: none; background: none; padding: 0 1px; font: inherit; color: inherit; border-radius: 4px; cursor: pointer; }
+.transcript .word:hover { background: var(--panel-2); }
+.transcript .word.now { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+@media (max-width: 980px) { .watch-row { grid-template-columns: 1fr; } .transcript { max-height: 40vh; } }

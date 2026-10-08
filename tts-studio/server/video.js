@@ -126,7 +126,7 @@ export function createVideoBuilder({ getConfig }) {
           return reject(new EngineError(`The video build failed. ${reason}`.trim(), 'synthesis'));
         }
         const pick = (ext) => out.findLast((f) => f.endsWith(ext)); // build.py prints the results last
-        const files = { mp4: pick('.mp4'), srt: pick('.srt'), vtt: pick('.vtt'), jpg: pick('.jpg') };
+        const files = { mp4: pick('.mp4'), srt: pick('.srt'), vtt: pick('.vtt'), jpg: pick('.jpg'), words: pick('.words.json') };
         if (!files.mp4 || !fs.existsSync(files.mp4)) {
           return reject(new EngineError('The video build finished without reporting its video file.', 'synthesis'));
         }

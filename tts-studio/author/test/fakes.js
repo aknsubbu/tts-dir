@@ -75,6 +75,14 @@ const overlap = fs.existsSync(lock);
 fs.writeFileSync(lock, root);
 process.on('exit', () => fs.rmSync(lock, { force: true }));
 if (scenes.includes('SLOW')) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 400);
+// --static only reads the files: STATIC_BAD stands for what it would find, on its line.
+if (flags.includes('--static')) {
+  const line = scenes.split('\\n').findIndex((l) => l.includes('STATIC_BAD')) + 1;
+  fs.appendFileSync(path.join(process.env.FAKE_CLAUDE_DIR, 'checked.jsonl'), JSON.stringify({ root, flags, scenes, overlap }) + '\\n');
+  const errors = line ? [{ where: 'scenes.py', file: 'scenes.py', line, message: 'line ' + line + ': STATIC_BAD is not allowed in a scene' }] : [];
+  console.log(JSON.stringify({ ok: !errors.length, errors, warnings: [], scenes: [...scenes.matchAll(/^class (\\w+)\\(VoiceoverScene/gm)].map((m) => m[1]), blocks: [] }));
+  process.exit(errors.length ? 1 : 0);
+}
 fs.appendFileSync(path.join(process.env.FAKE_CLAUDE_DIR, 'checked.jsonl'), JSON.stringify({ root, flags, scenes, overlap }) + '\\n');
 if (scenes.includes('CRASH')) { console.error('check.py: boom'); process.exit(2); }
 const names = [...scenes.matchAll(/^class (\\w+)\\(VoiceoverScene/gm)].map((m) => m[1]);

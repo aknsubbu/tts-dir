@@ -519,6 +519,7 @@ export default function App() {
           tab={route.tab}
           autoplay={autoplay}
           summary={list.items.find((i) => i.id === route.id)}
+          voices={voices}
           onClose={closeWorkspace}
           onPatch={patchItem}
           onDelete={removeItem}

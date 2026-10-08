@@ -93,7 +93,8 @@ export function createRunner({ store, engine, video, versions = null }) {
     controllers.set(id, controller);
     builds.add(id);
     store.update(id, { status: 'processing', progress_done: 0, progress_total: 0, error: null });
-    const kinds = ['mp4', 'srt', 'vtt', 'jpg']; // the video first, then captions and a poster for its card
+    // The video first, then captions, a poster for its card, and its words timed for the transcript.
+    const kinds = ['mp4', 'srt', 'vtt', 'jpg', 'words.json'];
     const outputs = kinds.map((ext) => store.videoPath(id, ext));
     // Written beside the current files and swapped in only once the build has succeeded, so a
     // failed rebuild of a lesson leaves its last video playing.
@@ -109,7 +110,8 @@ export function createRunner({ store, engine, video, versions = null }) {
       if (cancelled.has(id)) throw Object.assign(new Error('Cancelled'), { cancelled: true });
       // The build folder is overwritten by the next build, so the library keeps its own copy.
       for (const [i, ext] of kinds.entries()) {
-        if (result.files[ext] && fs.existsSync(result.files[ext])) fs.copyFileSync(result.files[ext], fresh[i]);
+        const from = result.files[ext === 'words.json' ? 'words' : ext];
+        if (from && fs.existsSync(from)) fs.copyFileSync(from, fresh[i]);
       }
       const version = store.getRaw(id)?.version || 0;
       if (versions && version) versions.archiveCurrent(id); // the previous version's render moves aside

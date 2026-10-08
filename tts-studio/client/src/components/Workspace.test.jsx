@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import Workspace, { whoWrote } from './Workspace.jsx';
 import { api } from '../api.js';
 
-vi.mock('../api.js', () => ({ api: { get: vi.fn(), versions: vi.fn(), storyboard: vi.fn() } }));
+vi.mock('../api.js', () => ({ api: { get: vi.fn(), versions: vi.fn(), storyboard: vi.fn(), transcript: vi.fn() } }));
 
 const LESSON = {
   id: 'g1', kind: 'video', title: 'Why the gradient collapses', status: 'awaiting', stage: 'Storyboard ready: have a look',
@@ -23,6 +23,7 @@ beforeEach(() => {
   api.get.mockReset();
   api.versions.mockReset().mockResolvedValue({ current: 1, built: 0, versions: [{ n: 1, source: 'written', createdAt: 0 }] });
   api.storyboard.mockReset().mockResolvedValue({ scenes: [], unplayed: [] });
+  api.transcript.mockReset().mockRejectedValue(Object.assign(new Error('No transcript'), { status: 404 }));
 });
 afterEach(cleanup);
 
@@ -59,7 +60,7 @@ describe('the lesson workspace', () => {
     show({}, 'notes');
     const tabs = await screen.findAllByRole('tab');
     expect(tabs.map((t) => [t.textContent, t.getAttribute('href')])).toEqual([
-      ['Watch', '#lesson/g1/watch'], ['Storyboard', '#lesson/g1/storyboard'], ['Notes', '#lesson/g1/notes'],
+      ['Watch', '#lesson/g1/watch'], ['Storyboard', '#lesson/g1/storyboard'], ['Edit', '#lesson/g1/edit'], ['History', '#lesson/g1/history'], ['Notes', '#lesson/g1/notes'],
     ]);
     expect(screen.getByRole('tab', { name: 'Notes' }).getAttribute('aria-selected')).toBe('true');
     expect(screen.getByText('Gradient')).toBeTruthy();

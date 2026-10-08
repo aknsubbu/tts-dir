@@ -40,7 +40,7 @@ echo "The derivative measures how fast a function changes." | python3 ../tts.py 
 ## Build a narrated video
 
 ```bash
-python3 build.py demo                  # -> projects/demo/build/demo.mp4, demo.srt, demo.vtt
+python3 build.py demo                  # -> projects/demo/build/demo.mp4, .srt, .vtt, .jpg and .words.json
 python3 build.py demo --quality low    # 480p, for a quick look
 python3 build.py demo --no-cache       # render every scene, even unchanged ones
 python3 projects/demo/check_sync.py    # measures the demo's sync in the built video
@@ -51,7 +51,7 @@ The build does four things:
 1. **Narrate.** Runs `narrate.py` with the Kokoro Python. It writes one 24 kHz mono WAV per block, plus `build/manifest.json`. A block is only spoken again when its text, voice or speed changes, so moving a mark costs nothing.
 2. **Render.** Renders each scene listed in `project.json`, in full, with `manimgl -w`. Partial renders (`-n`, `-s`) are never used, because manim drops sounds added while it skips. A scene is rendered again only when something that decides its picture or sound changed: the shared code in `scenes.py` and the scene's own class (and any scene it inherits from), the narration blocks it plays, the quality, `voiceover.py` or manimgl itself. Otherwise its video from an earlier build is reused from `build/cache/`, which keeps what the last three builds used. Each scene's render may take 45 minutes (`VIDEO_SCENE_TIMEOUT`, in seconds).
 3. **Join.** Concatenates the scene videos in the listed order with ffmpeg. Each scene's audio is padded or cut to its picture's length, so sound cannot drift.
-4. **Caption.** Writes SRT and VTT from the word timings. Each caption is placed at the start time its scene recorded for the block, plus the real lengths of the earlier scenes as reported by ffprobe.
+4. **Caption.** Writes SRT and VTT from the word timings. Each caption is placed at the start time its scene recorded for the block, plus the real lengths of the earlier scenes as reported by ffprobe. The same times go into `<name>.words.json`, every spoken word with its start and end in the finished video, block by block, which the dashboard shows as a transcript beside the player.
 
 The Narrated Proofs dashboard can run builds too: on its **Lessons** tab open **Narrated video** under the lesson form, pick a project and a quality, and the finished video lands in the library with its captions. Builds share the dashboard's queue, so audio jobs wait while one runs.
 
@@ -64,7 +64,7 @@ python3 check.py demo            # read the files, speak the script, run every s
 python3 check.py demo --static   # only read the files
 ```
 
-`check.py` prints a JSON report. An **error** means the build would fail: a block no scene plays, a mark that does not exist, a scene that raises. A **warning** means it would build but look or sound wrong: an animation that ran more than 0.3 seconds past its word or past the end of its block, text that crosses the edge of the frame, text on top of other text. Each warning names its block. Each scene is run with `manimgl -s -w`, which executes every line without drawing the animations, so a two-minute video is checked in a few seconds.
+`check.py` prints a JSON report. An **error** means the build would fail: a block no scene plays, a mark that does not exist, a scene that raises. A **warning** means it would build but look or sound wrong: an animation that ran more than 0.3 seconds past its word or past the end of its block, text that crosses the edge of the frame, text on top of other text. Each warning names its block. Every problem says `where` it is in words, and, when it can be pinned down, the `file` and `line` it is on and its `block` or `scene`: a failing scene points at the last line of `scenes.py` its traceback passed through, and a timing or layout warning at the line that plays its block. The dashboard's editor underlines them. Each scene is run with `manimgl -s -w`, which executes every line without drawing the animations, so a two-minute video is checked in a few seconds.
 
 A full check also leaves a **storyboard**: a picture of the screen at every mark and at the end of every block in `build/check/frames/`, described by `build/check/storyboard.json` (per scene, per block: the narration with its marks, its length, its stills and its problems). Animations are skipped, so each picture shows where things end up. A play that runs up to a mark is pictured as it ends; a wait that runs up to a mark is pictured after the animation that follows it, since that is the reveal the viewer sees on that word. The dashboard shows the storyboard and plays it as an animatic.
 

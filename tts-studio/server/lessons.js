@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { countWords } from './text.js';
 import { readProject } from './video.js';
+import { VIDEO_QUALITIES } from '../shared/limits.js';
+import { filesIn, hashOf } from './edits.js';
 
 /**
  * Follows lessons through the lesson writer (author/), a separate small server.
@@ -109,6 +111,11 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
       return schedule(id);
     }
     if (!watching.has(id)) return;
+    if (watch.kind === 'check') {
+      if (job.status === 'done') return finishCheck(id, job.result, watch);
+      if (job.status === 'error') return endCheck(id, watch, { ok: false, error: job.error || 'The check could not run.' });
+      if (job.status === 'cancelled') return endCheck(id, watch, null);
+    }
     if (job.status === 'done') return finish(id, job.result);
     if (job.status === 'error') return fail(id, job.error || 'The lesson could not be written.');
     if (job.status === 'cancelled') {
@@ -170,13 +177,84 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
     if (!review) runner.enqueue(id);
   }
 
-  /** Stop following a lesson and tell the writer to stop too. Returns true if it was being written. */
+  /**
+   * Check a lesson's edited files in full: the narration is spoken and every scene run without
+   * drawing, leaving a fresh storyboard. With then: 'build', a passing check makes the next
+   * version and builds it. Either way the lesson goes back to where it was while it is checked,
+   * so a built lesson keeps playing its video.
+   */
+  async function checkEdit(id, { then = null, quality = null } = {}) {
+    const row = store.getRaw(id);
+    const { project } = JSON.parse(row.settings_json);
+    const prior = { status: row.status, stage: row.stage, error: row.error, finished_at: row.finished_at };
+    store.update(id, { status: 'processing', stage: then === 'build' ? 'Checking your changes before rendering' : 'Checking your changes', error: null, progress_done: 0, progress_total: 0 });
+    let job;
+    try {
+      ({ job } = await call('POST', '/lessons', { project, kind: 'check' }));
+    } catch (e) {
+      store.update(id, prior);
+      throw Object.assign(new Error(e.cause ? unreachable() : e.message), { status: 503 });
+    }
+    watching.set(id, { jobId: job.id, misses: 0, kind: 'check', prior, then, quality });
+    schedule(id);
+  }
+
+  function saveCheck(id, report, summary) {
+    const row = store.getRaw(id);
+    if (!row) return null;
+    const settings = JSON.parse(row.settings_json);
+    const root = path.join(getConfig().videoDir, 'projects', settings.project);
+    if (report) {
+      fs.mkdirSync(path.join(root, 'build', 'check'), { recursive: true });
+      fs.writeFileSync(path.join(root, 'build', 'check', 'report.json'), JSON.stringify({ ...report, at: Date.now() }));
+      if (report.scenes?.length) settings.scenes = report.scenes;
+    }
+    settings.edit = { checkedAt: Date.now(), ...summary };
+    return { settings, root };
+  }
+
+  /** The check finished: keep its report, then build the edit as the next version or go back to where it was. */
+  function finishCheck(id, report, watch) {
+    watching.delete(id);
+    const saved = saveCheck(id, report, { ok: !!report.ok, errors: report.errors?.length || 0, warnings: report.warnings?.length || 0 });
+    if (!saved) return;
+    const { settings, root } = saved;
+    if (watch.then === 'build' && report.ok) {
+      const script = readProject(getConfig().videoDir, settings.project)?.script || fs.readFileSync(path.join(root, 'script.txt'), 'utf8');
+      if (VIDEO_QUALITIES.includes(watch.quality)) settings.quality = watch.quality;
+      store.update(id, { settings_json: JSON.stringify(settings), text: script, char_count: script.length, word_count: countWords(script) });
+      try {
+        // Files the same as the current version (one whose build failed, say) build that version again.
+        const row = store.getRaw(id);
+        const current = row.version ? path.join(root, 'versions', String(row.version).padStart(3, '0')) : null;
+        const same = current && fs.existsSync(current) && hashOf(filesIn(current)) === hashOf(filesIn(root));
+        if (!same) versions?.snapshot(id, { source: 'edited', note: 'Edited in the dashboard', check: { ok: true, warnings: report.warnings?.length || 0 } });
+      } catch (e) {
+        console.error(`Could not keep version files for ${settings.project}: ${e.message}`);
+      }
+      store.update(id, { status: 'queued', stage: null, error: null, progress_done: 0, finished_at: null });
+      return runner.enqueue(id);
+    }
+    store.update(id, { settings_json: JSON.stringify(settings), ...watch.prior });
+  }
+
+  function endCheck(id, watch, failure) {
+    watching.delete(id);
+    const saved = failure ? saveCheck(id, null, failure) : null;
+    store.update(id, { ...(saved ? { settings_json: JSON.stringify(saved.settings) } : {}), ...watch.prior });
+  }
+
+  /** Stop following a lesson and tell the writer to stop too. Returns true if it was being written or checked. */
   function cancel(id) {
     const watch = watching.get(id);
     if (!watch) return false;
     clearTimeout(watch.timer);
-    watching.delete(id);
     call('POST', `/lessons/${watch.jobId}/cancel`).catch(() => {});
+    if (watch.kind === 'check') {
+      endCheck(id, watch, null); // a cancelled check leaves the lesson as it was
+      return true;
+    }
+    watching.delete(id);
     store.update(id, { status: 'cancelled', error: 'Cancelled', stage: null, finished_at: Date.now() });
     return true;
   }
@@ -186,5 +264,5 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
     watching.clear();
   }
 
-  return { start, cancel, stop, isWritten, isActive: (id) => watching.has(id) };
+  return { start, checkEdit, cancel, stop, isWritten, isActive: (id) => watching.has(id) };
 }

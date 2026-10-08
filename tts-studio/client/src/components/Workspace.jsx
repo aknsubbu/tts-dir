@@ -1,11 +1,14 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { fmtBytes, fmtDate, fmtDuration, fmtNumber, fmtUsd, isActive, needsYou, routeHash, WORKSPACE_TABS } from '../utils.js';
 import { Progress, StatusBadge } from './Library.jsx';
 import { NoteFiles, VideoPlayer } from './Drawer.jsx';
 import Storyboard from './Storyboard.jsx';
+import EditTab from './EditTab.jsx';
+import History from './History.jsx';
+import Transcript from './Transcript.jsx';
 
-const TAB_LABELS = { watch: 'Watch', storyboard: 'Storyboard', notes: 'Notes' };
+const TAB_LABELS = { watch: 'Watch', storyboard: 'Storyboard', edit: 'Edit', history: 'History', notes: 'Notes' };
 export const QUALITIES = [
   ['default', '1080p'],
   ['medium', '720p'],
@@ -61,7 +64,8 @@ function Effort({ lesson }) {
  * A lesson, full width: watch it, look over its storyboard, read what it was made from.
  * Opened at #lesson/<id>/<tab>, so a link can open a lesson at the right place.
  */
-export default function Workspace({ id, tab, autoplay, summary, onClose, onPatch, onDelete, onCancel, onRetry, onApprove, toast }) {
+export default function Workspace({ id, tab, autoplay, summary, voices = [], onClose, onPatch, onDelete, onCancel, onRetry, onApprove, toast }) {
+  const videoRef = useRef(null);
   const [detail, setDetail] = useState(null);
   const [loadError, setLoadError] = useState('');
   const [title, setTitle] = useState('');
@@ -198,7 +202,10 @@ export default function Workspace({ id, tab, autoplay, summary, onClose, onPatch
             {tab === 'watch' && (
               <div className="ws-watch">
                 {g.videoUrl ? (
-                  <VideoPlayer g={g} autoplay={autoplay} />
+                  <div className="watch-row">
+                    <VideoPlayer g={g} autoplay={autoplay} videoRef={videoRef} />
+                    <Transcript id={g.id} builtVersion={g.builtVersion} videoRef={videoRef} />
+                  </div>
                 ) : (
                   <div className={`status-box ${g.status}`}>
                     <p>{needsYou(g) ? 'Nothing is rendered yet. Look over the storyboard, then approve it to render.' : 'The video appears here once it is built.'}</p>
@@ -229,6 +236,8 @@ export default function Workspace({ id, tab, autoplay, summary, onClose, onPatch
               </div>
             )}
             {tab === 'storyboard' && <Storyboard id={g.id} refreshKey={`${g.version}-${g.status}`} />}
+            {tab === 'edit' && <EditTab g={g} voices={voices} toast={toast} />}
+            {tab === 'history' && <History g={g} toast={toast} />}
             {tab === 'notes' && (
               <div className="ws-notes">
                 {lesson && (

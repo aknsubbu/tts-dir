@@ -44,10 +44,10 @@ function Player({ src, autoplay }) {
   );
 }
 
-export function VideoPlayer({ g, autoplay }) {
+export function VideoPlayer({ g, autoplay, videoRef }) {
   return (
     <div className="player">
-      <video key={g.videoUrl} src={g.videoUrl} controls preload="metadata" autoPlay={autoplay} playsInline>
+      <video ref={videoRef} key={g.videoUrl} src={g.videoUrl} controls preload="metadata" autoPlay={autoplay} playsInline>
         <track kind="captions" src={`/api/generations/${g.id}/captions.vtt`} srcLang="en" label="Captions" default />
       </video>
     </div>

@@ -8,7 +8,8 @@ import { EngineError, MODEL_ID } from './kokoro.js';
 import { listProjects, makePoster, PROJECT_NAME, readProject } from './video.js';
 import { NotesError, saveAttachments } from './notes.js';
 import { localOnly } from './local.js';
-import { stillsOf } from './versions.js';
+import { RENDER_EXTS, stillsOf } from './versions.js';
+import { createEdits, EditError } from './edits.js';
 import { actorOf, settingsRoutes } from './settings-routes.js';
 import { SettingsError } from './settings.js';
 import { LESSON_MINUTES, MAX_NOTES, VIDEO_QUALITIES } from '../shared/limits.js';
@@ -510,20 +511,40 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
     res.sendFile(audio, { dotfiles: 'allow' });
   });
 
-  // A lesson's files as they are now: what was asked for, the narration and the scenes.
-  api.get('/generations/:id/source', (req, res) => {
-    const row = store.getRaw(req.params.id);
-    const root = row && versions?.projectRoot(row);
-    if (!root) throw httpError(404, 'Not found');
-    const read = (f) => {
-      try {
-        return fs.readFileSync(path.join(root, f), 'utf8');
-      } catch {
-        return null;
+  // Editing a lesson: its working copy, saved with a quick check, checked in full, rendered as the
+  // next version, discarded, or an earlier version restored. See edits.js.
+  const edits = versions ? createEdits({ store, versions, getConfig, runner, lessons }) : null;
+  const editing = (fn) => async (req, res) => {
+    if (!edits) throw httpError(404, 'Not found');
+    try {
+      res.json(await fn(store.getRaw(req.params.id), req.body || {}, req));
+    } catch (e) {
+      if (e instanceof EditError) {
+        res.status(e.status).json({ error: e.message, ...(e.current ? { current: e.current } : {}) });
+        return;
       }
-    };
-    const brief = read('brief.json');
-    res.json({ project: path.basename(root), script: read('script.txt'), scenes: read('scenes.py'), brief: brief ? JSON.parse(brief) : null });
+      throw e;
+    }
+  };
+  api.get('/generations/:id/source', editing((row) => edits.source(row)));
+  api.put('/generations/:id/source', editing((row, b) => edits.save(row, b)));
+  api.post('/generations/:id/check', editing((row) => edits.check(row)));
+  api.post('/generations/:id/build', editing((row, b) => edits.check(row, { build: true, quality: VIDEO_QUALITIES.includes(b.quality) ? b.quality : null })));
+  api.post('/generations/:id/discard', editing((row) => edits.discard(row)));
+  api.post('/generations/:id/restore', editing((row, b) => {
+    const n = Number(b.version);
+    if (!Number.isInteger(n) || n < 1) throw new EditError('Say which version to restore: { version: n }.');
+    return edits.restore(row, n);
+  }));
+  api.get('/generations/:id/versions/:n/source', editing((row, b, req) => edits.versionSource(row, Number(req.params.n))));
+
+  // Every spoken word of the built video with its time, for the transcript beside the player.
+  api.get('/generations/:id/transcript', (req, res) => {
+    const row = store.getRaw(req.params.id);
+    const file = row && store.videoPath(row.id, 'words.json');
+    if (!row || row.kind !== 'video' || (!row.built_version && row.status !== 'done') || !fs.existsSync(file)) throw httpError(404, 'No transcript for this video. Lessons built from now on have one.');
+    res.set('Cache-Control', 'private, max-age=60');
+    res.type('application/json').sendFile(file, { dotfiles: 'allow' });
   });
 
   // Where a lesson's files are on this machine, for the MCP connector and anything else local.
@@ -582,7 +603,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
       }
     }
     versions?.removeRenders(row.id);
-    const files = [store.audioPath(row.id), `${store.audioPath(row.id)}.tmp`, ...['mp4', 'srt', 'vtt', 'jpg'].map((e) => store.videoPath(row.id, e))];
+    const files = [store.audioPath(row.id), `${store.audioPath(row.id)}.tmp`, ...RENDER_EXTS.map((e) => store.videoPath(row.id, e))];
     for (const f of files) {
       try {
         fs.unlinkSync(f);

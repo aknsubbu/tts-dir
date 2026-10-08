@@ -3,7 +3,7 @@ import path from 'node:path';
 import { PROJECT_NAME } from './video.js';
 
 const SOURCES = ['script.txt', 'scenes.py', 'project.json'];
-const RENDER_EXTS = ['mp4', 'srt', 'vtt', 'jpg'];
+export const RENDER_EXTS = ['mp4', 'srt', 'vtt', 'jpg', 'words.json'];
 const pad = (n) => String(n).padStart(3, '0');
 
 /**
@@ -99,6 +99,23 @@ export function createVersions({ store, getConfig }) {
     }
   }
 
+  /**
+   * Version `to` is a copy of version `from`: when from's render is still kept, it becomes the
+   * library's render for `to` without building. Returns false when there is no render to reuse.
+   */
+  function adopt(id, from, to) {
+    const v = store.versions.get(id, from);
+    if (!v?.render_kept || !renderFile(id, from)) return false;
+    archiveCurrent(id); // the playing render moves aside first, so it can be the one adopted
+    for (const ext of RENDER_EXTS) {
+      const kept = archived(id, from, ext);
+      if (fs.existsSync(kept)) fs.copyFileSync(kept, store.videoPath(id, ext));
+      else fs.rmSync(store.videoPath(id, ext), { force: true });
+    }
+    built(id, to, { quality: v.quality, durationSec: v.duration_sec, bytes: v.video_bytes });
+    return true;
+  }
+
   /** The file holding version n's render, or null when it was not kept. */
   function renderFile(id, n, ext = 'mp4') {
     const row = store.getRaw(id);
@@ -129,7 +146,7 @@ export function createVersions({ store, getConfig }) {
     fs.rmSync(renderDir(id), { recursive: true, force: true });
   }
 
-  return { snapshot, archiveCurrent, built, renderFile, storyboard, removeRenders, projectRoot };
+  return { snapshot, archiveCurrent, built, adopt, renderFile, storyboard, removeRenders, projectRoot };
 }
 
 /** Every still file a storyboard lists. */

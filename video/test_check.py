@@ -73,6 +73,29 @@ class StaticCheckTest(unittest.TestCase):
         saved = json.loads((self.root / "project.json").read_text())
         self.assertEqual(saved, {"voice": "af_heart", "scenes": ["Intro", "Outro"]})
 
+    def test_problems_carry_their_file_line_and_block_for_an_editor(self):
+        self.write(scenes=SCENES.replace('vo.until("slope")', 'vo.until("slpoe")'))
+        _, result = self.errors()
+        e = result["errors"][0]
+        self.assertEqual((e["file"], e["line"]), ("scenes.py", 8))
+        self.write(scenes=SCENES, script=SCRIPT.replace("That is all.", 'That is <b>all</b>.'))
+        _, result = self.errors()
+        e = result["errors"][0]
+        self.assertEqual((e["file"], e["line"], e["block"]), ("script.txt", 5, "outro"))
+        self.write(script=SCRIPT + "\n[spare]\nNot played.\n")
+        _, result = self.errors()
+        e = result["errors"][0]
+        self.assertEqual((e["file"], e["line"], e["block"]), ("script.txt", 8, "spare"))
+
+    def test_a_scene_failure_points_at_the_last_scenes_line_of_its_traceback(self):
+        report = Report()
+        report.files = {"script": "script.txt", "scenes": "scenes.py"}
+        report.block_lines["scenes"] = {"intro": 7}
+        report.error("Intro", 'Traceback (most recent call last):\n  File "/x/scenes.py", line 8, in construct\n  File "/v/manimlib/mobject.py", line 90, in f\nNameError: x')
+        report.warn("Intro", "text overlaps", block="intro", scene="Intro")
+        self.assertEqual({k: report.errors[0][k] for k in ("file", "line", "scene")}, {"file": "scenes.py", "line": 8, "scene": "Intro"})
+        self.assertEqual({k: report.warnings[0][k] for k in ("file", "line", "block")}, {"file": "scenes.py", "line": 7, "block": "intro"})
+
     def test_a_syntax_error_names_its_line(self):
         self.write(scenes=SCENES.replace('self.wait(vo.remaining())\n\n\nclass', 'self.wait(vo.remaining()\n\n\nclass'))
         errors, _ = self.errors()

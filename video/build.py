@@ -27,7 +27,7 @@ from pathlib import Path
 
 import project_ast
 import sandbox
-from captions import block_cues, group_cues, to_srt, to_vtt
+from captions import block_cues, group_cues, join_tokens, to_srt, to_vtt
 
 HERE = Path(__file__).resolve().parent
 KOKORO_PYTHON = os.environ.get("KOKORO_PYTHON") or str(HERE.parent / "tts-studio" / ".venv" / "bin" / "python")
@@ -242,6 +242,23 @@ def caption_cues(manifest, scenes):
     return cues, unused
 
 
+def transcript(manifest, scenes):
+    """Every spoken word with its time in the joined video, block by block, for the page's
+    transcript. `scenes` is [(name, offset_seconds, timeline or None)] in order. A block from a
+    voice without word timings has its text and no words."""
+    blocks = []
+    for name, offset, timeline in scenes:
+        for entry in (timeline or {}).get("blocks", []):
+            block = manifest["blocks"][entry["id"]]
+            start = offset + entry["start"]
+            words = [[text, round(start + a, 3), round(start + b, 3)] for text, a, b in join_tokens(block["words"] or [])]
+            blocks.append({
+                "id": entry["id"], "scene": name, "start": round(start, 3), "end": round(start + block["duration"], 3),
+                "text": block["text"], "words": words,
+            })
+    return {"version": 1, "blocks": blocks}
+
+
 # ---------- command ----------
 
 def build(root, quality="default", narrate_first=True, use_cache=True):
@@ -290,6 +307,8 @@ def build(root, quality="default", narrate_first=True, use_cache=True):
         print(f"warning: narration block [{bid}] is not used by any scene", file=sys.stderr)
     (build_dir / f"{name}.srt").write_text(to_srt(cues), encoding="utf-8")
     (build_dir / f"{name}.vtt").write_text(to_vtt(cues), encoding="utf-8")
+    words = transcript(manifest, [(scene, offset, timeline) for scene, (offset, timeline) in zip(config["scenes"], timed)])
+    (build_dir / f"{name}.words.json").write_text(json.dumps(words, ensure_ascii=False), encoding="utf-8")
     result = {"video": video.name, "duration": probe(video)["duration"], "scenes": summary}
     result["poster"] = poster(video, result["duration"], build_dir / f"{name}.jpg")
     (build_dir / "build.json").write_text(json.dumps(result, indent=1), encoding="utf-8")
@@ -316,7 +335,7 @@ def main(argv=None):
         sys.exit(f"error: {e}")
     out = root.resolve() / "build"
     print(f"\n{result['video']}: {result['duration']:.2f}s, {len(result['scenes'])} scenes, built in {time.time() - t0:.0f}s", file=sys.stderr)
-    for f in (result["video"], f"{root.name}.srt", f"{root.name}.vtt", result.get("poster")):
+    for f in (result["video"], f"{root.name}.srt", f"{root.name}.vtt", result.get("poster"), f"{root.name}.words.json"):
         if f:
             print(out / f)
     return 0

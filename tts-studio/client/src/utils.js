@@ -121,7 +121,28 @@ export function fmtUsd(n) {
   return `$${Number(n) < 0.1 && Number(n) > 0 ? Number(n).toFixed(3) : Number(n).toFixed(2)}`;
 }
 
-export const WORKSPACE_TABS = ['watch', 'storyboard', 'notes'];
+export const WORKSPACE_TABS = ['watch', 'storyboard', 'edit', 'history', 'notes'];
+
+const BLOCK_LINE = /^\s*\[([A-Za-z0-9_-]+)\]\s*$/;
+export const MARK = /<mark\s+name\s*=\s*["']([A-Za-z0-9_-]+)["']\s*\/>/g;
+
+/** script.txt as [{ id, text, line }], as narrate.py reads it: [id] starts a block, # lines are comments. */
+export function parseScript(source) {
+  const blocks = [];
+  let cur = null;
+  String(source || '').replace(/\r\n/g, '\n').split('\n').forEach((line, i) => {
+    if (line.trimStart().startsWith('#')) return;
+    const m = BLOCK_LINE.exec(line);
+    if (m) {
+      cur = { id: m[1], lines: [], line: i + 1 };
+      blocks.push(cur);
+    } else if (cur) cur.lines.push(line);
+  });
+  return blocks.map((b) => ({ id: b.id, line: b.line, text: b.lines.join('\n').trim() }));
+}
+
+/** What is spoken: the text without its marks. */
+export const spoken = (text) => String(text || '').replace(MARK, '').replace(/\s+/g, ' ').trim();
 
 /** The lesson workspace the address shows, from "#lesson/<id>/<tab>", or null. */
 export function parseRoute(hash) {

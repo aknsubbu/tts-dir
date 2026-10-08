@@ -1,7 +1,7 @@
 """Build and caption tests. Standard library only: nothing is rendered or spoken."""
 import unittest
 
-from build import caption_cues, concat_args
+from build import caption_cues, concat_args, transcript
 from captions import block_cues, group_cues, join_tokens, to_srt, to_vtt
 
 
@@ -88,3 +88,16 @@ class BuildTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TranscriptTest(unittest.TestCase):
+    def test_words_are_timed_in_the_joined_video(self):
+        manifest = {"blocks": {
+            "intro": {"text": "Hello, world.", "duration": 2.0, "words": words(("Hello", 0.1, 0.5), (",", 0.5, 0.6), ("world", 0.7, 1.2), (".", 1.2, 1.3))},
+            "outro": {"text": "Hola.", "duration": 1.0, "words": []},
+        }, "order": ["intro", "outro"]}
+        out = transcript(manifest, [("Intro", 0.0, {"blocks": [{"id": "intro", "start": 0.5}]}), ("Outro", 3.0, {"blocks": [{"id": "outro", "start": 0.0}]})])
+        intro, outro = out["blocks"]
+        self.assertEqual((intro["scene"], intro["start"], intro["end"]), ("Intro", 0.5, 2.5))
+        self.assertEqual(intro["words"], [["Hello,", 0.6, 1.1], ["world.", 1.2, 1.8]])
+        self.assertEqual((outro["start"], outro["words"], outro["text"]), (3.0, [], "Hola."))

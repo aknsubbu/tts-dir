@@ -14,6 +14,7 @@ async function req(path, { method = 'GET', body } = {}) {
   if (!res.ok) {
     throw Object.assign(new Error(data?.error || `Request failed (${res.status})`), {
       status: res.status,
+      data,
     });
   }
   return data;
@@ -46,6 +47,15 @@ export const api = {
   approve: (id, body = {}) => req(`/generations/${id}/approve`, { method: 'POST', body: { action: 'render', ...body } }),
   storyboard: (id, version) => req(`/generations/${id}/storyboard${query({ version })}`),
   versions: (id) => req(`/generations/${id}/versions`),
+  // Editing a lesson: its working copy, a save checked at once, a full check, a render, and versions.
+  source: (id) => req(`/generations/${id}/source`),
+  saveSource: (id, body) => req(`/generations/${id}/source`, { method: 'PUT', body }),
+  checkEdit: (id) => req(`/generations/${id}/check`, { method: 'POST' }),
+  buildEdit: (id, quality) => req(`/generations/${id}/build`, { method: 'POST', body: { quality } }),
+  discard: (id) => req(`/generations/${id}/discard`, { method: 'POST' }),
+  restore: (id, version) => req(`/generations/${id}/restore`, { method: 'POST', body: { version } }),
+  versionSource: (id, n) => req(`/generations/${id}/versions/${n}/source`),
+  transcript: (id) => req(`/generations/${id}/transcript`),
   // Settings: who writes lessons, defaults, Claude's limits, costs. Keys go in and never come back.
   settings: () => req('/settings'),
   patchSettings: (body) => req('/settings', { method: 'PATCH', body }),
