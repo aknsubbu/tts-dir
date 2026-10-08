@@ -1,5 +1,6 @@
 node_modules
 dist
+extension
 data
 .venv
 __pycache__

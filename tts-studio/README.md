@@ -34,7 +34,7 @@ For development with hot reload, run `npm run dev` and open <http://localhost:51
 | `npm run dev` | Server with auto-restart plus Vite dev server on port 5173 |
 | `npm run author` | The lesson writer on its own, for running it apart from the dashboard |
 | `npm run mcp` | The MCP connector over stdio, as Claude Code or the desktop app starts it |
-| `npm run mcp:pack` | The connector as a desktop extension, `dist/narrated-proofs.mcpb`. `npm run app` empties `dist/`, so open it first |
+| `npm run mcp:pack` | The connector as a desktop extension, `extension/narrated-proofs.mcpb` |
 | `npm run bakeoff` | Make the same short lessons with each set-up writer and compare them (see below) |
 | `npm test` | Everything: server, lesson writer and MCP connector (`test:server`), the page (`test:client`), engine and `../video` (`test:python`). The ones that load the real model are skipped until `npm run setup` has run |
 | `npm run lint` | ESLint over the server, the lesson writer and the page |
@@ -208,7 +208,7 @@ For the desktop app, add an entry to `~/Library/Application Support/Claude/claud
 }
 ```
 
-Or run `npm run mcp:pack` and open `dist/narrated-proofs.mcpb` straight away (the next `npm run app` empties `dist/`). The connector talks to the running dashboard (`NARRATED_PROOFS_URL`, default `http://127.0.0.1:8787`); with `TTS_MCP_AUTOSTART=1`, as above, the stdio connector starts the dashboard when it is not running. Check it from Claude Code with `claude mcp list`, or ask Claude to list the voices. claude.ai in a browser is not supported: it would need this Mac reachable from the internet.
+Or run `npm run mcp:pack` and open `extension/narrated-proofs.mcpb`. The connector talks to the running dashboard (`NARRATED_PROOFS_URL`, default `http://127.0.0.1:8787`); with `TTS_MCP_AUTOSTART=1`, as above, the stdio connector starts the dashboard when it is not running. Check it from Claude Code with `claude mcp list`, or ask Claude to list the voices. claude.ai in a browser is not supported: it would need this Mac reachable from the internet.
 
 | Tool | Does |
 | --- | --- |

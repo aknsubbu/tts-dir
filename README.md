@@ -215,7 +215,7 @@ With the dashboard running, Claude Code can make lessons from a conversation ("m
 claude mcp add --transport http narrated-proofs http://localhost:8787/mcp
 ```
 
-**Settings → Connect Claude** shows this command with your port, a version that starts the connector itself, and the entry for the Claude desktop app's `claude_desktop_config.json`. `npm run mcp:pack` in `tts-studio` makes a desktop extension, `tts-studio/dist/narrated-proofs.mcpb`, to open instead; open it straight away, since `npm run app` empties `dist/`. The tools are listed in [tts-studio/README.md](tts-studio/README.md#make-lessons-from-claude-the-mcp-connector).
+**Settings → Connect Claude** shows this command with your port, a version that starts the connector itself, and the entry for the Claude desktop app's `claude_desktop_config.json`. `npm run mcp:pack` in `tts-studio` makes a desktop extension, `tts-studio/extension/narrated-proofs.mcpb`, to open instead. The tools are listed in [tts-studio/README.md](tts-studio/README.md#make-lessons-from-claude-the-mcp-connector).
 
 ## Updating
 

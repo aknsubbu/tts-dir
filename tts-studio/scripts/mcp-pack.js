@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Package the MCP connector as a Claude desktop extension: dist/narrated-proofs.mcpb.
+// Package the MCP connector as a Claude desktop extension: extension/narrated-proofs.mcpb.
+// Not in dist/, which the page's build empties every time it runs.
 // Open the file and the desktop app installs it. The extension runs mcp/stdio.js from this
 // folder, so it works on this Mac only, and only while the folder stays where it is.
 import { execFileSync } from 'node:child_process';
@@ -26,6 +27,9 @@ const manifest = {
   },
   tools: [
     ['make_lesson', 'Start a lesson from a topic, notes and files'],
+    ['revise_lesson', 'Ask for a change to a lesson'],
+    ['approve_lesson', 'Continue a lesson waiting on its storyboard, narration or outline'],
+    ['redo_outline', "Have a long lesson's outline written again"],
     ['wait_for_lesson', 'Follow a lesson through its stages'],
     ['lesson_status', 'Where a lesson is'],
     ['search_lessons', 'Search the library'],
@@ -48,7 +52,7 @@ fs.writeFileSync(path.join(work, 'manifest.json'), `${JSON.stringify(manifest, n
 fs.writeFileSync(path.join(work, 'server', 'index.js'), `// Runs the Narrated Proofs connector from where it is installed.\nawait import(${JSON.stringify(new URL(`file://${stdio}`).href)});\n`);
 fs.writeFileSync(path.join(work, 'package.json'), `${JSON.stringify({ name: 'narrated-proofs-mcpb', private: true, type: 'module' }, null, 2)}\n`);
 
-const out = path.join(root, 'dist', 'narrated-proofs.mcpb');
+const out = path.join(root, 'extension', 'narrated-proofs.mcpb');
 fs.mkdirSync(path.dirname(out), { recursive: true });
 fs.rmSync(out, { force: true });
 try {
