@@ -59,7 +59,13 @@ const path = require('node:path');
 const [root, ...flags] = process.argv.slice(2);
 const scenes = fs.readFileSync(path.join(root, 'scenes.py'), 'utf8');
 const script = fs.readFileSync(path.join(root, 'script.txt'), 'utf8');
-fs.appendFileSync(path.join(process.env.FAKE_CLAUDE_DIR, 'checked.jsonl'), JSON.stringify({ root, flags, scenes }) + '\\n');
+// A lock file shows whether two checks ever ran at once; SLOW makes a check last long enough to tell.
+const lock = path.join(process.env.FAKE_CLAUDE_DIR, 'check.lock');
+const overlap = fs.existsSync(lock);
+fs.writeFileSync(lock, root);
+process.on('exit', () => fs.rmSync(lock, { force: true }));
+if (scenes.includes('SLOW')) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 400);
+fs.appendFileSync(path.join(process.env.FAKE_CLAUDE_DIR, 'checked.jsonl'), JSON.stringify({ root, flags, scenes, overlap }) + '\\n');
 if (scenes.includes('CRASH')) { console.error('check.py: boom'); process.exit(2); }
 const names = [...scenes.matchAll(/^class (\\w+)\\(VoiceoverScene/gm)].map((m) => m[1]);
 const project = JSON.parse(fs.readFileSync(path.join(root, 'project.json'), 'utf8'));

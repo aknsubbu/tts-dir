@@ -327,7 +327,9 @@ test('over HTTP: bad requests and failures', async () => {
   assert.match(job.error, /Credit balance is too low/);
 });
 
-test('over HTTP: cancelling kills Claude and whatever it started; queued jobs wait their turn', async () => {
+test('over HTTP: cancelling kills Claude and whatever it started; queued jobs wait their turn', async (t) => {
+  box.config.authorParallel = 1;
+  t.after(() => (box.config.authorParallel = 2));
   box.answers([{ hang: true }, answer()]);
   const first = (await j('POST', '/lessons', { project: 'http-3', ...BRIEF })).data.job;
   const second = (await j('POST', '/lessons', { project: 'http-4', ...BRIEF })).data.job;
@@ -341,4 +343,35 @@ test('over HTTP: cancelling kills Claude and whatever it started; queued jobs wa
   assert.equal((await settled(first.id)).status, 'cancelled');
   await until(() => !alive(pid));
   assert.equal((await settled(second.id)).status, 'done', 'the next job runs once the first is out of the way');
+});
+
+test('over HTTP: two lessons are written at once, but their checks take turns', async () => {
+  box.answers([answer('# SLOW'), answer('# SLOW')]);
+  const one = (await j('POST', '/lessons', { project: 'side-1', ...BRIEF })).data.job;
+  const two = (await j('POST', '/lessons', { project: 'side-2', ...BRIEF })).data.job;
+  assert.equal(two.status, 'working', 'the second does not wait for the first');
+  assert.equal((await settled(one.id)).status, 'done');
+  assert.equal((await settled(two.id)).status, 'done');
+  const checks = box.checked();
+  assert.equal(checks.length, 2);
+  assert.ok(checks.every((c) => !c.overlap), 'never two checks at the same time');
+});
+
+test('over HTTP: a check job checks the files as they are, asking Claude nothing', async () => {
+  box.answers([answer()]);
+  const written = (await j('POST', '/lessons', { project: 'recheck', ...BRIEF })).data.job;
+  assert.equal((await settled(written.id)).status, 'done');
+  fs.appendFileSync(path.join(box.project('recheck'), 'scenes.py'), '# CROWDED\n');
+  box.answers([]);
+  const checking = (await j('POST', '/lessons', { project: 'recheck', kind: 'check' })).data.job;
+  assert.equal(checking.kind, 'check');
+  const done = await settled(checking.id);
+  assert.equal(done.status, 'done');
+  assert.equal(done.stage, 'Checked');
+  assert.equal(done.result.warnings.length, 1);
+  assert.equal(box.asked().length, 0);
+  assert.ok(box.exists('recheck', 'build/check/storyboard.json'));
+  assert.equal((await j('POST', '/lessons', { project: 'recheck', kind: 'nonsense' })).status, 400);
+  const empty = (await j('POST', '/lessons', { project: 'never-written', kind: 'check' })).data.job;
+  assert.match((await settled(empty.id)).error, /no script and scenes to check/);
 });

@@ -37,6 +37,16 @@ export function normalizeDraft(answer) {
  * `ask`, `check` and `autofix` can be replaced in tests.
  */
 export function createAuthor({ getConfig, ask = askClaude, check = runCheck, autofix = runAutofix }) {
+  // Jobs run side by side, but a check speaks with Kokoro and runs manim: one at a time.
+  const checkTurn = createTurns();
+  const inTurn = async (root, { config, signal, onStage, label }) => {
+    if (checkTurn.busy()) onStage('Waiting for another lesson to finish its check');
+    return checkTurn.take(() => {
+      onStage(label);
+      return check(root, { config, signal });
+    }, signal);
+  };
+
   async function write(job, { signal, onStage = () => {} } = {}) {
     const config = getConfig();
     if (!PROJECT_NAME.test(job.project)) throw new AuthorError('That project name is not usable.');
@@ -84,8 +94,7 @@ export function createAuthor({ getConfig, ask = askClaude, check = runCheck, aut
       scenes: fs.readFileSync(path.join(root, 'scenes.py'), 'utf8'),
     });
     const inspect = async (label) => {
-      onStage(label);
-      const report = await check(root, { config, signal });
+      const report = await inTurn(root, { config, signal, onStage, label });
       step += 1;
       fs.writeFileSync(path.join(log, `${String(step).padStart(2, '0')}-check.json`), JSON.stringify(report, null, 2));
       return report;
@@ -178,7 +187,45 @@ export function createAuthor({ getConfig, ask = askClaude, check = runCheck, aut
     return result;
   }
 
-  return { write };
+  /**
+   * Check a project's files as they are, for the storyboard after an edit: no Claude, no fixes.
+   * Returns the check's report; the storyboard is in the project's build/check/.
+   */
+  async function checkOnly(job, { signal, onStage = () => {} } = {}) {
+    const config = getConfig();
+    if (!PROJECT_NAME.test(job.project)) throw new AuthorError('That project name is not usable.');
+    const root = path.join(config.videoDir, 'projects', job.project);
+    if (!FILES.every((f) => fs.existsSync(path.join(root, f)))) throw new AuthorError('This project has no script and scenes to check yet.');
+    fs.mkdirSync(path.join(root, 'build', 'author'), { recursive: true });
+    return inTurn(root, { config, signal, onStage, label: 'Checking the scenes' });
+  }
+
+  return { write, check: checkOnly };
+}
+
+/** A queue of turns: take(fn) runs fn once every earlier taker is done. Cancelling a wait leaves the queue. */
+export function createTurns() {
+  let tail = Promise.resolve();
+  let waiting = 0;
+  return {
+    busy: () => waiting > 0,
+    take(fn, signal) {
+      const before = tail;
+      let done;
+      const mine = new Promise((resolve) => (done = resolve));
+      tail = before.then(() => mine);
+      waiting += 1;
+      const turn = new Promise((resolve, reject) => {
+        before.then(resolve);
+        if (signal?.aborted) reject(new AuthorError('Cancelled', 'aborted'));
+        signal?.addEventListener('abort', () => reject(new AuthorError('Cancelled', 'aborted')), { once: true });
+      });
+      return turn.then(fn).finally(() => {
+        waiting -= 1;
+        done();
+      });
+    },
+  };
 }
 
 /** Token counts and cost over every request, with the requests themselves. */
