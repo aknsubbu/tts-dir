@@ -228,20 +228,20 @@ def try_scene(root, config, scene, report):
     out = root / "build" / "check"
     result = out / f"{scene}.json"
     result.unlink(missing_ok=True)
-    env = {
-        **os.environ,
+    env, manim_args, limits = sandbox.prepare(root, {
         "VOICEOVER_MANIFEST": str(root / "build" / "manifest.json"),
         "VOICEOVER_REPORT": str(result),
         "VOICEOVER_SNAPSHOTS": str(out / "frames"),
         "PYTHONPATH": os.pathsep.join(filter(None, [str(HERE), os.environ.get("PYTHONPATH")])),
         "COLUMNS": "200", "NO_COLOR": "1", "TERM": "dumb",
-    }
+    })
     print(f"$ manimgl {config['scenes_file']} {scene} -s", file=sys.stderr, flush=True)
+    cmd = [build.MANIMGL, str(root / config["scenes_file"]), scene, "-s", "-w", "-l", "--video_dir", str(out), *manim_args]
     try:
         done = subprocess.run(
-            sandbox.wrap([build.MANIMGL, str(root / config["scenes_file"]), scene, "-s", "-w", "-l", "--video_dir", str(out)], root),
+            sandbox.wrap(cmd, root),
             cwd=root, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, timeout=SCENE_TIMEOUT,
+            text=True, timeout=SCENE_TIMEOUT, preexec_fn=limits,
         )
     except subprocess.TimeoutExpired:
         return report.error(scene, f"the scene did not finish within {SCENE_TIMEOUT} seconds; it may loop forever")
