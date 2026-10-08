@@ -2,6 +2,9 @@
 import sys
 import types
 import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "runtime"))  # where scenes import it from
 
 
 class Obj:

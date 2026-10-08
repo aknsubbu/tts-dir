@@ -285,7 +285,7 @@ def try_scene(root, config, scene, report):
         "VOICEOVER_MANIFEST": str(root / "build" / "manifest.json"),
         "VOICEOVER_REPORT": str(result),
         "VOICEOVER_SNAPSHOTS": str(out / "frames"),
-        "PYTHONPATH": os.pathsep.join(filter(None, [str(HERE), os.environ.get("PYTHONPATH")])),
+        "PYTHONPATH": os.pathsep.join(filter(None, [str(sandbox.RUNTIME), os.environ.get("PYTHONPATH")])),
         "COLUMNS": "200", "NO_COLOR": "1", "TERM": "dumb",
     })
     print(f"$ manimgl {config['scenes_file']} {scene} -s", file=sys.stderr, flush=True)
@@ -302,7 +302,9 @@ def try_scene(root, config, scene, report):
         return None, message
     data = json.loads(result.read_text(encoding="utf-8")) if result.is_file() else None
     if done.returncode:
-        report.error(scene, tidy(done.stdout))
+        # A failure that never reaches scenes.py is not the scene's code: the sandbox may have stopped it.
+        mine = config["scenes_file"] in done.stdout
+        report.error(scene, " ".join(filter(None, [tidy(done.stdout), sandbox.hint(done.stdout) or ("" if mine else sandbox.hint())])))
         return data, report.errors[-1]["message"]  # what it drew before failing still goes on the storyboard
     if data is None:
         message = "the scene ran but played no narration; it needs at least one `with self.voiceover(...)` block"

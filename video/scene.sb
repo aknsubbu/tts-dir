@@ -1,4 +1,6 @@
-; What a scene may do while manimgl runs it. See sandbox.py. Later rules win.
+; What a scene may do while manimgl runs it. See sandbox.py, which adds the rules for reading,
+; starting programs and private folders after these, found on this Mac when the scene runs.
+; Later rules win.
 (version 1)
 (allow default)
 
@@ -11,7 +13,7 @@
 ; Write only in the project's build/ folder (renders, the check's report, LaTeX's working
 ; files, its own temporary folder) and the cache kept for scenes. Not the project's own
 ; script, scenes or notes, and not the caches other programs keep in the home folder.
-; The system temporary folders stay open until probing shows exactly what the GPU writes there.
+; The system temporary folders stay open: the GPU keeps its shader cache there.
 (deny file-write*)
 (allow file-write*
   (subpath (param "BUILD"))

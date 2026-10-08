@@ -30,6 +30,7 @@ import sandbox
 from captions import block_cues, group_cues, join_tokens, to_srt, to_vtt
 
 HERE = Path(__file__).resolve().parent
+RUNTIME = sandbox.RUNTIME  # what scenes import besides manim, and nothing else
 KOKORO_PYTHON = os.environ.get("KOKORO_PYTHON") or str(HERE.parent / "tts-studio" / ".venv" / "bin" / "python")
 MANIMGL = os.environ.get("MANIMGL") or str(HERE / ".venv" / "bin" / "manimgl")
 QUALITY = {"low": ["-l"], "medium": ["-m"], "hd": ["--hd"], "4k": ["--uhd"], "default": []}
@@ -78,7 +79,7 @@ def render(root, config, scene, quality):
     env, manim_args, limits = sandbox.prepare(root, {
         "VOICEOVER_MANIFEST": str(build / "manifest.json"),
         "VOICEOVER_TIMELINE": str(timeline),
-        "PYTHONPATH": os.pathsep.join(filter(None, [str(HERE), os.environ.get("PYTHONPATH")])),
+        "PYTHONPATH": os.pathsep.join(filter(None, [str(RUNTIME), os.environ.get("PYTHONPATH")])),
     })
     started = time.time()
     # Never -n or -s: manim drops add_sound() while skipping, so a partial render loses audio.
@@ -86,7 +87,7 @@ def render(root, config, scene, quality):
     cmd = [MANIMGL, root / config["scenes_file"], scene, "-w", *QUALITY[quality], "--video_dir", build / "scenes", *manim_args]
     run(
         sandbox.wrap(cmd, root),
-        failed=f"rendering {scene} failed; see the manimgl output above",
+        failed=" ".join(filter(None, [f"rendering {scene} failed; see the manimgl output above.", sandbox.hint()])),
         timeout=SCENE_TIMEOUT,
         cwd=root,
         env=env,
@@ -120,7 +121,7 @@ def scene_keys(root, config, manifest, quality):
     shared = {
         "v": CACHE_VERSION,
         "quality": quality,
-        "runtime": hashlib.sha256((HERE / "voiceover.py").read_bytes() + (HERE / "kit.py").read_bytes()).hexdigest(),
+        "runtime": hashlib.sha256((RUNTIME / "voiceover.py").read_bytes() + (RUNTIME / "kit.py").read_bytes()).hexdigest(),
         "manim": manim_fingerprint(),
         "custom_config": custom.read_text(encoding="utf-8") if custom.is_file() else None,
     }
@@ -301,18 +302,18 @@ def title_card(root, n, title, quality):
     if not Path(MANIMGL).exists():
         raise BuildError(f"No manimgl at {MANIMGL}. Set up video/.venv (see video/README.md), or set MANIMGL.")
     cards = root / "build" / "cards"
-    key = hashlib.sha256(json.dumps([n, title, quality, (HERE / "cards.py").read_text(encoding="utf-8"), manim_fingerprint()]).encode()).hexdigest()[:16]
+    key = hashlib.sha256(json.dumps([n, title, quality, (RUNTIME / "cards.py").read_text(encoding="utf-8"), manim_fingerprint()]).encode()).hexdigest()[:16]
     out = cards / f"card-{n:02}-{key}.mp4"
     if out.is_file():
         print(f"$ cached title card {n}", file=sys.stderr, flush=True)
         return out
     env, manim_args, limits = sandbox.prepare(root, {
         "TITLE_CARD_NUMBER": f"Chapter {n}", "TITLE_CARD_TITLE": title,
-        "PYTHONPATH": os.pathsep.join(filter(None, [str(HERE), os.environ.get("PYTHONPATH")])),
+        "PYTHONPATH": os.pathsep.join(filter(None, [str(RUNTIME), os.environ.get("PYTHONPATH")])),
     })
     started = time.time()
-    run(sandbox.wrap([MANIMGL, HERE / "cards.py", "TitleCard", "-w", *QUALITY[quality], "--video_dir", cards / "render", *manim_args], root),
-        failed=f"rendering the title card for chapter {n} failed", timeout=600, cwd=root, env=env, preexec_fn=limits)
+    run(sandbox.wrap([MANIMGL, RUNTIME / "cards.py", "TitleCard", "-w", *QUALITY[quality], "--video_dir", cards / "render", *manim_args], root),
+        failed=" ".join(filter(None, [f"rendering the title card for chapter {n} failed.", sandbox.hint()])), timeout=600, cwd=root, env=env, preexec_fn=limits)
     found = [p for p in (cards / "render").rglob("TitleCard.mp4") if p.stat().st_mtime >= started - 1]
     if not found:
         raise BuildError("manimgl finished but wrote no title card")

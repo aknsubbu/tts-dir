@@ -5,9 +5,11 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 
-from voiceover import VoiceoverError, VoiceoverScene
+sys.path.insert(0, str(Path(__file__).resolve().parent / "runtime"))  # where scenes import it from
+from voiceover import VoiceoverError, VoiceoverScene  # noqa: E402
 
 
 class FakeClock:

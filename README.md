@@ -103,7 +103,7 @@ What a lesson sends, by writer. Settings → Lesson writer says the same for the
 
 - **Stays local:** speech, rendering and the library. The server listens on `127.0.0.1` only and refuses requests from pages on other sites; the MCP connector's `/mcp` address is behind the same checks.
 - **Keys** are kept in the macOS Keychain, are never shown again in the page, and never reach the scenes or `claude -p`.
-- **The code the writer produces runs in a sandbox:** no network, no Apple Events, no writing outside the lesson's `build/` folder and a cache kept for scenes, and none of the environment's API keys or tokens. It can still read most files, so it is confinement, not isolation. Details are in [video/README.md](video/README.md#the-sandbox).
+- **The code the writer produces runs in a sandbox:** no network; no writing outside the lesson's `build/` folder and a cache kept for scenes; reading only the lesson and what rendering needs; starting no program but Python, ffmpeg and TeX; no Apple Events, Launch Services or clipboard; and none of the environment's API keys or tokens. Details are in [video/README.md](video/README.md#the-sandbox).
 - **Claude in a conversation** can start lessons and change the settings you allow, but never add a provider, change an address, touch a key or raise a spending cap.
 
 ## Tests
@@ -132,7 +132,7 @@ None of these exist yet.
 
 - **Claude in a browser.** The MCP connector works with Claude Code and the desktop app. claude.ai connects from Anthropic's servers, so it would need this Mac reachable over HTTPS with a login in front: a tunnel, OAuth, and expiring links for videos.
 - **Write it in the conversation.** Tools that hand Claude Code the lesson guide and let it submit a script and scenes itself, so the conversation's own Claude writes the lesson with everything it already knows.
-- **Stronger isolation for scenes.** The sandbox blocks the network, Apple Events and writes outside `build/`, and scenes no longer see the environment's secrets, but a scene can still read most files, start other programs and reach system services. Reading could be limited to the project, the ManimGL install, fonts and TeX, and starting programs to ffmpeg and TeX, once a probe on a Mac shows exactly what rendering needs.
-- **Other platforms.** Attached photos and documents, and the sandbox, rely on tools that ship with macOS. Linux needs replacements for `sips`, `textutil` and `sandbox-exec`.
+- **The sandbox's rules, from more Macs.** Scenes now read only what rendering needs and start only Python, ffmpeg and TeX, with the paths found on each Mac. The rules were written from how ManimGL, TeX and ffmpeg are installed and started, not yet from a run on a Mac; `python3 video/sandbox_probe.py` renders under them and lists anything a Mac's setup needs beyond them, which is what would widen them.
+- **Other platforms.** Attached photos and documents, and the sandbox, rely on tools that ship with macOS. Linux needs replacements for `sips`, `textutil` and `sandbox-exec` (bubblewrap, say); there scenes run with the short environment and the limits, but unconfined.
 - **Word-level sync in other languages.** Only the English voices report word timings, so lessons are English only.
 - **More of the page under test.** The lesson form, the workspace and its Outline, Edit and History tabs, the storyboard, Settings, the library's cards, the API wrapper and the helpers are tested; the audio details panel and drag and drop are not.

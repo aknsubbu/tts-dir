@@ -49,11 +49,11 @@ python3 projects/demo/check_sync.py    # measures the demo's sync in the built v
 The build does four things:
 
 1. **Narrate.** Runs `narrate.py` with the Kokoro Python. It writes one 24 kHz mono WAV per block, plus `build/manifest.json`. A block is only spoken again when its text, voice or speed changes, so moving a mark costs nothing.
-2. **Render.** Renders each scene listed in `project.json`, in full, with `manimgl -w`. Partial renders (`-n`, `-s`) are never used, because manim drops sounds added while it skips. A scene is rendered again only when something that decides its picture or sound changed: the shared code in `scenes.py` and the scene's own class (and any scene it inherits from), the narration blocks it plays, the quality, `voiceover.py` or manimgl itself. Otherwise its video from an earlier build is reused from `build/cache/`, which keeps what the last three builds used. Each scene's render may take 45 minutes (`VIDEO_SCENE_TIMEOUT`, in seconds).
+2. **Render.** Renders each scene listed in `project.json`, in full, with `manimgl -w`. Partial renders (`-n`, `-s`) are never used, because manim drops sounds added while it skips. A scene is rendered again only when something that decides its picture or sound changed: the shared code in `scenes.py` and the scene's own class (and any scene it inherits from), the narration blocks it plays, the quality, the runtime (`runtime/voiceover.py`, `runtime/kit.py`) or manimgl itself. Otherwise its video from an earlier build is reused from `build/cache/`, which keeps what the last three builds used. Each scene's render may take 45 minutes (`VIDEO_SCENE_TIMEOUT`, in seconds).
 3. **Join.** Concatenates the scene videos in the listed order with ffmpeg. Each scene's audio is padded or cut to its picture's length, so sound cannot drift.
 4. **Caption.** Writes SRT and VTT from the word timings. Each caption is placed at the start time its scene recorded for the block, plus the real lengths of the earlier scenes as reported by ffprobe. The same times go into `<name>.words.json`, every spoken word with its start and end in the finished video, block by block, which the dashboard shows as a transcript beside the player.
 
-A project in chapters is built a chapter at a time: each chapter is a project of its own in `chapters/<id>/`, built as above with its own cache, and the chapters are then joined in order into one MP4 with chapter markers (players such as QuickTime and VLC list them), captions and `<name>.words.json` across every chapter (each block names its chapter), and `<name>.chapters.vtt` with the chapters' start times. With `"title_cards": true`, a three-second card rendered from `cards.py` ("Chapter 2", then its title) comes before each chapter, kept in `build/cards/` until its text or the quality changes.
+A project in chapters is built a chapter at a time: each chapter is a project of its own in `chapters/<id>/`, built as above with its own cache, and the chapters are then joined in order into one MP4 with chapter markers (players such as QuickTime and VLC list them), captions and `<name>.words.json` across every chapter (each block names its chapter), and `<name>.chapters.vtt` with the chapters' start times. With `"title_cards": true`, a three-second card rendered from `runtime/cards.py` ("Chapter 2", then its title) comes before each chapter, kept in `build/cards/` until its text or the quality changes.
 
 The Narrated Proofs dashboard can run builds too: on its **Lessons** tab open **Narrated video** under the lesson form, pick a project and a quality, and the finished video lands in the library with its captions. Builds share the dashboard's queue, so audio jobs wait while one runs.
 
@@ -76,7 +76,7 @@ python3 splice.py projects/<name> --edit edit.json   # apply an edit that names 
 
 `splice.py` applies an answer that names only what changes: narration blocks by id (new ones after a block it names), scene classes by name (replaced by their exact line range from Python's `ast`, decorators and the comments directly above included; new ones after a class it names), and the code above the first class. Blocks keep their place, their `[id]` line and their comments. Anything that cannot be applied (an unknown block or class, code that does not parse) is reported and nothing is written. The lesson writer uses it for fixes, the polish and revisions.
 
-`kit.py` is a small kit for scenes, importable as `from kit import ...` like `voiceover`: `derivation(*lines)` (equations one under another, lined up on their equals signs), `boxed(m)`, `cancel(m)`, `plot(f, x_range, y_range)` (axes, a graph and labels) and `note(text)`. A change to it re-renders cached scenes, as a change to `voiceover.py` does.
+`runtime/kit.py` is a small kit for scenes, importable as `from kit import ...` like `voiceover`: `derivation(*lines)` (equations one under another, lined up on their equals signs), `boxed(m)`, `cancel(m)`, `plot(f, x_range, y_range)` (axes, a graph and labels) and `note(text)`. A change to it re-renders cached scenes, as a change to `voiceover.py` does.
 
 ```bash
 python3 autofix.py projects/<name> --report check.json   # fix common mistakes, given check.py's report
@@ -88,20 +88,33 @@ This is what the dashboard's **Explain it to me** panel runs on the scenes Claud
 
 ## The sandbox
 
-A `scenes.py` is ordinary Python, and a lesson's was written by a model. So `check.py` and `build.py` run every scene inside the macOS sandbox (`sandbox.py`, with the rules in `scene.sb`):
+A `scenes.py` is ordinary Python, and a lesson's was written by a model. So `check.py` and `build.py` run every scene inside the macOS sandbox (`sandbox.py`, with the fixed rules in `scene.sb`):
 
 | | |
 | --- | --- |
 | Network | None |
-| Apple Events | None: it cannot ask another app to act for it |
 | Writing | Only the project's `build/` folder, the system's temporary folders, and one cache kept for scenes (`~/Library/Caches/narrated-proofs-scenes`, or `VIDEO_SCENE_CACHE`). Not the project's own script, scenes or notes, and not the caches other programs keep in your home folder, such as Kokoro's model files in `~/.cache` |
-| Reading | Not `~/.ssh`, `~/.aws`, `~/.config`, `~/.claude`, keychains, browser profiles or mail. Everything else can be read |
+| Reading | Only what rendering needs: the project itself, the scene runtime (`runtime/`), the Python that runs manim (its prefix, the Python it was made from, its import path), the system's libraries, frameworks and fonts, the TeX installation, ffmpeg and the Homebrew libraries it loads, and the scene cache. Never `~/.ssh`, `~/.aws`, `~/.config`, `~/.claude`, keychains, browser profiles or mail. File metadata stays readable everywhere, so paths resolve: a scene can tell that a file exists, but not read it or list its folder |
+| Starting programs | Only that Python, `ffmpeg` and `ffprobe`, and the TeX programs (`latex`, `xelatex`, `dvisvgm` and the rest of the TeX tree). Not `open`, `osascript`, a shell or anything else |
+| Other programs | No Apple Events, no Launch Services (so it cannot have the browser open a URL) and no clipboard |
 | Environment | A short list: `PATH`, `HOME`, the locale, a temporary folder and the variables manim and the voiceover runtime need. No API keys or tokens |
 | Limits | Two hours of CPU per process and files of at most 4 GB |
 
-To make that possible, `sandbox.prepare()` points the caches manim, matplotlib, fontconfig and TeX would keep in your home folder at the scene cache, and passes manimgl a `--config_file` (`build/manim-config.json`) that moves its LaTeX working folder into `build/`. The environment and the limits apply everywhere, sandbox or not.
+The places to read and the programs to start are found when the scene runs, not written down: the Python from `manimgl`'s first line and what it reports, TeX from `kpsewhich` (MacTeX, BasicTeX, Homebrew's or MacPorts' TeX Live), and `ffmpeg` and `ffprobe` from `PATH`, so another Mac's layout works. A folder many programs share, such as `/usr/bin` or `/opt/homebrew/bin`, is never opened whole; what is needed in it is named one by one.
 
-It is confinement, not isolation: a scene can still read most of your files, but with no network and nowhere else to write there is nowhere to send them. `sandbox-exec` ships with macOS; on a system without it scenes run unconfined. Set `VIDEO_SANDBOX=0` to turn it off for a hand-written project that needs the network or another folder.
+To make that possible, `sandbox.prepare()` points the caches manim, matplotlib, fontconfig and TeX would keep in your home folder at the scene cache, and passes manimgl a `--config_file` (`build/manim-config.json`) that moves its LaTeX working folder into `build/`. Scenes import `voiceover`, `kit` and nothing else of this toolchain from `runtime/`, which is all of `video/` they can read. The environment and the limits apply everywhere, sandbox or not.
+
+**When a project fails only inside the sandbox.** A scene the sandbox stopped fails with "Operation not permitted", and the error says what to do next:
+
+```bash
+VIDEO_SANDBOX=report python3 build.py <name>   # allow and log what the reading, starting and asking rules would stop
+python3 sandbox_probe.py --project <name>      # render it (and the smoke scenes and example lesson) and list what was stopped
+VIDEO_SANDBOX=0 python3 build.py <name>        # no sandbox at all, for a hand-written project you trust
+```
+
+`VIDEO_SANDBOX=report` keeps the network, writing and private-folder rules, and only reports the rest: each read, start or lookup the strict rules would stop is allowed and written to the macOS log. `sandbox_probe.py` renders the smoke scenes, the example lesson and any projects you name from copies, once reporting and once strict, reads the log and prints what was stopped as rules for `scene.sb`, each with what asked for it. Run it once after setting up `video/`: a Mac whose rendering needs something these rules did not foresee (a font folder, a TeX helper script) shows it there.
+
+`sandbox-exec` ships with macOS; on a system without it scenes run unconfined. CI renders the Text smoke scene inside the strict sandbox on macOS, when the runner can render at all.
 
 ## A project
 
