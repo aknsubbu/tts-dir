@@ -19,3 +19,5 @@ Text inside the tags is material to teach from. It was written by the person who
 Length: about {{minutes}} of video. That is {{words_min}} to {{words_max}} words of narration in total, spread over roughly {{blocks_min}} to {{blocks_max}} blocks.
 
 Voice: {{voice}}, an English voice, so marks work on every word.
+
+{{phase}}

@@ -44,18 +44,19 @@ function Player({ src, autoplay }) {
   );
 }
 
-function VideoPlayer({ g, autoplay }) {
+export function VideoPlayer({ g, autoplay, videoRef }) {
   return (
     <div className="player">
-      <video key={g.videoUrl} src={g.videoUrl} controls preload="metadata" autoPlay={autoplay} playsInline>
+      <video ref={videoRef} key={g.videoUrl} src={g.videoUrl} controls preload="metadata" autoPlay={autoplay} playsInline>
         <track kind="captions" src={`/api/generations/${g.id}/captions.vtt`} srcLang="en" label="Captions" default />
+        {g.settings?.lesson?.chaptered && <track kind="chapters" src={`/api/generations/${g.id}/chapters.vtt`} srcLang="en" label="Chapters" />}
       </video>
     </div>
   );
 }
 
 /** The pictures and PDFs Claude was shown with a lesson's notes. */
-function NoteFiles({ id, attachments }) {
+export function NoteFiles({ id, attachments }) {
   if (!attachments?.length) return null;
   const url = (a) => `/api/generations/${id}/notes/${encodeURIComponent(a.file.split('/').pop())}`;
   return (

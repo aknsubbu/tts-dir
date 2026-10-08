@@ -19,10 +19,20 @@ const argv = process.argv.slice(2);
 const flag = (name) => argv[argv.indexOf(name) + 1];
 let stdin = '';
 process.stdin.on('data', (d) => (stdin += d)).on('end', () => {
-  const file = path.join(dir, 'answers.json');
-  const answers = JSON.parse(fs.readFileSync(file, 'utf8'));
-  const next = answers.shift();
-  fs.writeFileSync(file, JSON.stringify(answers));
+  // Two lessons may ask at once: take the next answer under a lock, so neither reads the list half-written.
+  const lock = path.join(dir, 'answers.lock');
+  for (;;) {
+    try { fs.mkdirSync(lock); break; } catch { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5); }
+  }
+  let next;
+  try {
+    const file = path.join(dir, 'answers.json');
+    const answers = JSON.parse(fs.readFileSync(file, 'utf8'));
+    next = answers.shift();
+    fs.writeFileSync(file, JSON.stringify(answers));
+  } finally {
+    fs.rmdirSync(lock);
+  }
   // The message arrives as one stream-json line: text blocks, and pictures or PDFs in base64.
   const content = JSON.parse(stdin.trim().split('\\n')[0]).message.content;
   const prompt = content.filter((c) => c.type === 'text').map((c) => c.text).join('\\n');
@@ -37,7 +47,11 @@ process.stdin.on('data', (d) => (stdin += d)).on('end', () => {
   if (next.raw !== undefined) return console.log(next.raw);
   const result = next.error
     ? { type: 'result', subtype: 'error_during_execution', is_error: true, result: next.error }
-    : { type: 'result', subtype: 'success', is_error: false, result: JSON.stringify(next), structured_output: next, total_cost_usd: 0.25 };
+    : {
+        type: 'result', subtype: 'success', is_error: false, result: JSON.stringify(next), structured_output: next, total_cost_usd: 0.25, duration_ms: 1200,
+        usage: { input_tokens: 900, cache_read_input_tokens: 6000, cache_creation_input_tokens: 0, output_tokens: 4000 },
+        modelUsage: { 'claude-opus-5-5': { inputTokens: 900, outputTokens: 4000 } },
+      };
   // stream-json output: one event per line, the result last.
   console.log(JSON.stringify({ type: 'system', subtype: 'init', tools: [], schema: !!flag('--json-schema') }));
   console.log(JSON.stringify({ type: 'assistant', message: { content: [] } }));
@@ -55,7 +69,21 @@ const path = require('node:path');
 const [root, ...flags] = process.argv.slice(2);
 const scenes = fs.readFileSync(path.join(root, 'scenes.py'), 'utf8');
 const script = fs.readFileSync(path.join(root, 'script.txt'), 'utf8');
-fs.appendFileSync(path.join(process.env.FAKE_CLAUDE_DIR, 'checked.jsonl'), JSON.stringify({ root, flags, scenes }) + '\\n');
+// A lock file shows whether two checks ever ran at once; SLOW makes a check last long enough to tell.
+const lock = path.join(process.env.FAKE_CLAUDE_DIR, 'check.lock');
+const overlap = fs.existsSync(lock);
+fs.writeFileSync(lock, root);
+process.on('exit', () => fs.rmSync(lock, { force: true }));
+if (scenes.includes('SLOW')) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 400);
+// --static only reads the files: STATIC_BAD stands for what it would find, on its line.
+if (flags.includes('--static')) {
+  const line = scenes.split('\\n').findIndex((l) => l.includes('STATIC_BAD')) + 1;
+  fs.appendFileSync(path.join(process.env.FAKE_CLAUDE_DIR, 'checked.jsonl'), JSON.stringify({ root, flags, scenes, overlap }) + '\\n');
+  const errors = line ? [{ where: 'scenes.py', file: 'scenes.py', line, message: 'line ' + line + ': STATIC_BAD is not allowed in a scene' }] : [];
+  console.log(JSON.stringify({ ok: !errors.length, errors, warnings: [], scenes: [...scenes.matchAll(/^class (\\w+)\\(VoiceoverScene/gm)].map((m) => m[1]), blocks: [] }));
+  process.exit(errors.length ? 1 : 0);
+}
+fs.appendFileSync(path.join(process.env.FAKE_CLAUDE_DIR, 'checked.jsonl'), JSON.stringify({ root, flags, scenes, overlap }) + '\\n');
 if (scenes.includes('CRASH')) { console.error('check.py: boom'); process.exit(2); }
 const names = [...scenes.matchAll(/^class (\\w+)\\(VoiceoverScene/gm)].map((m) => m[1]);
 const project = JSON.parse(fs.readFileSync(path.join(root, 'project.json'), 'utf8'));
@@ -63,11 +91,33 @@ project.scenes = names;
 fs.writeFileSync(path.join(root, 'project.json'), JSON.stringify(project, null, 2));
 const errors = scenes.includes('BROKEN')
   ? [{ where: names[0] || 'scenes.py', message: 'Traceback (most recent call last):\\n  File "scenes.py", line 7, in construct\\nNameError: name \\'MathTex\\' is not defined' }]
-  : [];
+  : scenes.includes('FIXABLE')
+    ? [{ where: 'scenes.py', message: 'line 8: block "intro" has no mark "slpoe". Its marks: slope' }]
+    : [];
+// A storyboard like the real check's: one block, a still at its end.
+const frames = path.join(root, 'build', 'check', 'frames');
+fs.mkdirSync(frames, { recursive: true });
+fs.writeFileSync(path.join(frames, 'Intro-intro.png'), 'PNG');
+const still = { block: 'intro', mark: null, file: 'Intro-intro.png', at: 12.5 };
+const board = { version: 1, duration: 12.5, unplayed: [], scenes: names.map((name) => ({ name, error: null, end: null, issues: [], blocks: [{ id: 'intro', text: script.trim().split('\\n').slice(1).join('\\n'), duration: 12.5, start: 0, marks: { slope: 1.5 }, wav: 'audio/intro-x.wav', stills: [still], issues: [] }] })) };
+fs.writeFileSync(path.join(root, 'build', 'check', 'storyboard.json'), JSON.stringify(board));
 const warnings = [...scenes.matchAll(/CROWDED/g)].map(() => ({ where: names[0], message: 'text "A" and text "B" overlap at the end of block "intro"' }));
 console.error('$ narrate.py ' + root);
 console.log(JSON.stringify({ ok: !errors.length, errors, warnings, scenes: names, blocks: [{ id: 'intro', words: script.split(/\\s+/).length }], duration: 12.5 }));
 process.exit(errors.length ? 1 : 0);
+`;
+
+/** Stands in for video/autofix.py: rewrites FIXABLE to "autofixed" and says so. */
+const FAKE_AUTOFIX = `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+const [root] = process.argv.slice(2);
+const file = path.join(root, 'scenes.py');
+const scenes = fs.readFileSync(file, 'utf8');
+fs.appendFileSync(path.join(process.env.FAKE_CLAUDE_DIR, 'autofixed.jsonl'), JSON.stringify({ root, args: process.argv.slice(3) }) + '\\n');
+if (!scenes.includes('FIXABLE')) { console.log(JSON.stringify({ changed: false, fixes: [] })); process.exit(0); }
+fs.writeFileSync(file, scenes.replace(/FIXABLE/g, 'autofixed'));
+console.log(JSON.stringify({ changed: true, fixes: ['line 8: mark "slpoe" in block "intro" is "slope"'] }));
 `;
 
 export const SCRIPT = '[intro]\nEvery line has a <mark name="slope"/>slope.\n';
@@ -88,19 +138,26 @@ export function sandbox(dir) {
   fs.mkdirSync(path.join(videoDir, 'projects'), { recursive: true });
   const claudeBin = path.join(dir, 'fake-claude.js');
   const checkBin = path.join(dir, 'fake-check.js');
+  const autofixBin = path.join(dir, 'fake-autofix.js');
   fs.writeFileSync(claudeBin, FAKE_CLAUDE, { mode: 0o755 });
   fs.writeFileSync(checkBin, FAKE_CHECK, { mode: 0o755 });
+  fs.writeFileSync(autofixBin, FAKE_AUTOFIX, { mode: 0o755 });
   process.env.FAKE_CLAUDE_DIR = dir;
   const config = {
     videoDir,
     claudeBin,
     claudeModel: '',
-    claudeEffort: '',
+    claudeEffort: 'high',
+    claudeFixEffort: 'low',
+    claudePolishEffort: 'medium',
     claudeTimeoutMs: 20000,
     checkTimeoutMs: 20000,
     authorMaxFixes: 2,
     authorPolish: true,
+    authorVisualReview: false,
+    authorParallel: 2,
     authorCheck: [checkBin],
+    authorAutofix: [autofixBin],
     authorPort: 0,
     authorUrl: '',
   };
@@ -118,7 +175,9 @@ export function sandbox(dir) {
       fs.writeFileSync(path.join(dir, 'answers.json'), JSON.stringify(list));
       fs.rmSync(path.join(dir, 'asked.jsonl'), { force: true });
       fs.rmSync(path.join(dir, 'checked.jsonl'), { force: true });
+      fs.rmSync(path.join(dir, 'autofixed.jsonl'), { force: true });
     },
+    autofixed: () => lines('autofixed.jsonl'),
     asked: () => lines('asked.jsonl'),
     checked: () => lines('checked.jsonl'),
     project: (name) => path.join(videoDir, 'projects', name),

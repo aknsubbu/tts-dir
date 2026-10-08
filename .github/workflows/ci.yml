@@ -29,3 +29,37 @@ jobs:
       # skip themselves; everything else runs against fakes.
       - run: npm test
       - run: npm run build
+
+  render:
+    # A real render inside the strict scene sandbox: manimgl draws the Text smoke scene on the
+    # GPU and writes it through ffmpeg. No TeX, which is too large to install here.
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: video
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: brew install ffmpeg
+      - run: python -m venv .venv && .venv/bin/pip install -r requirements.txt
+      # manimgl draws with wgpu, which needs Metal. A runner without a usable GPU cannot render
+      # at all, sandbox or not; that is reported as a warning rather than as the sandbox failing.
+      - id: plain
+        name: Render without the sandbox
+        run: |
+          if .venv/bin/manimgl smoke/smoke_scene.py SmokeText -w -l --video_dir "$RUNNER_TEMP/plain"; then
+            echo "ok=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::This runner cannot render with manimgl, so the render inside the sandbox was skipped."
+          fi
+      - name: Render inside the strict sandbox
+        if: steps.plain.outputs.ok == '1'
+        run: python -m unittest test_sandbox -v
+      # What the strict rules stopped, from the macOS log, as rules for scene.sb: shown even when
+      # the render above failed, so one run says everything a Mac like this one needs.
+      - name: What the sandbox stopped
+        if: always() && steps.plain.outputs.ok == '1'
+        continue-on-error: true
+        run: python sandbox_probe.py

@@ -21,22 +21,35 @@ export function listProjects(videoDir) {
 export function readProject(videoDir, name) {
   if (!PROJECT_NAME.test(String(name))) return null;
   const root = path.join(videoDir, 'projects', name);
+  // What the library keeps and searches: the narration, without comments or mark tags.
+  const clean = (raw) => raw.split('\n').filter((l) => !l.trimStart().startsWith('#')).join('\n').replace(/<mark\b[^>]*\/>\s?/g, '').trim();
   try {
     const config = JSON.parse(fs.readFileSync(path.join(root, 'project.json'), 'utf8'));
-    const raw = fs.readFileSync(path.join(root, config.script || 'script.txt'), 'utf8');
-    // What the library keeps and searches: the narration, without comments or mark tags.
-    const script = raw
-      .split('\n')
-      .filter((l) => !l.trimStart().startsWith('#'))
-      .join('\n')
-      .replace(/<mark\b[^>]*\/>\s?/g, '')
-      .trim();
+    // A lesson in chapters: each chapter is a project in chapters/<id>/, built and joined by build.py.
+    const chapters = (Array.isArray(config.chapters) ? config.chapters : []).filter((c) => /^\d{2}-[a-z0-9-]{1,48}$/.test(String(c))).map((id) => {
+      const dir = path.join(root, 'chapters', id);
+      let scenes = [];
+      try {
+        scenes = JSON.parse(fs.readFileSync(path.join(dir, 'project.json'), 'utf8')).scenes || [];
+      } catch {
+        /* not written yet */
+      }
+      let text = '';
+      try {
+        text = clean(fs.readFileSync(path.join(dir, 'script.txt'), 'utf8'));
+      } catch {
+        /* not written yet */
+      }
+      return { id, title: config.chapter_titles?.[id] || id, scenes, script: text };
+    });
+    const script = chapters.length ? chapters.map((c) => c.script).filter(Boolean).join('\n\n') : clean(fs.readFileSync(path.join(root, config.script || 'script.txt'), 'utf8'));
     return {
       name,
       root,
       voice: config.voice || 'af_heart',
       speed: Number(config.speed) || 1,
       scenes: Array.isArray(config.scenes) ? config.scenes : [],
+      chapters,
       script,
     };
   } catch {
@@ -82,7 +95,8 @@ export function createVideoBuilder({ getConfig }) {
     const info = readProject(videoDir, project);
     if (!info) throw new EngineError(`No video project “${project}” in ${path.join(videoDir, 'projects')}.`, 'synthesis');
     const [cmd, ...pre] = videoBuild || ['python3', path.join(videoDir, 'build.py')];
-    const total = info.scenes.length + 2; // narrate, each scene, join
+    // narrate, each scene, join; for a lesson in chapters, that for each chapter, a card, and the final join
+    const total = info.chapters.length ? info.chapters.reduce((t, c) => t + c.scenes.length + 4, 1) : info.scenes.length + 2;
     let done = 0;
 
     return new Promise((resolve, reject) => {
@@ -126,7 +140,10 @@ export function createVideoBuilder({ getConfig }) {
           return reject(new EngineError(`The video build failed. ${reason}`.trim(), 'synthesis'));
         }
         const pick = (ext) => out.findLast((f) => f.endsWith(ext)); // build.py prints the results last
-        const files = { mp4: pick('.mp4'), srt: pick('.srt'), vtt: pick('.vtt'), jpg: pick('.jpg') };
+        const files = {
+          mp4: pick('.mp4'), srt: pick('.srt'), vtt: out.findLast((f) => f.endsWith('.vtt') && !f.endsWith('.chapters.vtt')), jpg: pick('.jpg'),
+          words: pick('.words.json'), chapters: pick('.chapters.vtt'),
+        };
         if (!files.mp4 || !fs.existsSync(files.mp4)) {
           return reject(new EngineError('The video build finished without reporting its video file.', 'synthesis'));
         }

@@ -11,5 +11,8 @@ export const TEXT_EXT = ['txt', 'md', 'markdown', 'text']; // read by the browse
 export const IMAGE_EXT = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'heic', 'heif', 'tif', 'tiff', 'bmp'];
 export const DOC_EXT = ['docx', 'doc', 'rtf', 'odt'];
 
-export const LESSON_MINUTES = [1, 2, 3, 5];
+export const LESSON_MINUTES = [1, 2, 3, 5, 10, 15, 20, 30];
+// From this length a lesson is written in chapters: an outline first, then each chapter on its own.
+export const CHAPTERS_FROM = 10;
+export const MAX_CHAPTERS = 8;
 export const VIDEO_QUALITIES = ['default', 'low', 'medium', 'hd', '4k'];

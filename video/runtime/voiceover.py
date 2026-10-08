@@ -17,7 +17,9 @@ piles up. Leaving the block waits for its audio to finish.
 
 When $VOICEOVER_REPORT names a file (check.py sets it), the scene also writes
 down what went wrong while it ran: animations that ran past a mark or past the
-end of a block, and text that left the frame or landed on other text.
+end of a block, and text that left the frame or landed on other text. Each
+problem names its block. With $VOICEOVER_SNAPSHOTS set too, it keeps a picture
+of the screen at every mark and at the end of every block: the storyboard.
 
 This module runs inside manimgl but never imports manimlib or numpy, so its
 arithmetic can be tested with a fake scene.
@@ -93,6 +95,16 @@ class VoiceoverScene:
 
     voiceover_manifest = None
 
+    def play(self, *args, **kwargs):
+        result = super().play(*args, **kwargs)
+        self._voiceover_after_step("play")
+        return result
+
+    def wait(self, *args, **kwargs):
+        result = super().wait(*args, **kwargs)
+        self._voiceover_after_step("wait")
+        return result
+
     def voiceover(self, block_id):
         """Context manager that plays narration block `block_id` while its body runs."""
         manifest, base = self._voiceover_manifest()
@@ -134,7 +146,8 @@ class VoiceoverScene:
             if left < -frame:
                 log.warning(f"Voiceover: animations are {-left:.2f}s past {what}; running one frame instead")
                 if -left > LATE:
-                    self._voiceover_issue("timing", f"the animations before it ran {-left:.2f}s past {what}")
+                    active = getattr(self, "_vo_active", None)
+                    self._voiceover_issue("timing", f"the animations before it ran {-left:.2f}s past {what}", block=active and active.id)
             return frame
         return left
 
@@ -153,8 +166,8 @@ class VoiceoverScene:
         self._voiceover_write_timeline()
 
     def _voiceover_end(self, vo, failed=False):
-        self._vo_active = None
         if failed:
+            self._vo_active = None
             return
         left = vo.end - self.time
         if left > 1e-9:
@@ -162,8 +175,10 @@ class VoiceoverScene:
         elif left <= -self._voiceover_frame():  # less than a frame over is only rounding
             log.warning(f'Voiceover: animations in "{vo.id}" ran {-left:.2f}s past the end of its narration')
             if -left > LATE:
-                self._voiceover_issue("timing", f'the animations in block "{vo.id}" ran {-left:.2f}s past the end of its narration')
-        self._voiceover_inspect(f'at the end of block "{vo.id}"', vo.id)
+                self._voiceover_issue("timing", f'the animations in block "{vo.id}" ran {-left:.2f}s past the end of its narration', block=vo.id)
+        self._voiceover_take_pending()  # a reveal that never came: the screen as the block ends
+        self._vo_active = None
+        self._voiceover_inspect(f'at the end of block "{vo.id}"', vo.id, block=vo.id)
 
     def _voiceover_write_timeline(self):
         """Tell build.py when each block started, for the captions."""
@@ -182,12 +197,61 @@ class VoiceoverScene:
         if parent:
             parent()
 
-    def _voiceover_issue(self, kind, message, key=None):
+    def _voiceover_after_step(self, step):
+        """After a play or wait, take the storyboard's still for any mark the clock has reached.
+
+        Animations are skipped while checking, so the screen after a play is the screen once it
+        has finished. A play that ran up to a mark is pictured as it ends. A wait that ran up to
+        a mark is the other pattern (wait for the word, then reveal), so its still is taken after
+        the next play, once the reveal is on screen.
+        """
+        if not os.environ.get("VOICEOVER_SNAPSHOTS"):
+            return
+        if step == "play":
+            self._voiceover_take_pending()
+        vo = getattr(self, "_vo_active", None)
+        if vo is None:
+            return
+        done = self.__dict__.setdefault("_vo_marks_done", set())
+        reached = [m for m, at in sorted(vo.marks.items(), key=lambda kv: kv[1]) if (vo.id, m) not in done and vo.start + at <= self.time + 1e-6]
+        for mark in reached:
+            done.add((vo.id, mark))
+            if step == "play":
+                self._voiceover_still(vo, mark)
+            else:
+                self.__dict__.setdefault("_vo_pending", []).append((vo, mark))
+
+    def _voiceover_take_pending(self):
+        for vo, mark in self.__dict__.pop("_vo_pending", []):
+            self._voiceover_still(vo, mark)
+
+    def _voiceover_still(self, vo, mark):
+        name = f"{type(self).__name__}-{vo.id}--{mark}"
+        if self._voiceover_snapshot(name):
+            self.__dict__.setdefault("_vo_stills", []).append(
+                {"block": vo.id, "mark": mark, "file": f"{name}.png", "at": round(vo.marks[mark], 3)})
+        self._voiceover_write_report()
+
+    def _voiceover_snapshot(self, name):
+        """Save the screen as <name>.png in $VOICEOVER_SNAPSHOTS. True when it was saved."""
+        shots = os.environ.get("VOICEOVER_SNAPSHOTS")
+        if not shots:
+            return False
+        try:  # a picture must never be what breaks a check
+            Path(shots).mkdir(parents=True, exist_ok=True)
+            self.update_frame(dt=0, force_draw=True)
+            self.get_image().save(str(Path(shots) / f"{name}.png"))
+            return True
+        except Exception as e:
+            log.warning(f"Voiceover: could not save a picture of the frame ({name}): {e}")
+            return False
+
+    def _voiceover_issue(self, kind, message, key=None, block=None):
         """Note a problem once. `key` names it, for one that would otherwise repeat at every check."""
         seen = self.__dict__.setdefault("_vo_issue_keys", set())
         if (key or message) not in seen:
             seen.add(key or message)
-            self.__dict__.setdefault("_vo_issues", []).append({"kind": kind, "message": message})
+            self.__dict__.setdefault("_vo_issues", []).append({"kind": kind, "message": message, "block": block, "scene": type(self).__name__})
         self._voiceover_write_report()
 
     def _voiceover_write_report(self):
@@ -199,24 +263,25 @@ class VoiceoverScene:
             "time": round(self.time, 3),
             "blocks": getattr(self, "_vo_timeline", []),
             "issues": getattr(self, "_vo_issues", []),
+            "stills": getattr(self, "_vo_stills", []),
         }
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         Path(path).write_text(json.dumps(data, indent=1), encoding="utf-8")
 
-    def _voiceover_inspect(self, where, name):
+    def _voiceover_inspect(self, where, name, block=None):
         """Note layout problems on screen right now, and keep a picture of the frame."""
         if not os.environ.get("VOICEOVER_REPORT"):
             return
         try:  # a check must never be what breaks a render
             for problem in self._voiceover_layout_issues():
-                self._voiceover_issue("layout", f"{problem} {where}", key=problem)
-            shots = os.environ.get("VOICEOVER_SNAPSHOTS")
-            if shots:
-                Path(shots).mkdir(parents=True, exist_ok=True)
-                self.update_frame(dt=0, force_draw=True)
-                self.get_image().save(str(Path(shots) / f"{type(self).__name__}-{name}.png"))
+                self._voiceover_issue("layout", f"{problem} {where}", key=problem, block=block)
         except Exception as e:
             log.warning(f"Voiceover: could not inspect the frame {where}: {e}")
+        file = f"{type(self).__name__}-{name}.png"
+        if self._voiceover_snapshot(file[:-4]):
+            vo_end = next((b for b in reversed(getattr(self, "_vo_timeline", [])) if b["id"] == block), None)
+            self.__dict__.setdefault("_vo_stills", []).append(
+                {"block": block, "mark": None, "file": file, "at": round(vo_end["duration"], 3) if vo_end else None})
         self._voiceover_write_report()
 
     def _voiceover_texts(self):

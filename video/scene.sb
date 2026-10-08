@@ -1,19 +1,23 @@
-; What a scene may do while manimgl runs it. See sandbox.py. Later rules win.
+; What a scene may do while manimgl runs it. See sandbox.py, which adds the rules for reading,
+; starting programs and private folders after these, found on this Mac when the scene runs.
+; Later rules win.
 (version 1)
 (allow default)
 
 ; Nothing in or out. LaTeX, ffmpeg and the GPU need none.
 (deny network*)
 
-; Write only in the project, the temporary folders, and the caches manim, fontconfig and TeX keep.
+; No asking another app to act for it, which the network rule would not stop.
+(deny appleevent-send)
+
+; Write only in the project's build/ folder (renders, the check's report, LaTeX's working
+; files, its own temporary folder) and the cache kept for scenes. Not the project's own
+; script, scenes or notes, and not the caches other programs keep in the home folder.
+; The system temporary folders stay open: the GPU keeps its shader cache there.
 (deny file-write*)
 (allow file-write*
-  (subpath (param "PROJECT"))
-  (subpath (param "TMP"))
+  (subpath (param "BUILD"))
+  (subpath (param "CACHE"))
   (subpath "/private/tmp")
   (subpath "/private/var/folders")
-  (subpath (string-append (param "HOME") "/Library/Caches"))
-  (subpath (string-append (param "HOME") "/.cache"))
-  (subpath (string-append (param "HOME") "/.matplotlib"))
-  (subpath (string-append (param "HOME") "/Library/texlive"))
   (subpath "/dev"))

@@ -114,3 +114,93 @@ export function useLocalStorage(key, initial) {
 }
 
 export const isActive = (g) => g.status === 'queued' || g.status === 'processing';
+export const needsYou = (g) => g.status === 'awaiting';
+
+export function fmtUsd(n) {
+  if (n == null || !Number.isFinite(Number(n))) return '—';
+  return `$${Number(n) < 0.1 && Number(n) > 0 ? Number(n).toFixed(3) : Number(n).toFixed(2)}`;
+}
+
+export const WORKSPACE_TABS = ['watch', 'outline', 'storyboard', 'edit', 'history', 'notes'];
+
+/** A lesson's tabs: the outline only for a lesson in chapters. */
+export const tabsFor = (g) => WORKSPACE_TABS.filter((t) => t !== 'outline' || g?.settings?.lesson?.chaptered);
+
+const BLOCK_LINE = /^\s*\[([A-Za-z0-9_-]+)\]\s*$/;
+export const MARK = /<mark\s+name\s*=\s*["']([A-Za-z0-9_-]+)["']\s*\/>/g;
+
+/** script.txt as [{ id, text, line }], as narrate.py reads it: [id] starts a block, # lines are comments. */
+export function parseScript(source) {
+  const blocks = [];
+  let cur = null;
+  String(source || '').replace(/\r\n/g, '\n').split('\n').forEach((line, i) => {
+    if (line.trimStart().startsWith('#')) return;
+    const m = BLOCK_LINE.exec(line);
+    if (m) {
+      cur = { id: m[1], lines: [], line: i + 1 };
+      blocks.push(cur);
+    } else if (cur) cur.lines.push(line);
+  });
+  return blocks.map((b) => ({ id: b.id, line: b.line, text: b.lines.join('\n').trim() }));
+}
+
+/** The scene classes in a scenes.py, in order. */
+export const sceneNames = (source) => [...String(source || '').matchAll(/^class\s+(\w+)\s*\(([^)]*Scene[^)]*)\)\s*:/gm)].map((m) => m[1]);
+
+/** What is spoken: the text without its marks. */
+export const spoken = (text) => String(text || '').replace(MARK, '').replace(/\s+/g, ' ').trim();
+
+/** The lesson workspace the address shows, from "#lesson/<id>/<tab>", or null. */
+export function parseRoute(hash) {
+  const m = /^#lesson\/([\w-]+)(?:\/(\w+))?$/.exec(String(hash || ''));
+  if (!m) return null;
+  return { id: m[1], tab: WORKSPACE_TABS.includes(m[2]) ? m[2] : 'watch' };
+}
+
+export const routeHash = (id, tab = 'watch') => `#lesson/${id}/${tab}`;
+
+export const SETTINGS_SECTIONS = [
+  ['writer', 'Lesson writer'],
+  ['defaults', 'Lesson defaults'],
+  ['claude', 'Claude (MCP)'],
+  ['costs', 'Costs'],
+  ['connect', 'Connect Claude'],
+  ['storage', 'Storage'],
+];
+
+/** The Settings page's section, from "#settings/<section>", or null when Settings is not open. */
+export function parseSettingsRoute(hash) {
+  const m = /^#settings(?:\/(\w+))?$/.exec(String(hash || ''));
+  if (!m) return null;
+  return { section: SETTINGS_SECTIONS.some(([s]) => s === m[1]) ? m[1] : 'writer' };
+}
+
+/** What the address shows, kept in step with the back and forward buttons. */
+function useHash(parse) {
+  const [route, setRoute] = useState(() => parse(window.location.hash));
+  useEffect(() => {
+    const onHash = () => setRoute(parse(window.location.hash));
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, [parse]);
+  return route;
+}
+
+/** The address's lesson workspace. */
+export const useRoute = () => useHash(parseRoute);
+/** The address's Settings section. */
+export const useSettingsRoute = () => useHash(parseSettingsRoute);
+
+/**
+ * Which still is on screen `t` seconds into block `index` of an ordered list of blocks:
+ * the last still taken at or before t, else the previous block's last still (the screen
+ * carries over from one block to the next within a scene; each scene starts empty), else null.
+ */
+export function stillAt(blocks, index, t) {
+  for (let i = index; i >= 0 && blocks[i]?.scene === blocks[index]?.scene; i -= 1) {
+    const stills = [...(blocks[i]?.stills || [])].sort((a, b) => (a.at ?? Infinity) - (b.at ?? Infinity));
+    const shown = i === index ? stills.filter((s) => s.at != null && s.at <= t + 1e-6) : stills;
+    if (shown.length) return shown[shown.length - 1];
+  }
+  return null;
+}

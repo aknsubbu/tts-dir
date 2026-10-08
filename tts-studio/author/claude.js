@@ -45,7 +45,7 @@ export function userMessage(prompt, attachments = []) {
  * is why the message goes in as stream-json. --safe-mode leaves out the user's hooks,
  * plugins and CLAUDE.md files, which have nothing to do with writing a lesson.
  */
-export async function askClaude({ system, prompt, attachments = [], schema = LESSON_SCHEMA, config, signal }) {
+export async function askClaude({ system, prompt, attachments = [], schema = LESSON_SCHEMA, nonEmpty, config, signal, effort, model }) {
   const bin = config.claudeBin || 'claude';
   const args = [
     '-p',
@@ -59,8 +59,12 @@ export async function askClaude({ system, prompt, attachments = [], schema = LES
     '--system-prompt', system,
     '--json-schema', JSON.stringify(schema),
   ];
-  if (config.claudeModel) args.push('--model', config.claudeModel);
-  if (config.claudeEffort) args.push('--effort', config.claudeEffort);
+  // A model chosen in Settings, else TTS_CLAUDE_MODEL, else Claude Code's own default.
+  const chosen = model === undefined || model === '' ? config.claudeModel : model;
+  if (chosen) args.push('--model', chosen);
+  // Each step may ask for its own effort; "auto" or empty leaves it to Claude Code.
+  const level = effort === undefined ? config.claudeEffort : effort;
+  if (level && level !== 'auto') args.push('--effort', level);
   const cwd = path.join(os.tmpdir(), 'tts-studio-author'); // a folder with no project in it
   fs.mkdirSync(cwd, { recursive: true });
   const env = { ...process.env };
@@ -76,7 +80,7 @@ export async function askClaude({ system, prompt, attachments = [], schema = LES
     }
     throw e;
   }
-  return parseAnswer(done, schema);
+  return parseAnswer(done, schema, nonEmpty);
 }
 
 /** Every JSON value in the output: one event per line (stream-json), or a single object or list (json). */
@@ -99,8 +103,11 @@ function events(stdout) {
   return out;
 }
 
-/** Pull the answer out of what `claude -p` printed. */
-export function parseAnswer({ code, stdout, stderr }, schema = LESSON_SCHEMA) {
+/**
+ * Pull the answer out of what `claude -p` printed. `nonEmpty` are the fields that must hold
+ * text (all the required ones unless said otherwise: an edit's parts may be left empty).
+ */
+export function parseAnswer({ code, stdout, stderr }, schema = LESSON_SCHEMA, nonEmpty = schema.required) {
   const all = events(stdout);
   if (!all.length) {
     const said = (stderr.trim() || stdout.trim()).split('\n').slice(-3).join(' ').slice(0, 400);
@@ -120,10 +127,29 @@ export function parseAnswer({ code, stdout, stderr }, schema = LESSON_SCHEMA) {
       throw new AuthorError('Claude answered, but not in the format asked for.');
     }
   }
-  for (const key of schema.required) {
+  for (const key of nonEmpty) {
     if (typeof answer[key] !== 'string' || !answer[key].trim()) {
       throw new AuthorError(`Claude's answer is missing “${key}”.`);
     }
   }
-  return { answer, costUsd: Number(result.total_cost_usd) || 0 };
+  return { answer, costUsd: Number(result.total_cost_usd) || 0, usage: readUsage(result) };
+}
+
+const count = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+
+/**
+ * What one request used, from Claude Code's result: tokens read fresh, read from the cache and
+ * written to it, tokens written back (thinking included), the cost and the model(s) that answered.
+ */
+export function readUsage(result) {
+  const u = result.usage || {};
+  return {
+    model: Object.keys(result.modelUsage || {}).join(', ') || null,
+    inputTokens: count(u.input_tokens),
+    cacheReadTokens: count(u.cache_read_input_tokens),
+    cacheWriteTokens: count(u.cache_creation_input_tokens),
+    outputTokens: count(u.output_tokens),
+    costUsd: Number(result.total_cost_usd) || 0,
+    durationMs: count(result.duration_ms),
+  };
 }

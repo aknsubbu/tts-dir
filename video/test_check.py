@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from check import Report, check, check_static, tidy
+from check import Report, check, check_static, tidy, write_storyboard
 
 SCRIPT = """# a comment
 [intro]
@@ -72,6 +72,29 @@ class StaticCheckTest(unittest.TestCase):
         self.assertEqual(errors, [])
         saved = json.loads((self.root / "project.json").read_text())
         self.assertEqual(saved, {"voice": "af_heart", "scenes": ["Intro", "Outro"]})
+
+    def test_problems_carry_their_file_line_and_block_for_an_editor(self):
+        self.write(scenes=SCENES.replace('vo.until("slope")', 'vo.until("slpoe")'))
+        _, result = self.errors()
+        e = result["errors"][0]
+        self.assertEqual((e["file"], e["line"]), ("scenes.py", 8))
+        self.write(scenes=SCENES, script=SCRIPT.replace("That is all.", 'That is <b>all</b>.'))
+        _, result = self.errors()
+        e = result["errors"][0]
+        self.assertEqual((e["file"], e["line"], e["block"]), ("script.txt", 5, "outro"))
+        self.write(script=SCRIPT + "\n[spare]\nNot played.\n")
+        _, result = self.errors()
+        e = result["errors"][0]
+        self.assertEqual((e["file"], e["line"], e["block"]), ("script.txt", 8, "spare"))
+
+    def test_a_scene_failure_points_at_the_last_scenes_line_of_its_traceback(self):
+        report = Report()
+        report.files = {"script": "script.txt", "scenes": "scenes.py"}
+        report.block_lines["scenes"] = {"intro": 7}
+        report.error("Intro", 'Traceback (most recent call last):\n  File "/x/scenes.py", line 8, in construct\n  File "/v/manimlib/mobject.py", line 90, in f\nNameError: x')
+        report.warn("Intro", "text overlaps", block="intro", scene="Intro")
+        self.assertEqual({k: report.errors[0][k] for k in ("file", "line", "scene")}, {"file": "scenes.py", "line": 8, "scene": "Intro"})
+        self.assertEqual({k: report.warnings[0][k] for k in ("file", "line", "block")}, {"file": "scenes.py", "line": 7, "block": "intro"})
 
     def test_a_syntax_error_names_its_line(self):
         self.write(scenes=SCENES.replace('self.wait(vo.remaining())\n\n\nclass', 'self.wait(vo.remaining()\n\n\nclass'))
@@ -185,6 +208,57 @@ class TidyTest(unittest.TestCase):
             "NameError: name 'MathTex' is not defined",
         )
         self.assertEqual(tidy("a\nb\nc\nd", limit=2), "c\nd")
+
+
+class StoryboardFileTest(unittest.TestCase):
+    """build/check/storyboard.json, from what each scene reported while it was checked."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / "script.txt").write_text(SCRIPT, encoding="utf-8")
+        (self.root / "scenes.py").write_text(SCENES, encoding="utf-8")
+        self.config = {"script": "script.txt", "scenes_file": "scenes.py", "scenes": ["Intro", "Outro"]}
+        self.manifest = {
+            "order": ["intro", "outro"],
+            "blocks": {
+                "intro": {"wav": "audio/intro-1.wav", "duration": 2.5, "marks": {"slope": 1.1}, "text": "Every line has a slope."},
+                "outro": {"wav": "audio/outro-2.wav", "duration": 1.25, "marks": {}, "text": "That is all."},
+            },
+        }
+
+    def test_each_block_gets_its_narration_stills_and_problems(self):
+        intro = {
+            "blocks": [{"id": "intro", "start": 0.2, "duration": 2.5}],
+            "stills": [
+                {"block": "intro", "mark": "slope", "file": "Intro-intro--slope.png", "at": 1.1},
+                {"block": "intro", "mark": None, "file": "Intro-intro.png", "at": 2.5},
+                {"block": None, "mark": None, "file": "Intro-end.png", "at": None},
+            ],
+            "issues": [
+                {"kind": "layout", "message": "text overlaps", "block": "intro", "scene": "Intro"},
+                {"kind": "layout", "message": "off the edge in the last frame", "block": None, "scene": "Intro"},
+            ],
+        }
+        board = write_storyboard(self.root, self.config, self.manifest, {"Intro": (intro, None), "Outro": (None, "NameError: Foo")})
+        saved = json.loads((self.root / "build" / "check" / "storyboard.json").read_text())
+        self.assertEqual(saved, board)
+        first = board["scenes"][0]
+        self.assertEqual(first["end"], "Intro-end.png")
+        self.assertEqual(first["issues"], [{"kind": "layout", "message": "off the edge in the last frame"}])
+        block = first["blocks"][0]
+        self.assertEqual(block["text"], 'Every line has a <mark name="slope"/>slope.')
+        self.assertEqual((block["start"], block["duration"], block["marks"]), (0.2, 2.5, {"slope": 1.1}))
+        self.assertEqual([x["file"] for x in block["stills"]], ["Intro-intro--slope.png", "Intro-intro.png"])
+        self.assertEqual(block["issues"], [{"kind": "layout", "message": "text overlaps"}])
+        # A scene that failed before drawing anything still lists the blocks it would play.
+        failed = board["scenes"][1]
+        self.assertEqual(failed["error"], "NameError: Foo")
+        self.assertEqual([b["id"] for b in failed["blocks"]], ["outro"])
+        self.assertEqual(failed["blocks"][0]["stills"], [])
+        self.assertEqual(board["unplayed"], [])
+        self.assertEqual(board["duration"], 3.75)
 
 
 if __name__ == "__main__":

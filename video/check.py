@@ -17,17 +17,23 @@ the edge of the frame, text on top of other text.
 Each scene is tried with `manimgl -s -w`, which runs every line of it without
 drawing the animations, so a broken scene is found in seconds. This is what the
 lesson writer in tts-studio/author runs on what Claude wrote.
+
+A full check also leaves a storyboard: a picture of the screen at every mark and at
+the end of every block in build/check/frames/, described by build/check/storyboard.json.
 """
 import argparse
 import ast
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import build
+import project_ast
 import sandbox
 from narrate import _MARK, ScriptError, load_project, parse_script
 
@@ -37,7 +43,7 @@ HERE = Path(__file__).resolve().parent
 # These rules catch accidents and the obvious ways out, and give Claude an error it can fix.
 # They are not what confines a scene: sandbox.py is, by running it with no network and no
 # writing outside its project.
-ALLOWED_IMPORTS = {"manimlib", "voiceover", "numpy", "math", "random", "itertools", "functools", "sys", "pathlib"}
+ALLOWED_IMPORTS = {"manimlib", "voiceover", "kit", "numpy", "math", "random", "itertools", "functools", "sys", "pathlib"}
 FORBIDDEN_NAMES = {"eval", "exec", "compile", "__import__", "open", "input", "breakpoint", "globals"}
 # --strict is for scenes a model wrote (the lesson writer passes it). They have no reason to
 # touch the system at all, so the modules a hand-written project uses to find its own files go
@@ -50,19 +56,55 @@ STRICT_NAMES = FORBIDDEN_NAMES | {
 STRICT_ATTRS = {"system", "popen", "Popen", "load", "save", "savez", "savetxt", "loadtxt", "fromfile", "tofile", "memmap", "modules"}
 SCENE_TIMEOUT = 600  # seconds for one scene to run without drawing; far more than any real one needs
 
+_BLOCK_LINE = re.compile(r"^\[([A-Za-z0-9_-]+)\]\s*$")
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 _PROGRESS = re.compile(r"\d+it \[|it/s\]|\|\s*\d+/\d+")
 
 
+_LINE = re.compile(r"^line (\d+): ")
+_TRACE = re.compile(r'File "[^"]*?([^"/\\]+\.py)", line (\d+)')
+
+
 class Report:
+    """Errors and warnings. Each says `where` it is in words, and, when it can be pinned down,
+    the `file` and `line` it is on, and the `block` or `scene` it belongs to, so an editor can
+    underline it."""
+
     def __init__(self):
         self.errors, self.warnings = [], []
+        self.files = {}  # what each file is called in this project: {"script": "script.txt", "scenes": "scenes.py"}
+        self.block_lines = {"script": {}, "scenes": {}}  # block id -> its [id] line, and the line that plays it
 
-    def error(self, where, message):
-        self.errors.append({"where": where, "message": message})
+    def _locate(self, where, message, extra):
+        item = {"where": where, "message": message, **extra}
+        m = _LINE.match(message)
+        if m and "line" not in item:
+            item.setdefault("file", where)
+            item["line"] = int(m.group(1))
+        if where in (self.files.get("scenes"), "render") or "file" in item:
+            pass
+        elif where not in ("narration", "project.json", self.files.get("script")):
+            # A scene's own failure: the last line of scenes.py its traceback passes through.
+            item.setdefault("scene", where)
+            lines = [(f, int(n)) for f, n in _TRACE.findall(message) if f == self.files.get("scenes")]
+            if lines:
+                item["file"], item["line"] = lines[-1]
+        if item.get("block") and "line" not in item:
+            if item.get("file") == self.files.get("script") or where == self.files.get("script"):
+                line = self.block_lines["script"].get(item["block"])
+                if line:
+                    item.update(file=self.files["script"], line=line)
+            else:
+                line = self.block_lines["scenes"].get(item["block"])
+                if line:
+                    item.update(file=self.files.get("scenes"), line=line)
+        return item
 
-    def warn(self, where, message):
-        self.warnings.append({"where": where, "message": message})
+    def error(self, where, message, **extra):
+        self.errors.append(self._locate(where, message, extra))
+
+    def warn(self, where, message, **extra):
+        self.warnings.append(self._locate(where, message, extra))
 
 
 # ---------- reading the files ----------
@@ -70,20 +112,26 @@ class Report:
 def read_script(root, config, report):
     """{block_id: {"marks": set, "words": int}} in script order, or None if it cannot be read."""
     name = config["script"]
+    report.files["script"] = name
     try:
-        blocks = parse_script((root / name).read_text(encoding="utf-8"))
+        source = (root / name).read_text(encoding="utf-8")
+        blocks = parse_script(source)
     except FileNotFoundError:
         return report.error(name, f"{name} is missing")
     except ScriptError as e:
         return report.error(name, str(e))
+    for n, line in enumerate(source.lstrip("\ufeff").replace("\r\n", "\n").split("\n"), 1):
+        m = _BLOCK_LINE.match(line.strip())
+        if m:
+            report.block_lines["script"].setdefault(m.group(1), n)
     out = {}
     for bid, text in blocks:
         marks = _MARK.findall(text)
         for m in sorted({m for m in marks if marks.count(m) > 1}):
-            report.error(name, f'block [{bid}] uses the mark name "{m}" more than once')
+            report.error(name, f'block [{bid}] uses the mark name "{m}" more than once', block=bid)
         spoken = _MARK.sub("", text)
         if "<" in spoken and re.search(r"<[^>]*>", spoken):
-            report.error(name, f'block [{bid}] has a tag that is not a mark; the only tag allowed is <mark name="x"/>')
+            report.error(name, f'block [{bid}] has a tag that is not a mark; the only tag allowed is <mark name="x"/>', block=bid)
         out[bid] = {"marks": set(marks), "words": len(spoken.split())}
     return out
 
@@ -99,6 +147,7 @@ def _is_call_to(node, attr):
 def read_scenes(root, config, blocks, report, strict=False):
     """Scene class names in the order they are defined, or None if the file cannot be read."""
     name = config.get("scenes_file", "scenes.py")
+    report.files["scenes"] = name
     try:
         source = (root / name).read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -149,6 +198,7 @@ def read_scenes(root, config, blocks, report, strict=False):
                 if bid in used:
                     report.error(name, f'line {node.lineno}: block "{bid}" is already played by {used[bid]}; each block may be played once')
                 used[bid] = cls.name
+                report.block_lines["scenes"].setdefault(bid, node.lineno)
                 var = item.optional_vars.id if isinstance(item.optional_vars, ast.Name) else None
                 for call in ast.walk(node):
                     if not (_is_call_to(call, "until") or _is_call_to(call, "time_of")):
@@ -165,7 +215,7 @@ def read_scenes(root, config, blocks, report, strict=False):
         report.error(name, "no scene classes found; each needs VoiceoverScene first in its bases, as in class Intro(VoiceoverScene, Scene)")
     for bid in blocks or {}:
         if bid not in used:
-            report.error(name, f'narration block "{bid}" is never played; some scene must contain: with self.voiceover("{bid}") as vo:')
+            report.error(name, f'narration block "{bid}" is never played; some scene must contain: with self.voiceover("{bid}") as vo:', block=bid, file=report.files.get("script"), line=report.block_lines["script"].get(bid))
     return scenes
 
 
@@ -216,7 +266,9 @@ def narrate(root, report):
     )
     for line in done.stdout.splitlines():
         if "warning [" in line:  # a mark that could not be placed on a word
-            report.warn("script.txt", line.strip().replace("warning ", "", 1))
+            said = line.strip().replace("warning ", "", 1)
+            block = re.match(r"\[([A-Za-z0-9_-]+)\]", said)
+            report.warn(report.files.get("script", "script.txt"), said, **({"block": block.group(1)} if block else {}))
     if done.returncode:
         report.error("narration", tidy(done.stdout, 12))
         return None
@@ -224,33 +276,95 @@ def narrate(root, report):
 
 
 def try_scene(root, config, scene, report):
-    """Run one scene without drawing its animations, and collect what it reports."""
+    """Run one scene without drawing its animations, and collect what it reports.
+    Returns (the scene's report or None, its error or None)."""
     out = root / "build" / "check"
     result = out / f"{scene}.json"
     result.unlink(missing_ok=True)
-    env = {
-        **os.environ,
+    env, manim_args, limits = sandbox.prepare(root, {
         "VOICEOVER_MANIFEST": str(root / "build" / "manifest.json"),
         "VOICEOVER_REPORT": str(result),
         "VOICEOVER_SNAPSHOTS": str(out / "frames"),
-        "PYTHONPATH": os.pathsep.join(filter(None, [str(HERE), os.environ.get("PYTHONPATH")])),
+        "PYTHONPATH": os.pathsep.join(filter(None, [str(sandbox.RUNTIME), os.environ.get("PYTHONPATH")])),
         "COLUMNS": "200", "NO_COLOR": "1", "TERM": "dumb",
-    }
+    })
     print(f"$ manimgl {config['scenes_file']} {scene} -s", file=sys.stderr, flush=True)
+    cmd = [build.MANIMGL, str(root / config["scenes_file"]), scene, "-s", "-w", "-l", "--video_dir", str(out), *manim_args]
     try:
         done = subprocess.run(
-            sandbox.wrap([build.MANIMGL, str(root / config["scenes_file"]), scene, "-s", "-w", "-l", "--video_dir", str(out)], root),
+            sandbox.wrap(cmd, root),
             cwd=root, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, timeout=SCENE_TIMEOUT,
+            text=True, timeout=SCENE_TIMEOUT, preexec_fn=limits,
         )
     except subprocess.TimeoutExpired:
-        return report.error(scene, f"the scene did not finish within {SCENE_TIMEOUT} seconds; it may loop forever")
+        message = f"the scene did not finish within {SCENE_TIMEOUT} seconds; it may loop forever"
+        report.error(scene, message)
+        return None, message
+    data = json.loads(result.read_text(encoding="utf-8")) if result.is_file() else None
     if done.returncode:
-        return report.error(scene, tidy(done.stdout))
-    if not result.is_file():
-        return report.error(scene, "the scene ran but played no narration; it needs at least one `with self.voiceover(...)` block")
-    for issue in json.loads(result.read_text(encoding="utf-8")).get("issues", []):
-        report.warn(scene, issue["message"])
+        # A failure that never reaches scenes.py is not the scene's code: the sandbox may have stopped it.
+        mine = config["scenes_file"] in done.stdout
+        report.error(scene, " ".join(filter(None, [tidy(done.stdout), sandbox.hint(done.stdout) or ("" if mine else sandbox.hint())])))
+        return data, report.errors[-1]["message"]  # what it drew before failing still goes on the storyboard
+    if data is None:
+        message = "the scene ran but played no narration; it needs at least one `with self.voiceover(...)` block"
+        report.error(scene, message)
+        return None, message
+    for issue in data.get("issues", []):
+        report.warn(scene, issue["message"], block=issue.get("block"), scene=scene)
+    return data, None
+
+
+def write_storyboard(root, config, manifest, results):
+    """build/check/storyboard.json: per scene, per block, the narration and the stills taken while checking.
+
+    `results` is {scene: (its report or None, its error or None)}. Block text keeps its marks, so
+    the page can show where each one falls; `at` is seconds into the block.
+    """
+    script = dict(parse_script((root / config["script"]).read_text(encoding="utf-8")))
+    try:
+        classes = project_ast.scene_classes(ast.parse((root / config["scenes_file"]).read_text(encoding="utf-8")))
+    except SyntaxError:
+        classes = {}
+    played, scenes = set(), []
+    for name in config["scenes"]:
+        data, error = results.get(name, (None, None))
+        data = data or {}
+        stills, issues = data.get("stills", []), data.get("issues", [])
+        timeline = {b["id"]: b for b in data.get("blocks", [])}
+        order = list(timeline) or (project_ast.blocks_played(classes[name]) if name in classes else [])
+        blocks = []
+        for bid in order:
+            played.add(bid)
+            spoken = manifest["blocks"].get(bid, {})
+            blocks.append({
+                "id": bid,
+                "text": script.get(bid, spoken.get("text", "")),
+                "duration": spoken.get("duration"),
+                "start": timeline.get(bid, {}).get("start"),
+                "marks": spoken.get("marks", {}),
+                "wav": spoken.get("wav"),
+                "stills": [x for x in stills if x.get("block") == bid],
+                "issues": [{"kind": i["kind"], "message": i["message"]} for i in issues if i.get("block") == bid],
+            })
+        scenes.append({
+            "name": name,
+            "error": error,
+            "blocks": blocks,
+            "end": next((x["file"] for x in stills if x.get("block") is None), None),
+            "issues": [{"kind": i["kind"], "message": i["message"]} for i in issues if i.get("block") is None],
+        })
+    board = {
+        "version": 1,
+        "checkedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "duration": round(sum(b["duration"] for b in manifest["blocks"].values()), 2),
+        "scenes": scenes,
+        "unplayed": [b for b in manifest["order"] if b not in played],
+    }
+    out = root / "build" / "check" / "storyboard.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(board, indent=1, ensure_ascii=False), encoding="utf-8")
+    return board
 
 
 def check(root, static_only=False, sync_scenes=False, strict=False):
@@ -265,8 +379,10 @@ def check(root, static_only=False, sync_scenes=False, strict=False):
             for b in info["blocks"]:
                 b["duration"] = round(manifest["blocks"][b["id"]]["duration"], 2)
             info["duration"] = round(sum(b["duration"] for b in info["blocks"]), 1)
-            for scene in config["scenes"]:
-                try_scene(root, config, scene, report)
+            shutil.rmtree(root / "build" / "check" / "frames", ignore_errors=True)  # no stills left from an older version
+            results = {scene: try_scene(root, config, scene, report) for scene in config["scenes"]}
+            write_storyboard(root, config, manifest, results)
+            info["storyboard"] = "build/check/storyboard.json"
     return {"ok": not report.errors, "errors": report.errors, "warnings": report.warnings, **info}
 
 

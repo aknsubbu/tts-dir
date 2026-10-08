@@ -1,7 +1,7 @@
 """Build and caption tests. Standard library only: nothing is rendered or spoken."""
 import unittest
 
-from build import caption_cues, concat_args
+from build import caption_cues, concat_args, transcript
 from captions import block_cues, group_cues, join_tokens, to_srt, to_vtt
 
 
@@ -88,3 +88,66 @@ class BuildTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TranscriptTest(unittest.TestCase):
+    def test_words_are_timed_in_the_joined_video(self):
+        manifest = {"blocks": {
+            "intro": {"text": "Hello, world.", "duration": 2.0, "words": words(("Hello", 0.1, 0.5), (",", 0.5, 0.6), ("world", 0.7, 1.2), (".", 1.2, 1.3))},
+            "outro": {"text": "Hola.", "duration": 1.0, "words": []},
+        }, "order": ["intro", "outro"]}
+        out = transcript(manifest, [("Intro", 0.0, {"blocks": [{"id": "intro", "start": 0.5}]}), ("Outro", 3.0, {"blocks": [{"id": "outro", "start": 0.0}]})])
+        intro, outro = out["blocks"]
+        self.assertEqual((intro["scene"], intro["start"], intro["end"]), ("Intro", 0.5, 2.5))
+        self.assertEqual(intro["words"], [["Hello,", 0.6, 1.1], ["world.", 1.2, 1.8]])
+        self.assertEqual((outro["start"], outro["words"], outro["text"]), (3.0, [], "Hola."))
+
+
+class ChapterTest(unittest.TestCase):
+    def test_markers_for_the_mp4_and_the_page(self):
+        from build import chapters_vtt, ffmetadata
+        chapters = [{"title": "One neuron", "start": 0, "end": 181.5}, {"title": "Two = layers; #2", "start": 181.5, "end": 400}]
+        meta = ffmetadata(chapters)
+        self.assertTrue(meta.startswith(";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=181500\ntitle=One neuron\n"))
+        self.assertIn("title=Two \\= layers\; \\#2", meta)
+        self.assertEqual(chapters_vtt(chapters[:1]), "WEBVTT\n\n00:00:00.000 --> 00:03:01.500\nOne neuron\n\n")
+
+    def test_a_chapter_moves_to_where_it_starts(self):
+        from build import shift_chapter
+        words = {"blocks": [
+            {"id": "a", "scene": "S", "start": 0.5, "end": 2.0, "text": "Hi there.", "words": [["Hi", 0.5, 0.8], ["there.", 0.9, 1.4]]},
+            {"id": "b", "scene": "S", "start": 2.0, "end": 4.0, "text": "Hola.", "words": []},
+        ]}
+        blocks, cues = shift_chapter(words, "02-chain", 100.0)
+        self.assertEqual((blocks[0]["chapter"], blocks[0]["start"], blocks[0]["words"][0]), ("02-chain", 100.5, ["Hi", 100.5, 100.8]))
+        self.assertEqual(cues[0], (100.5, 101.4, "Hi there."))
+        self.assertEqual(cues[1], (102.0, 104.0, "Hola."))
+
+
+@unittest.skipUnless(__import__("shutil").which("ffmpeg") and __import__("shutil").which("ffprobe"), "needs ffmpeg")
+class JoinChaptersTest(unittest.TestCase):
+    def test_chapters_join_into_one_video_with_markers(self):
+        import json
+        import subprocess
+        import tempfile
+        from pathlib import Path
+        from build import join_chapters
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "lesson"
+            parts = []
+            for n, (cid, secs) in enumerate([("01-one", 1.0), ("02-two", 1.5)], 1):
+                clip = Path(tmp) / f"{cid}.mp4"
+                subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", f"color=c=black:s=320x180:d={secs}", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+                                "-t", str(secs), "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(clip)], check=True)
+                words = Path(tmp) / f"{cid}.words.json"
+                words.write_text(json.dumps({"blocks": [{"id": "b", "scene": "S", "start": 0.1, "end": 0.9, "text": f"Part {n}.", "words": [["Part", 0.1, 0.4], [f"{n}.", 0.4, 0.8]]}]}))
+                parts.append({"id": cid, "title": f"Chapter {n}", "video": clip, "words": words, "card": None})
+            result = join_chapters(root, parts)
+            self.assertAlmostEqual(result["duration"], 2.5, delta=0.1)
+            self.assertEqual([c["start"] for c in result["chapters"]], [0.0, 1.0])
+            probe = json.loads(subprocess.run(["ffprobe", "-v", "error", "-show_chapters", "-of", "json", str(root / "build" / "lesson.mp4")], capture_output=True, text=True, check=True).stdout)
+            self.assertEqual([c["tags"]["title"] for c in probe["chapters"]], ["Chapter 1", "Chapter 2"])
+            self.assertIn("00:00:01.100 --> ", (root / "build" / "lesson.vtt").read_text())
+            words = json.loads((root / "build" / "lesson.words.json").read_text())
+            self.assertEqual(words["blocks"][1]["words"][0], ["Part", 1.1, 1.4])
+            self.assertIn("Chapter 2", (root / "build" / "lesson.chapters.vtt").read_text())

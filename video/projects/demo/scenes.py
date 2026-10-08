@@ -8,7 +8,7 @@ from pathlib import Path
 from manimlib import *
 from manimlib.logger import log
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # video/, for voiceover.py
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "runtime"))  # video/runtime/, for voiceover.py
 from voiceover import VoiceoverScene
 
 MANIFEST = Path(__file__).resolve().parent / "build" / "manifest.json"

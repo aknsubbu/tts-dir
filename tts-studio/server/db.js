@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
 import { cleanText } from './text.js';
@@ -55,6 +56,26 @@ CREATE TRIGGER IF NOT EXISTS gen_au AFTER UPDATE OF title, text, tags ON generat
   INSERT INTO gen_fts(gen_fts, rowid, title, text, tags) VALUES ('delete', old.seq, old.title, old.text, old.tags);
   INSERT INTO gen_fts(rowid, title, text, tags) VALUES (new.seq, new.title, new.text, new.tags);
 END;
+
+-- Each version of a lesson: what made it, what it cost, and whether it was built.
+-- Its files are a snapshot in the project's versions/NNN/ folder.
+CREATE TABLE IF NOT EXISTS versions (
+  generation_id   TEXT NOT NULL,
+  n               INTEGER NOT NULL,
+  source          TEXT NOT NULL,
+  note            TEXT,
+  created_at      INTEGER NOT NULL,
+  cost_usd        REAL,
+  usage_json      TEXT,
+  check_ok        INTEGER,
+  warnings        INTEGER,
+  built_at        INTEGER,
+  quality         TEXT,
+  duration_sec    REAL,
+  video_bytes     INTEGER,
+  render_kept     INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (generation_id, n)
+);
 `;
 
 // Added after the first release; older libraries gain them on start.
@@ -62,6 +83,10 @@ END;
 const MIGRATIONS = [
   ['kind', "ALTER TABLE generations ADD COLUMN kind TEXT NOT NULL DEFAULT 'audio'"],
   ['stage', 'ALTER TABLE generations ADD COLUMN stage TEXT'],
+  // The version a lesson is on, and the one its library video shows. A lesson being revised or
+  // rebuilt keeps playing the built one.
+  ['version', 'ALTER TABLE generations ADD COLUMN version INTEGER NOT NULL DEFAULT 0'],
+  ['built_version', 'ALTER TABLE generations ADD COLUMN built_version INTEGER NOT NULL DEFAULT 0'],
 ];
 
 const UPDATABLE = new Set([
@@ -77,6 +102,8 @@ const UPDATABLE = new Set([
   'finished_at',
   'voice_name',
   'stage',
+  'version',
+  'built_version',
   // A lesson starts as the brief and becomes the narration once Claude has written it.
   'text',
   'char_count',
@@ -96,6 +123,9 @@ export function buildFtsQuery(q) {
 
 export function toApi(row, { withText = false } = {}) {
   if (!row) return null;
+  // A video plays once it is done, and a lesson keeps playing its last built version while a
+  // newer one is written, checked or built.
+  const playable = row.kind === 'video' && (row.status === 'done' || row.built_version > 0);
   const out = {
     id: row.id,
     title: row.title,
@@ -120,9 +150,11 @@ export function toApi(row, { withText = false } = {}) {
     tags: row.tags ? row.tags.split(',') : [],
     createdAt: row.created_at,
     finishedAt: row.finished_at,
+    version: row.version || 0,
+    builtVersion: row.built_version || 0,
     audioUrl: row.status === 'done' && row.kind !== 'video' ? `/api/generations/${row.id}/audio` : null,
-    videoUrl: row.status === 'done' && row.kind === 'video' ? `/api/generations/${row.id}/video` : null,
-    posterUrl: row.status === 'done' && row.kind === 'video' ? `/api/generations/${row.id}/poster` : null,
+    videoUrl: playable ? `/api/generations/${row.id}/video` : null,
+    posterUrl: playable ? `/api/generations/${row.id}/poster` : null,
   };
   if (withText) out.text = row.text;
   if (row.snip !== undefined) {
@@ -155,6 +187,9 @@ export function createStore(dataDir) {
       @voice_id, @voice_name, @model_id, @settings_json, @status, @tags, @created_at
     )`);
   const getStmt = db.prepare('SELECT * FROM generations WHERE id = ?');
+  // Anything that changes an item is announced, for the page's live updates: 'change' with its id.
+  const events = new EventEmitter();
+  events.setMaxListeners(0);
   const deleteStmt = db.prepare('DELETE FROM generations WHERE id = ?');
   const findByConfigStmt = db.prepare(
     `SELECT * FROM generations
@@ -172,7 +207,33 @@ export function createStore(dataDir) {
     if (!keys.length) return;
     const set = keys.map((k) => `${k} = @${k}`).join(', ');
     db.prepare(`UPDATE generations SET ${set} WHERE id = @id`).run({ ...patch, id });
+    events.emit('change', id);
   }
+
+  // What a revision asked for and changed, on versions made before it existed too.
+  const versionColumns = new Set(db.prepare('PRAGMA table_info(versions)').all().map((c) => c.name));
+  if (!versionColumns.has('details_json')) db.exec('ALTER TABLE versions ADD COLUMN details_json TEXT');
+  const versionStmts = {
+    insert: db.prepare(`INSERT INTO versions (generation_id, n, source, note, created_at, cost_usd, usage_json, check_ok, warnings, details_json)
+                        VALUES (@generation_id, @n, @source, @note, @created_at, @cost_usd, @usage_json, @check_ok, @warnings, @details_json)`),
+    list: db.prepare('SELECT * FROM versions WHERE generation_id = ? ORDER BY n DESC'),
+    get: db.prepare('SELECT * FROM versions WHERE generation_id = ? AND n = ?'),
+    next: db.prepare('SELECT COALESCE(MAX(n), 0) + 1 AS n FROM versions WHERE generation_id = ?'),
+    remove: db.prepare('DELETE FROM versions WHERE generation_id = ?'),
+  };
+  const VERSION_FIELDS = new Set(['built_at', 'quality', 'duration_sec', 'video_bytes', 'render_kept', 'note']);
+  const versions = {
+    next: (id) => versionStmts.next.get(id).n,
+    insert: (row) => versionStmts.insert.run({ note: null, cost_usd: null, usage_json: null, check_ok: null, warnings: null, details_json: null, ...row }),
+    list: (id) => versionStmts.list.all(id),
+    get: (id, n) => versionStmts.get.get(id, n),
+    update(id, n, patch) {
+      const keys = Object.keys(patch).filter((k) => VERSION_FIELDS.has(k));
+      if (!keys.length) return;
+      db.prepare(`UPDATE versions SET ${keys.map((k) => `${k} = @${k}`).join(', ')} WHERE generation_id = @id AND n = @n`).run({ ...patch, id, n });
+    },
+    removeAll: (id) => versionStmts.remove.run(id),
+  };
 
   function list({ q, status, voiceId, favorite, tag, kind, sort, limit = 30, offset = 0 } = {}) {
     const fts = buildFtsQuery(q);
@@ -234,13 +295,21 @@ export function createStore(dataDir) {
     const active = db
       .prepare(`SELECT COUNT(*) AS n FROM generations WHERE status IN ('queued','processing')`)
       .get().n;
+    const awaiting = db.prepare(`SELECT COUNT(*) AS n FROM generations WHERE status = 'awaiting'`).get().n;
+    // What writing lessons cost this calendar month, from every version made in it.
+    const month = new Date();
+    month.setDate(1);
+    month.setHours(0, 0, 0, 0);
+    const claude = db
+      .prepare('SELECT COALESCE(SUM(cost_usd), 0) AS usd, COUNT(*) AS n FROM versions WHERE created_at >= ?')
+      .get(month.getTime());
     const voices = db
       .prepare(
         `SELECT voice_id AS voiceId, COALESCE(MAX(voice_name), voice_id) AS name, COUNT(*) AS n
          FROM generations GROUP BY voice_id ORDER BY n DESC`,
       )
       .all();
-    return { ...done, active, voices };
+    return { ...done, active, awaiting, voices, costThisMonthUsd: Math.round(claude.usd * 100) / 100 };
   }
 
   function tags() {
@@ -268,12 +337,23 @@ export function createStore(dataDir) {
     audioPath,
     previewPath,
     videoPath,
-    insert: (row) => insertStmt.run({ kind: 'audio', ...row }),
+    insert: (row) => {
+      const out = insertStmt.run({ kind: 'audio', ...row });
+      events.emit('change', row.id);
+      return out;
+    },
     getRaw: (id) => getStmt.get(id),
     get: (id, opts) => toApi(getStmt.get(id), opts),
     findByConfig: (hash) => findByConfigStmt.get(hash),
     update,
-    remove: (id) => deleteStmt.run(id).changes,
+    remove: (id) => {
+      versions.removeAll(id);
+      const n = deleteStmt.run(id).changes;
+      if (n) events.emit('change', id);
+      return n;
+    },
+    versions,
+    events,
     countBySource: (source) => db.prepare('SELECT COUNT(*) AS n FROM generations WHERE source_name = ?').get(source).n,
     list,
     stats,
