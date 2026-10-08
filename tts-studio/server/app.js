@@ -8,6 +8,7 @@ import { EngineError, MODEL_ID } from './kokoro.js';
 import { listProjects, makePoster, PROJECT_NAME, readProject } from './video.js';
 import { NotesError, saveAttachments } from './notes.js';
 import { localOnly } from './local.js';
+import { stillsOf } from './versions.js';
 import { LESSON_MINUTES, MAX_NOTES, VIDEO_QUALITIES } from '../shared/limits.js';
 
 export const MAX_CHARS = 200_000;
@@ -42,7 +43,7 @@ function deriveTitle(text) {
   return first.length > 60 ? `${first.slice(0, 57).trimEnd()}…` : first || 'Untitled script';
 }
 
-export function createApp({ getConfig, store, runner, engine, lessons, distDir }) {
+export function createApp({ getConfig, store, runner, engine, lessons, versions = null, distDir }) {
   const app = express();
   app.disable('x-powered-by');
   app.use(localOnly());
@@ -118,6 +119,30 @@ export function createApp({ getConfig, store, runner, engine, lessons, distDir }
   });
 
   api.get('/stats', (req, res) => res.json(store.stats()));
+
+  // Live updates: every change to an item, as Server-Sent Events. Progress can change many times
+  // a second, so each item is sent at most every 200 ms, with its latest state.
+  api.get('/events', (req, res) => {
+    res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+    res.flushHeaders();
+    res.write('retry: 3000\n\n');
+    const due = new Map(); // id -> timer
+    const send = (id) => {
+      due.delete(id);
+      const g = store.get(id);
+      res.write(`event: generation\ndata: ${JSON.stringify(g || { id, deleted: true })}\n\n`);
+    };
+    const onChange = (id) => {
+      if (!due.has(id)) due.set(id, setTimeout(() => send(id), 200));
+    };
+    const ping = setInterval(() => res.write(': ping\n\n'), 25_000);
+    store.events.on('change', onChange);
+    req.on('close', () => {
+      store.events.off('change', onChange);
+      clearInterval(ping);
+      for (const t of due.values()) clearTimeout(t);
+    });
+  });
   api.get('/tags', (req, res) => res.json({ tags: store.tags() }));
 
   api.get('/generations', (req, res) => {
@@ -240,6 +265,9 @@ export function createApp({ getConfig, store, runner, engine, lessons, distDir }
     if (!/^[ab]/.test(voiceId)) throw httpError(400, 'Lessons need an English voice, so animations can follow individual words.');
     const minutes = LESSON_MINUTES.includes(Number(b.minutes)) ? Number(b.minutes) : 2;
     const quality = VIDEO_QUALITIES.includes(b.quality) ? b.quality : 'default';
+    // "storyboard" stops before rendering so the lesson can be looked at first.
+    const review = ['render', 'storyboard'].includes(b.review) ? b.review : getConfig().lessonReview || 'render';
+    const visualReview = b.visualReview === undefined ? undefined : Boolean(b.visualReview);
     const id = crypto.randomUUID();
     const project = `${slugify(topic, 'lesson').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40) || 'lesson'}-${id.slice(0, 6)}`;
     const ownTitle = String(b.title || '').trim().slice(0, 120);
@@ -273,13 +301,13 @@ export function createApp({ getConfig, store, runner, engine, lessons, distDir }
       model_id: MODEL_ID,
       settings_json: JSON.stringify({
         project, quality, speed: 1, scenes: [],
-        lesson: { topic, goal, minutes, ownTitle: !!ownTitle, attachments: attached.files.map(({ name, file, kind }) => ({ name, file, kind })) },
+        lesson: { topic, goal, minutes, review, ownTitle: !!ownTitle, attachments: attached.files.map(({ name, file, kind }) => ({ name, file, kind })) },
       }),
       status: 'queued',
       tags: normalizeTags(b.tags ?? ['lesson']).join(','),
       created_at: Date.now(),
     });
-    await lessons.start(id, { topic, goal, notes: allNotes, minutes, voice: voiceId, attachments: attached.files });
+    await lessons.start(id, { topic, goal, notes: allNotes, minutes, voice: voiceId, attachments: attached.files, visualReview });
     res.status(201).json({ generation: store.get(id) });
   });
 
@@ -367,9 +395,115 @@ export function createApp({ getConfig, store, runner, engine, lessons, distDir }
   });
 
   api.post('/generations/:id/cancel', (req, res) => {
-    if (!store.getRaw(req.params.id)) throw httpError(404, 'Not found');
-    if (!runner.cancel(req.params.id)) lessons?.cancel(req.params.id);
+    const row = store.getRaw(req.params.id);
+    if (!row) throw httpError(404, 'Not found');
+    if (row.status === 'awaiting') {
+      // Waiting on the person: cancelling means "don't render it". Retry renders it after all.
+      store.update(row.id, { status: 'cancelled', error: 'Cancelled', stage: null, finished_at: Date.now() });
+    } else if (!runner.cancel(row.id)) {
+      lessons?.cancel(row.id);
+    }
     res.json(store.get(req.params.id));
+  });
+
+  // A lesson waiting on its storyboard: render it, optionally at another quality.
+  api.post('/generations/:id/approve', (req, res) => {
+    const row = store.getRaw(req.params.id);
+    if (!row) throw httpError(404, 'Not found');
+    if (row.status !== 'awaiting') throw httpError(409, 'This lesson is not waiting for approval.');
+    const b = req.body || {};
+    if ((b.action ?? 'render') !== 'render') throw httpError(400, 'The only approval so far is { action: "render" }.');
+    const settings = JSON.parse(row.settings_json);
+    if (VIDEO_QUALITIES.includes(b.quality)) settings.quality = b.quality;
+    store.update(row.id, { status: 'queued', stage: null, error: null, progress_done: 0, finished_at: null, settings_json: JSON.stringify(settings) });
+    runner.enqueue(row.id);
+    res.json(store.get(row.id));
+  });
+
+  // The storyboard: per scene and block, the narration and the stills the check took. The
+  // working copy's by default (the last check), or a version's with ?version=n.
+  const storyboardOf = (req) => {
+    const row = store.getRaw(req.params.id);
+    if (!row || row.kind !== 'video' || !versions) throw httpError(404, 'Not found');
+    const version = req.query.version ? Number(req.query.version) : 0;
+    if (req.query.version && !(Number.isInteger(version) && version > 0)) throw httpError(400, 'A version is a whole number.');
+    const found = versions.storyboard(row, version);
+    if (!found) throw httpError(404, 'No storyboard yet. It appears once the scenes have been checked.');
+    return { row, version, ...found };
+  };
+
+  api.get('/generations/:id/storyboard', (req, res) => {
+    const { row, version, board } = storyboardOf(req);
+    const q = version ? `?version=${version}` : '';
+    const still = (s) => ({ ...s, url: `/api/generations/${row.id}/storyboard/${encodeURIComponent(path.basename(String(s.file)))}${q}` });
+    res.json({
+      ...board,
+      version: version || null,
+      scenes: (board.scenes || []).map((scene) => ({
+        ...scene,
+        endUrl: scene.end ? still({ file: scene.end }).url : null,
+        blocks: (scene.blocks || []).map((b) => ({
+          ...b,
+          stills: (b.stills || []).map(still),
+          // Narration is only on disk for the working copy: an edit re-speaks and drops old blocks.
+          audioUrl: version ? null : `/api/generations/${row.id}/narration/${encodeURIComponent(b.id)}`,
+        })),
+      })),
+    });
+  });
+
+  api.get('/generations/:id/storyboard/:file', (req, res) => {
+    const { frames, board } = storyboardOf(req);
+    const file = String(req.params.file);
+    if (!/^[A-Za-z0-9_-]+\.png$/.test(file) || !stillsOf(board).has(file)) throw httpError(404, 'No such still');
+    const full = path.join(frames, file);
+    if (!fs.existsSync(full)) throw httpError(404, 'That still is no longer on disk');
+    res.set('Cache-Control', 'private, max-age=60');
+    res.sendFile(full, { dotfiles: 'allow' });
+  });
+
+  // One block's narration, as the check spoke it.
+  api.get('/generations/:id/narration/:block', (req, res) => {
+    const row = store.getRaw(req.params.id);
+    const root = row && versions?.projectRoot(row);
+    const block = String(req.params.block);
+    if (!root || !/^[A-Za-z0-9_-]{1,80}$/.test(block)) throw httpError(404, 'Not found');
+    let manifest;
+    try {
+      manifest = JSON.parse(fs.readFileSync(path.join(root, 'build', 'manifest.json'), 'utf8'));
+    } catch {
+      throw httpError(404, 'This lesson has not been spoken yet');
+    }
+    const wav = manifest.blocks?.[block]?.wav;
+    const audio = wav && path.resolve(root, 'build', wav);
+    if (!audio || !audio.startsWith(path.resolve(root, 'build', 'audio') + path.sep) || !fs.existsSync(audio)) throw httpError(404, 'No narration for that block');
+    res.type('audio/wav');
+    res.set('Cache-Control', 'private, max-age=60');
+    res.sendFile(audio, { dotfiles: 'allow' });
+  });
+
+  // A lesson's versions, newest first.
+  api.get('/generations/:id/versions', (req, res) => {
+    const row = store.getRaw(req.params.id);
+    if (!row) throw httpError(404, 'Not found');
+    res.json({
+      current: row.version || 0,
+      built: row.built_version || 0,
+      versions: store.versions.list(row.id).map((v) => ({
+        n: v.n,
+        source: v.source,
+        note: v.note,
+        createdAt: v.created_at,
+        costUsd: v.cost_usd,
+        usage: v.usage_json ? JSON.parse(v.usage_json) : null,
+        checkOk: v.check_ok == null ? null : !!v.check_ok,
+        warnings: v.warnings,
+        builtAt: v.built_at,
+        quality: v.quality,
+        durationSec: v.duration_sec,
+        renderKept: !!v.render_kept,
+      })),
+    });
   });
 
   api.delete('/generations/:id', (req, res) => {
@@ -388,6 +522,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, distDir }
         projectRemoved = true;
       }
     }
+    versions?.removeRenders(row.id);
     const files = [store.audioPath(row.id), `${store.audioPath(row.id)}.tmp`, ...['mp4', 'srt', 'vtt', 'jpg'].map((e) => store.videoPath(row.id, e))];
     for (const f of files) {
       try {

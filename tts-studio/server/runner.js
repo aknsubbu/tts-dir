@@ -6,7 +6,7 @@ import { cleanText } from './text.js';
  * one Kokoro model. Video builds (kind 'video') queue here too: they speak
  * with Kokoro and keep the CPU busy rendering.
  */
-export function createRunner({ store, engine, video }) {
+export function createRunner({ store, engine, video, versions = null }) {
   const queue = [];
   const controllers = new Map();
   const cancelled = new Set();
@@ -95,6 +95,9 @@ export function createRunner({ store, engine, video }) {
     store.update(id, { status: 'processing', progress_done: 0, progress_total: 0, error: null });
     const kinds = ['mp4', 'srt', 'vtt', 'jpg']; // the video first, then captions and a poster for its card
     const outputs = kinds.map((ext) => store.videoPath(id, ext));
+    // Written beside the current files and swapped in only once the build has succeeded, so a
+    // failed rebuild of a lesson leaves its last video playing.
+    const fresh = outputs.map((f) => `${f}.new`);
     try {
       if (!video) throw new Error('Video builds are not set up on this server.');
       const result = await video.build({
@@ -106,19 +109,27 @@ export function createRunner({ store, engine, video }) {
       if (cancelled.has(id)) throw Object.assign(new Error('Cancelled'), { cancelled: true });
       // The build folder is overwritten by the next build, so the library keeps its own copy.
       for (const [i, ext] of kinds.entries()) {
-        if (result.files[ext] && fs.existsSync(result.files[ext])) fs.copyFileSync(result.files[ext], outputs[i]);
+        if (result.files[ext] && fs.existsSync(result.files[ext])) fs.copyFileSync(result.files[ext], fresh[i]);
       }
+      const version = store.getRaw(id)?.version || 0;
+      if (versions && version) versions.archiveCurrent(id); // the previous version's render moves aside
+      for (const [i, f] of outputs.entries()) {
+        if (fs.existsSync(fresh[i])) fs.renameSync(fresh[i], f);
+        else fs.rmSync(f, { force: true }); // no stale poster from an older version
+      }
+      const bytes = fs.statSync(outputs[0]).size;
       store.update(id, {
         status: 'done',
-        audio_bytes: fs.statSync(outputs[0]).size,
+        audio_bytes: bytes,
         duration_sec: result.durationSec,
         progress_done: result.segments,
         progress_total: result.segments,
         finished_at: Date.now(),
         error: null,
       });
+      if (versions && version) versions.built(id, version, { quality: settings.quality, durationSec: result.durationSec, bytes });
     } catch (e) {
-      for (const f of outputs) fs.rmSync(f, { force: true });
+      for (const f of fresh) fs.rmSync(f, { force: true });
       if (cancelled.has(id) || e.cancelled || e.code === 'aborted') {
         store.update(id, { status: 'cancelled', error: 'Cancelled', finished_at: Date.now() });
       } else {

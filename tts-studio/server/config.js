@@ -66,6 +66,8 @@ export function loadConfig() {
     authorAutofix: pick('TTS_AUTHOR_AUTOFIX', '') ? [String(pick('TTS_AUTHOR_AUTOFIX', '')).trim()] : null,
     authorParallel: Math.max(1, Number(pick('TTS_AUTHOR_PARALLEL', 2)) || 1), // requests to Claude at once
     notesImageEdge: Math.max(800, Number(pick('TTS_NOTES_IMAGE_EDGE', 1400)) || 1400), // pixels on a photo's long side
+    keepRenders: Math.max(1, Number(pick('TTS_KEEP_RENDERS', 3)) || 3), // videos kept per lesson, the current one included
+    lessonReview: String(pick('TTS_LESSON_REVIEW', 'render')) === 'storyboard' ? 'storyboard' : 'render', // default for new lessons
     authorCheck: pick('TTS_AUTHOR_CHECK', '') ? [String(pick('TTS_AUTHOR_CHECK', '')).trim()] : null,
     envFile,
   };

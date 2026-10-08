@@ -5,6 +5,7 @@ import { createEngine } from './kokoro.js';
 import { createRunner } from './runner.js';
 import { createVideoBuilder } from './video.js';
 import { createLessons } from './lessons.js';
+import { createVersions } from './versions.js';
 import { createApp } from './app.js';
 import { createAuthorApp } from '../author/app.js';
 
@@ -12,9 +13,10 @@ const cfg = loadConfig();
 const store = createStore(cfg.dataDir);
 const interrupted = store.markInterrupted();
 const engine = createEngine({ getConfig: loadConfig });
-const runner = createRunner({ store, engine, video: createVideoBuilder({ getConfig: loadConfig }) });
-const lessons = createLessons({ store, runner, getConfig: loadConfig });
-const app = createApp({ getConfig: loadConfig, store, runner, engine, lessons, distDir: path.join(ROOT, 'dist') });
+const versions = createVersions({ store, getConfig: loadConfig });
+const runner = createRunner({ store, engine, video: createVideoBuilder({ getConfig: loadConfig }), versions });
+const lessons = createLessons({ store, runner, getConfig: loadConfig, versions });
+const app = createApp({ getConfig: loadConfig, store, runner, engine, lessons, versions, distDir: path.join(ROOT, 'dist') });
 
 // The lesson writer is its own small server. It runs in this process on its own port, so one
 // command starts everything; set TTS_AUTHOR_URL to use one started elsewhere with `npm run author`.

@@ -9,6 +9,7 @@ import { createRunner } from '../runner.js';
 import { createApp } from '../app.js';
 import { createLessons } from '../lessons.js';
 import { createVideoBuilder } from '../video.js';
+import { createVersions } from '../versions.js';
 import { createAuthorApp } from '../../author/app.js';
 import { execFileSync } from 'node:child_process';
 import { alive, answer, sandbox, SCRIPT, until } from '../../author/test/fakes.js';
@@ -77,9 +78,10 @@ before(async () => {
   config.authorUrl = `http://127.0.0.1:${authorServer.address().port}`;
 
   store = createStore(path.join(dir, 'data'));
-  runner = createRunner({ store, engine, video: createVideoBuilder({ getConfig }) });
-  lessons = createLessons({ store, runner, getConfig, pollMs: 20 });
-  const app = createApp({ getConfig, store, runner, engine, lessons });
+  const versions = createVersions({ store, getConfig });
+  runner = createRunner({ store, engine, video: createVideoBuilder({ getConfig }), versions });
+  lessons = createLessons({ store, runner, getConfig, versions, pollMs: 20 });
+  const app = createApp({ getConfig, store, runner, engine, lessons, versions });
   await new Promise((resolve) => {
     server = app.listen(0, '127.0.0.1', resolve);
   });
@@ -106,7 +108,7 @@ test('a topic and notes become a video in the library', async () => {
   assert.equal(g0.title, 'Gradient of the squared error');
   assert.deepEqual(g0.tags, ['lesson']);
   assert.match(g0.settings.project, /^gradient-of-the-squared-error-[0-9a-f]{6}$/);
-  assert.deepEqual(g0.settings.lesson, { topic: LESSON.topic, goal: LESSON.goal, minutes: 1, ownTitle: false, attachments: [] });
+  assert.deepEqual(g0.settings.lesson, { topic: LESSON.topic, goal: LESSON.goal, minutes: 1, review: 'render', ownTitle: false, attachments: [] });
 
   const g = await settled(g0.id);
   assert.equal(g.status, 'done', g.error);
@@ -128,6 +130,35 @@ test('a topic and notes become a video in the library', async () => {
   assert.equal((await j('GET', '/api/generations?q=slope')).data.total, 1, 'searchable by what is said');
   // And it can be rebuilt like any project.
   assert.ok((await j('GET', '/api/video/projects')).data.projects.some((p) => p.name === g.settings.project));
+});
+
+test('a lesson can stop at its storyboard, and is version 1 with what it cost', async () => {
+  box.answers([answer()]);
+  const made = await j('POST', '/api/lessons', { ...LESSON, review: 'storyboard', visualReview: false });
+  const id = made.data.generation.id;
+  const waiting = await until(async () => {
+    const g = await get(id);
+    return g.status === 'awaiting' ? g : null;
+  });
+  assert.equal(waiting.stage, 'Storyboard ready: have a look');
+  assert.equal(waiting.videoUrl, null, 'nothing is rendered yet');
+  assert.equal(waiting.version, 1);
+  assert.equal(waiting.settings.lesson.usage.outputTokens, 4000);
+  assert.equal(waiting.settings.lesson.costUsd, 0.25);
+  assert.equal((await j('GET', '/api/stats')).data.awaiting, 1);
+  const board = (await j('GET', `/api/generations/${id}/storyboard`)).data;
+  assert.equal(board.scenes[0].blocks[0].stills[0].file, 'Intro-intro.png');
+  assert.equal((await fetch(base + board.scenes[0].blocks[0].stills[0].url)).status, 200);
+
+  const approved = await j('POST', `/api/generations/${id}/approve`, { quality: 'medium' });
+  assert.ok(['queued', 'processing'].includes(approved.data.status));
+  const g = await settled(id);
+  assert.equal(g.status, 'done', g.error);
+  assert.equal(g.builtVersion, 1);
+  assert.equal(await (await fetch(base + g.videoUrl)).text(), 'MP4medium', 'built at the quality chosen on approval');
+  const { versions: list } = (await j('GET', `/api/generations/${id}/versions`)).data;
+  assert.deepEqual(list.map((v) => [v.n, v.source, v.costUsd, v.quality]), [[1, 'written', 0.25, 'medium']]);
+  assert.ok(box.exists(g.settings.project, 'versions/001/storyboard/storyboard.json'));
 });
 
 test('a typed title is kept, and the stages show while Claude fixes its scenes', async () => {

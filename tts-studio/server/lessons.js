@@ -11,7 +11,7 @@ import { readProject } from './video.js';
  * queue: the row sits at "processing" with a stage, and joins the queue as an
  * ordinary video build once its project is ready.
  */
-export function createLessons({ store, runner, getConfig, pollMs = 1500 }) {
+export function createLessons({ store, runner, getConfig, versions = null, pollMs = 1500 }) {
   const watching = new Map(); // generation id -> { jobId, timer, misses }
 
   const base = () => {
@@ -44,7 +44,7 @@ export function createLessons({ store, runner, getConfig, pollMs = 1500 }) {
 
   /**
    * Hand a lesson to the writer and start following it. `brief` is { topic, goal, notes,
-   * minutes, voice }; leave it out to retry with the brief saved in the project.
+   * minutes, voice, visualReview }; leave it out to retry with the brief saved in the project.
    */
   async function start(id, brief) {
     const row = store.getRaw(id);
@@ -95,7 +95,10 @@ export function createLessons({ store, runner, getConfig, pollMs = 1500 }) {
     schedule(id);
   }
 
-  /** The project is written and checked: fill in the row and queue the build. */
+  /**
+   * The project is written and checked: fill in the row, make it a version, and queue the
+   * build, or stop at the storyboard when the person asked to see it first.
+   */
   function finish(id, result) {
     watching.delete(id);
     const row = store.getRaw(id);
@@ -103,7 +106,22 @@ export function createLessons({ store, runner, getConfig, pollMs = 1500 }) {
     const settings = JSON.parse(row.settings_json);
     const project = readProject(getConfig().videoDir, settings.project);
     const script = project?.script || result.script || row.text;
-    Object.assign(settings, { scenes: result.scenes, lesson: { ...settings.lesson, fixes: result.fixes, polished: result.polished, warnings: result.warnings?.length || 0, costUsd: result.costUsd ?? null } });
+    // The totals stay on the row; each request's figures are in the version and in author.json.
+    const usage = result.usage ? { ...result.usage } : null;
+    if (usage) delete usage.requests;
+    Object.assign(settings, {
+      scenes: result.scenes,
+      lesson: {
+        ...settings.lesson,
+        fixes: result.fixes,
+        autofixed: result.autofixed?.length || 0,
+        polished: result.polished,
+        warnings: result.warnings?.length || 0,
+        costUsd: result.costUsd ?? null,
+        usage,
+      },
+    });
+    const review = settings.lesson.review === 'storyboard';
     store.update(id, {
       // Keep a title the person typed; otherwise use the one Claude gave the video.
       ...(settings.lesson.ownTitle ? {} : { title: String(result.title || row.title).slice(0, 120) }),
@@ -111,10 +129,20 @@ export function createLessons({ store, runner, getConfig, pollMs = 1500 }) {
       char_count: script.length,
       word_count: countWords(script),
       settings_json: JSON.stringify(settings),
-      status: 'queued',
-      stage: null,
+      status: review ? 'awaiting' : 'queued',
+      stage: review ? 'Storyboard ready: have a look' : null,
     });
-    runner.enqueue(id);
+    try {
+      versions?.snapshot(id, {
+        source: 'written',
+        usage: result.usage || null,
+        costUsd: result.costUsd ?? null,
+        check: { ok: true, warnings: result.warnings?.length || 0 },
+      });
+    } catch (e) {
+      console.error(`Could not keep version files for ${settings.project}: ${e.message}`);
+    }
+    if (!review) runner.enqueue(id);
   }
 
   /** Stop following a lesson and tell the writer to stop too. Returns true if it was being written. */
