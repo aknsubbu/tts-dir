@@ -7,9 +7,11 @@ Two Python environments, kept apart so torch never loads while rendering:
 - `../tts-studio/.venv` speaks the narration (`narrate.py`). `npm run setup` in tts-studio creates it.
 - `video/.venv` renders the scenes with ManimGL (set up below).
 
-`build.py` runs both. It only needs the standard library, so plain `python3` runs it.
+`build.py` runs both. It only needs the standard library, so plain `python3` runs it: Python 3.9 or newer, such as the one Apple's command line tools install.
 
 ## Setup (macOS)
+
+The [main README](../README.md#install) walks through the whole installation, these steps included. On their own they need [Homebrew](https://brew.sh) and [uv](https://docs.astral.sh/uv/) (`brew install uv`); uv fetches the Python 3.10 to 3.12 that ManimGL needs. Rendering draws through Metal, so it needs a Mac whose GPU supports it (every Apple Silicon Mac does), not a virtual machine without GPU access.
 
 ```bash
 brew install ffmpeg
@@ -24,7 +26,9 @@ uv pip install --python .venv/bin/python -r requirements.txt
 ```
 
 If `SmokeTex` fails on a missing `.sty`, install the package it names with `sudo tlmgr install <name>`.
-LaTeX is only needed for `Tex()`; the demo project uses `Text()` and runs without it.
+LaTeX is only needed for `Tex()`; the demo project uses `Text()` and runs without it. If you have [MacTeX](https://www.tug.org/mactex/) (the full TeX Live, about 5 GB), skip the BasicTeX and `tlmgr` lines: it has every package already.
+
+`requirements.txt` installs ManimGL from GitHub at a pinned commit, the one these scenes are checked against; PyPI's `manimgl` is older and differs.
 
 ## Check it works
 
@@ -36,6 +40,13 @@ echo "The derivative measures how fast a function changes." | python3 ../tts.py 
 ```
 
 `-w` renders without opening a window. Leave it off to preview in a window, which is silent.
+
+Then check the whole path once, narration and the sandbox included (both need the voice from `npm run setup` in `../tts-studio`):
+
+```bash
+python3 build.py demo --quality low    # narrated and rendered as lessons are: projects/demo/build/demo.mp4
+python3 sandbox_probe.py               # renders inside the sandbox; should report that it stopped nothing
+```
 
 ## Build a narrated video
 
@@ -104,7 +115,9 @@ The places to read and the programs to start are found when the scene runs, not 
 
 To make that possible, `sandbox.prepare()` points the caches manim, matplotlib, fontconfig and TeX would keep in your home folder at the scene cache, and passes manimgl a `--config_file` (`build/manim-config.json`) that moves its LaTeX working folder into `build/`. Scenes import `voiceover`, `kit` and nothing else of this toolchain from `runtime/`, which is all of `video/` they can read. The environment and the limits apply everywhere, sandbox or not.
 
-**When a project fails only inside the sandbox.** A scene the sandbox stopped fails with "Operation not permitted", and the error says what to do next:
+### When a project fails only inside the sandbox
+
+A scene the sandbox stopped usually fails with "Operation not permitted", and the error says what to do next:
 
 ```bash
 VIDEO_SANDBOX=report python3 build.py <name>   # allow and log what the reading, starting and asking rules would stop
@@ -113,6 +126,8 @@ VIDEO_SANDBOX=0 python3 build.py <name>        # no sandbox at all, for a hand-w
 ```
 
 `VIDEO_SANDBOX=report` keeps the network, writing and private-folder rules, and only reports the rest: each read, start or lookup the strict rules would stop is allowed and written to the macOS log. `sandbox_probe.py` renders the smoke scenes, the example lesson and any projects you name from copies, once reporting and once strict, reads the log and prints what was stopped as rules for `scene.sb`, each with what asked for it. Run it once after setting up `video/`: a Mac whose rendering needs something these rules did not foresee (a font folder, a TeX helper script) shows it there.
+
+For lessons made in the dashboard, set the variable when you start it: `VIDEO_SANDBOX=report npm start` in `../tts-studio`. Builds and checks get the dashboard's environment. `.env` does not reach them: `build.py` and `check.py` read only the environment.
 
 `sandbox-exec` ships with macOS; on a system without it scenes run unconfined. CI renders the Text smoke scene inside the strict sandbox on macOS, when the runner can render at all.
 
@@ -196,8 +211,31 @@ class Intro(VoiceoverScene, Scene):
 
 Code that is not inside a `with` block runs with no narration, as usual.
 
-Running `manimgl scenes.py Intro -w` directly also works. To make that possible, the demo's scenes add `video/` to `sys.path` and set `voiceover_manifest` to the project's `build/manifest.json`. A window preview is silent, and so is `-n` / `-s`.
+Running `manimgl scenes.py Intro -w` directly also works. To make that possible, the demo's scenes add `video/runtime/` to `sys.path` and set `voiceover_manifest` to the project's `build/manifest.json`. `build.py` and `check.py` do both for you, so lessons need neither. A window preview is silent, and so is `-n` / `-s`.
 
 ### Timing details
 
 manim advances its clock before it draws each frame. So frame *n* of a scene shows scene time (n+1)/fps, while sound added at scene time *t* plays at video time *t*. When an animation runs until a mark and the next one starts on the following frame, the change is on screen exactly when the word starts. `check_sync.py` measures this in the built demo, and reports the offset in milliseconds for both the audio placement and the first yellow frame.
+
+## Settings
+
+`build.py`, `check.py` and the sandbox read these from the environment (not from `.env`). Set them in the shell you build from, or when you start the dashboard, whose builds inherit them: `VIDEO_SANDBOX=report npm start`.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `VIDEO_SANDBOX` | `1` | `1`: scenes run under the strict rules. `report`: what the reading, starting and asking rules would stop is allowed and logged for `sandbox_probe.py`. `0`: no sandbox |
+| `VIDEO_SCENE_CACHE` | `~/Library/Caches/narrated-proofs-scenes` | The cache scenes share: manim's, TeX's, matplotlib's and fontconfig's |
+| `VIDEO_SCENE_TIMEOUT` | `2700` | Seconds one scene's full render may take |
+| `KOKORO_PYTHON` | `../tts-studio/.venv/bin/python` | The Python that speaks the narration |
+| `MANIMGL` | `.venv/bin/manimgl` | The manimgl that renders the scenes |
+
+## Troubleshooting
+
+- **`No manimgl at …`.** `video/.venv` is missing or incomplete: run the two `uv` lines in [Setup](#setup-macos) again.
+- **`No Kokoro Python at …`.** The narration needs the voice: run `npm run setup` in `../tts-studio`, or set `KOKORO_PYTHON`.
+- **`File 'something.sty' not found`.** A LaTeX package is missing: `sudo tlmgr install something`. If `tlmgr` is not found, run `eval "$(/usr/libexec/path_helper)"` or open a new terminal.
+- **`latex`, `dvisvgm` or `ffmpeg` not found.** `build.py` adds `/Library/TeX/texbin`, `/opt/homebrew/bin` and `/usr/local/bin` to the PATH when they exist; anywhere else, put them on your PATH.
+- **A render fails before drawing anything, about an adapter, a device or Metal.** ManimGL draws through Metal. Render on the Mac itself, not in a virtual machine.
+- **"Operation not permitted", or the error says the sandbox may have stopped it.** See [When a project fails only inside the sandbox](#when-a-project-fails-only-inside-the-sandbox).
+- **A scene renders, but the voice and the picture drift apart.** Keep the narration as WAV (it always is when `build.py` makes it), and check with `python3 projects/demo/check_sync.py` after `python3 build.py demo`, which measures it.
+- **The first build is slow.** It fills the scene cache: fonts, LaTeX and shaders. Later builds reuse it, and render only the scenes that changed (`--no-cache` renders them all).

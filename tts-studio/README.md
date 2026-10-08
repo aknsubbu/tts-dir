@@ -10,7 +10,7 @@ A local dashboard with two tabs. **Lessons** turns a topic and your notes into a
 
 ## Run it
 
-Requires Node 20 or newer and Python 3.10 to 3.12 (or [uv](https://docs.astral.sh/uv/), which fetches a suitable Python itself).
+The full installation, with LaTeX, ffmpeg, ManimGL and a lesson writer for the Lessons tab, is in the [main README](../README.md#install), step by step. The Audio tab alone needs only Node 20 or newer and Python 3.10 to 3.12 (or [uv](https://docs.astral.sh/uv/), which fetches a suitable Python itself):
 
 ```bash
 cd tts-studio
@@ -28,12 +28,18 @@ For development with hot reload, run `npm run dev` and open <http://localhost:51
 | Command | What it does |
 | --- | --- |
 | `npm run setup` | Install or repair the Kokoro engine (safe to re-run) |
+| `npm run setup:japanese` | The same, plus the Japanese voices (a further 1 GB) |
 | `npm run app` | Build the UI, then start the server (the everyday command) |
 | `npm start` | Start the server using the last build |
 | `npm run dev` | Server with auto-restart plus Vite dev server on port 5173 |
 | `npm run author` | The lesson writer on its own, for running it apart from the dashboard |
-| `npm test` | Everything: server and lesson writer (`test:server`), the page (`test:client`), engine and `../video` (`test:python`). The ones that load the real model are skipped until `npm run setup` has run |
+| `npm run mcp` | The MCP connector over stdio, as Claude Code or the desktop app starts it |
+| `npm run mcp:pack` | The connector as a desktop extension, `dist/narrated-proofs.mcpb`. `npm run app` empties `dist/`, so open it first |
+| `npm run bakeoff` | Make the same short lessons with each set-up writer and compare them (see below) |
+| `npm test` | Everything: server, lesson writer and MCP connector (`test:server`), the page (`test:client`), engine and `../video` (`test:python`). The ones that load the real model are skipped until `npm run setup` has run |
 | `npm run lint` | ESLint over the server, the lesson writer and the page |
+
+The dashboard runs while its terminal is open; Ctrl-C stops it. A job running when it stops is marked "Interrupted by a server restart"; press **Retry** on its card. A lesson carries on from the files it had already written.
 
 ## Using it
 
@@ -188,7 +194,21 @@ claude mcp add --transport http narrated-proofs http://localhost:8787/mcp
 claude mcp add narrated-proofs -- node /path/to/tts-studio/mcp/stdio.js
 ```
 
-For the desktop app, add the entry Settings shows to `~/Library/Application Support/Claude/claude_desktop_config.json`, or run `npm run mcp:pack` and open `dist/narrated-proofs.mcpb`. The connector talks to the running dashboard (`NARRATED_PROOFS_URL`, default `http://127.0.0.1:8787`); with `TTS_MCP_AUTOSTART=1` the stdio connector starts the dashboard when it is not running. claude.ai in a browser is not supported: it would need this Mac reachable from the internet.
+For the desktop app, add an entry to `~/Library/Application Support/Claude/claude_desktop_config.json` (create the file if it is missing), then quit and reopen the app. Settings shows it with your paths; it looks like this, with the full path of `node` (`which node`) and of your clone:
+
+```json
+{
+  "mcpServers": {
+    "narrated-proofs": {
+      "command": "/opt/homebrew/bin/node",
+      "args": ["/Users/you/tts-dir/tts-studio/mcp/stdio.js"],
+      "env": { "TTS_MCP_AUTOSTART": "1" }
+    }
+  }
+}
+```
+
+Or run `npm run mcp:pack` and open `dist/narrated-proofs.mcpb` straight away (the next `npm run app` empties `dist/`). The connector talks to the running dashboard (`NARRATED_PROOFS_URL`, default `http://127.0.0.1:8787`); with `TTS_MCP_AUTOSTART=1`, as above, the stdio connector starts the dashboard when it is not running. Check it from Claude Code with `claude mcp list`, or ask Claude to list the voices. claude.ai in a browser is not supported: it would need this Mac reachable from the internet.
 
 | Tool | Does |
 | --- | --- |
@@ -394,4 +414,11 @@ scripts/
 - **"… has no key" or "has not passed its Test" when making a lesson.** The writer chosen for that step is not set up. Add its key or run its Test in Settings → Lesson writer, or choose another writer.
 - **A provider's Test fails with "Could not reach".** For a model on this Mac, start Ollama or the server first and check the address in Settings.
 - **Claude says the dashboard is not running.** The MCP connector needs `npm start` (or `npm run app`) running, or `TTS_MCP_AUTOSTART=1`.
-- **A lesson's scene fails with "Operation not permitted" or a network error.** The scene tried to reach outside its sandbox. Lessons should never need to.
+- **A lesson fails at "Writing the lesson".** The card shows the writer's message. With Claude Code, run `claude -p "hi"` in the terminal you start the dashboard from: if `claude` is not found, set `TTS_CLAUDE_BIN` in `.env` to the path `which claude` prints; if it asks you to sign in, run `claude` and sign in. If Claude Code reports a usage limit, press **Retry** once it resets.
+- **A lesson fails after its fixes.** The writer could not get a scene to run in three rounds (`TTS_AUTHOR_FIXES`). The card shows the last error. **Retry** carries on from the files already written, with fresh rounds; or look at the error in the **Edit** tab, fix it there and render.
+- **A lesson stopped at its spending cap.** Raise the cap in **Settings → Costs** and press **Retry**. It carries on, counting what it already spent.
+- **A scene fails with "Operation not permitted", or the error says the sandbox may have stopped it.** Either the scene tried something scenes may not do (read a file outside its project, reach the network), which **Ask for a change** or the Edit tab fixes, or rendering on this Mac needs something the sandbox does not allow yet. To tell which, stop the dashboard, start it with `VIDEO_SANDBOX=report npm start` and press **Retry**. If it works now, run `python3 ../video/sandbox_probe.py` and see [the video README](../video/README.md#when-a-project-fails-only-inside-the-sandbox).
+- **"No manimgl at …" or "No Kokoro Python at …".** The video toolchain or the voice is not set up; see the [main README](../README.md#install), steps 4 and 5.
+- **Started from a login item or another app, the dashboard cannot find `claude`, LaTeX or ffmpeg.** Such programs get a short PATH. The build adds `/Library/TeX/texbin`, `/opt/homebrew/bin` and `/usr/local/bin` itself; for Claude Code, set `TTS_CLAUDE_BIN` to its full path.
+- **Port 8790 already in use.** That is the lesson writer's port; set `AUTHOR_PORT=8791` in `.env`.
+- **Rendering is slow.** The first render after installing fills the scene cache (fonts, LaTeX, shaders), and 4K takes far longer than 1080p. Use **480p, quickest** while you try things; a rebuild renders only the scenes that changed.
