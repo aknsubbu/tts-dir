@@ -43,6 +43,7 @@ The demo project measures this in the finished video: the change on screen lands
 | --- | --- |
 | [tts-studio/](tts-studio/) | The dashboard you use (Node, React, SQLite), the lesson writer, the MCP connector, and the Kokoro voice engine. [README](tts-studio/README.md) |
 | [video/](video/) | The video toolchain (Python): speak a script, check and render ManimGL scenes, join them, write captions. Usable on its own for videos you write by hand. [README](video/README.md) |
+| [install.sh](install.sh), [pyproject.toml](pyproject.toml) | The installer, and the one Python environment it creates (ManimGL and Kokoro, locked in `uv.lock`) |
 | [tts.py](tts.py) | Optional command-line launcher for the voice engine: `python3 tts.py script.txt` writes `script.mp3` |
 
 ```
@@ -66,106 +67,33 @@ tts-studio/server ──> video/build.py ──> video/narrate.py    Kokoro spea
 | An internet connection, during setup | Everything is downloaded once. Afterwards speech and rendering work offline; writing a lesson needs the writer you choose |
 | A lesson writer | By default Claude Code, signed in with a Claude Pro or Max plan or an Anthropic API account. Or a key for the Claude API, OpenAI or Groq, or a model running on this Mac with Ollama or LM Studio. The Audio tab needs none |
 
-Setting everything up takes roughly 20 to 40 minutes, most of it downloads.
+Setting everything up takes roughly 20 to 40 minutes, most of it downloads, and is one command.
 
 ## Install
 
-Run these in Terminal. Each step ends with a check; if a check fails, see [Troubleshooting the setup](#troubleshooting-the-setup).
+1. Install Apple's command line tools (`xcode-select --install`) and [Homebrew](https://brew.sh) if you do not have them. Homebrew's installer ends by printing two commands under **Next steps**; run them, then open a new Terminal window.
+2. Get the code and run the installer:
 
-### 1. Apple's command line tools and Homebrew
+   ```bash
+   git clone https://github.com/aknsubbu/tts-dir.git
+   cd tts-dir
+   ./install.sh
+   ```
 
-```bash
-xcode-select --install     # git and compilers; skip if it says they are already installed
-```
+   It installs Node, [uv](https://docs.astral.sh/uv/), ffmpeg and BasicTeX with Homebrew (it asks for your password for LaTeX), creates one Python environment in `.venv` with ManimGL and Kokoro, installs and builds the dashboard, downloads the voice model (about 350 MB) and speaks a test sentence, and renders a test equation. Anything already installed is skipped, so if it stops partway, run it again. If you have [MacTeX](https://www.tug.org/mactex/), it is used as it is. Japanese voices need a further 1 GB: `./install.sh --japanese`.
 
-Install [Homebrew](https://brew.sh) if you do not have it:
+3. Install a lesson writer. **Claude Code** is the default: `npm install -g @anthropic-ai/claude-code`, then run `claude` once and sign in. Lessons use your Claude plan's limits, or your API credits if you signed in with an Anthropic Console account. Check: `claude -p "Reply with the word ready"` prints `ready`. **Or** skip it and choose another writer in the dashboard: see [Writing lessons without Claude Code](#writing-lessons-without-claude-code).
 
-```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-```
-
-At the end, the installer prints two commands under **Next steps** that put `brew` on your PATH. Run them, then open a new Terminal window.
-
-Check: `brew --version` prints a version.
-
-### 2. The tools
-
-```bash
-brew install node uv ffmpeg
-brew install --cask basictex        # LaTeX, for equations; asks for your password
-eval "$(/usr/libexec/path_helper)"  # or open a new terminal, to pick up /Library/TeX/texbin
-sudo tlmgr update --self
-sudo tlmgr install dvisvgm standalone preview babel-english doublestroke setspace tipa relsize rsfs calligra fundus-calligra wasysym wasy ragged2e physics xcolor microtype cm-super
-```
-
-- **Node** (20 or newer) runs the dashboard. **uv** installs the right Python versions by itself, so you do not need to install Python. **ffmpeg** joins and encodes the videos.
-- **BasicTeX** is a small LaTeX (about 100 MB, plus the packages above). If you already have [MacTeX](https://www.tug.org/mactex/), skip the BasicTeX line; it has every package already.
-
-Check: `node --version` prints v20 or later, and `which latex dvisvgm ffmpeg uv` prints four paths.
-
-### 3. Get the code
-
-```bash
-git clone https://github.com/aknsubbu/tts-dir.git
-cd tts-dir
-```
-
-Every command below starts from this `tts-dir` folder.
-
-### 4. The dashboard and the voice
+Then start it:
 
 ```bash
 cd tts-studio
-npm install
-npm run setup      # once: installs Kokoro into tts-studio/.venv and downloads about 350 MB of model files
-cd ..
+npm start          # serves the dashboard on http://localhost:8787
 ```
 
-`npm run setup` takes a few minutes. It ends by speaking a test sentence in every language and printing `Done. Start the dashboard with: npm run app`. It is safe to run again if it was interrupted. Japanese voices need a further 1 GB: `npm run setup:japanese`.
+Open <http://localhost:8787>. Within a few seconds the header says **Kokoro ready**. Leave the Terminal window open while you use the dashboard; **Ctrl-C** stops it.
 
-### 5. The video toolchain
-
-```bash
-cd video
-uv venv --python 3.12 .venv
-uv pip install --python .venv/bin/python -r requirements.txt   # ManimGL at the pinned commit, from GitHub
-cd ..
-```
-
-This is a second Python environment, kept apart from the voice's so PyTorch never loads while rendering.
-
-### 6. Check that videos render
-
-```bash
-cd video
-.venv/bin/manimgl smoke/smoke_scene.py SmokeText -w -l --video_dir smoke/out   # shapes and text
-.venv/bin/manimgl smoke/smoke_scene.py SmokeTex -w -l --video_dir smoke/out    # an equation, through LaTeX
-python3 build.py demo --quality low      # the demo, narrated and rendered the way lessons are
-open projects/demo/build/demo.mp4
-python3 sandbox_probe.py                 # renders the smoke scenes and the example lesson inside the sandbox
-cd ..
-```
-
-- The two smoke scenes write MP4s under `smoke/out/` in a few seconds each. If `SmokeTex` fails on a missing `.sty` file, install the package it names with `sudo tlmgr install <name>` and run it again.
-- `build.py demo` speaks the demo's script with Kokoro, renders its scenes and joins them, with captions. The video should play with the voice in step with the pictures.
-- `sandbox_probe.py` takes a few minutes. Scenes, which a model writes, run inside the macOS sandbox, which lets them read only what rendering needs. The probe renders under those rules, reports each render as ok, and should say **The strict rules stopped nothing these renders needed**. If it lists rules instead, rendering on this Mac needs something they do not allow; see [When a project fails only inside the sandbox](video/README.md#when-a-project-fails-only-inside-the-sandbox).
-
-### 7. A lesson writer
-
-**Claude Code** (the default). Install it as described at [claude.com/claude-code](https://claude.com/claude-code); with Node installed, `npm install -g @anthropic-ai/claude-code` is one way. Then run `claude` once in Terminal and sign in when it asks. Lessons use your Claude plan's limits, or your API credits if you signed in with an Anthropic Console account.
-
-Check: `claude -p "Reply with the word ready"` prints `ready`.
-
-**Or another writer.** Skip Claude Code and set one up in the dashboard once it is running (step 8): see [Writing lessons without Claude Code](#writing-lessons-without-claude-code).
-
-### 8. Start it
-
-```bash
-cd tts-studio
-npm run app        # builds the page, then serves it on http://localhost:8787
-```
-
-Open <http://localhost:8787>. Within a few seconds the header says **Kokoro ready**. Leave the Terminal window open while you use the dashboard; **Ctrl-C** stops it. From then on, `npm start` starts it without building the page again (use `npm run app` after updating).
+Optionally, check the whole pipeline and the sandbox from `video/`: `python3 build.py demo --quality low` renders the narrated demo to `projects/demo/build/demo.mp4`, and `python3 sandbox_probe.py` (a few minutes) renders inside the scene sandbox and should say **The strict rules stopped nothing these renders needed**. If it lists rules instead, see [When a project fails only inside the sandbox](video/README.md#when-a-project-fails-only-inside-the-sandbox).
 
 ## Make your first lesson
 
@@ -182,7 +110,7 @@ From there, type into **Ask for a change** at the bottom ("slow down the second 
 
 ```bash
 cd tts-dir/tts-studio
-npm start          # or npm run app after updating
+npm start
 ```
 
 - **The dashboard runs while its Terminal window is open.** A lesson or build that is running when it stops is marked failed; press **Retry** on its card and it carries on from the files already written.
@@ -222,14 +150,10 @@ claude mcp add --transport http narrated-proofs http://localhost:8787/mcp
 ```bash
 cd tts-dir
 git pull
-cd tts-studio
-npm install
-npm run setup                                                     # safe to re-run; quick when nothing changed
-cd ../video
-uv pip install --python .venv/bin/python -r requirements.txt      # when requirements.txt changed
-cd ../tts-studio
-npm run app                                                       # rebuilds the page
+./install.sh       # quick when nothing changed; rebuilds the page
 ```
+
+If you installed before `install.sh` existed, it tells you to delete the old `tts-studio/.venv` and `video/.venv`, which are no longer used.
 
 The library's database upgrades itself when the dashboard starts. Copy `tts-studio/data/` first if you want a way back. Your lessons in `video/projects/` show up as untracked files in `git status`; they are yours, and `git pull` leaves them alone.
 
@@ -237,7 +161,7 @@ The library's database upgrades itself when the dashboard starts. Copy `tts-stud
 
 1. In **Settings → Lesson writer**, remove any keys you saved. They are in the Keychain under **Narrated Proofs**, so Keychain Access also finds them.
 2. If you connected Claude Code: `claude mcp remove narrated-proofs`. For the desktop app, remove the `narrated-proofs` entry from its config or the extension from its settings.
-3. Delete the `tts-dir` folder. That removes the library (`tts-studio/data/`), your lessons (`video/projects/`) and both Python environments, so copy anything you want to keep first.
+3. Delete the `tts-dir` folder. That removes the library (`tts-studio/data/`), your lessons (`video/projects/`) and the Python environment, so copy anything you want to keep first.
 4. Delete the caches outside it: the voice model in `~/.cache/huggingface/hub/models--hexgrad--Kokoro-82M` (other programs may share `~/.cache/huggingface`, so delete only that folder) and the scene cache in `~/Library/Caches/narrated-proofs-scenes`.
 5. Optionally, `brew uninstall --cask basictex` and `brew uninstall node uv ffmpeg`, if nothing else of yours uses them.
 
@@ -266,9 +190,9 @@ What a lesson sends, by writer. Settings → Lesson writer says the same for the
 | `video/projects/<name>/` | One folder per video: script, scenes, `project.json`, and `build/` (renders, the scene cache, the storyboard) | everything except `build/` and `versions/` |
 | `video/projects/<name>/versions/` | Each version of a lesson: its script, scenes and storyboard as they were | no |
 | `video/projects/<name>/notes/`, `brief.json` | Your notes and attached files for a lesson | no, for new lessons; the example lesson's `brief.json` is tracked |
-| `tts-studio/.venv/`, `video/.venv/` | The two Python environments | no |
+| `.venv/` | The Python environment (ManimGL and Kokoro), from `pyproject.toml` and `uv.lock` | no |
 | `tts-studio/.env` | Optional settings; see [tts-studio/.env.example](tts-studio/.env.example). Values set here win over the Settings page | no |
-| `~/.cache/huggingface/` | Kokoro's model and voices, downloaded by `npm run setup` | outside the repo |
+| `~/.cache/huggingface/` | Kokoro's model and voices, downloaded by `./install.sh` | outside the repo |
 | `~/Library/Caches/narrated-proofs-scenes/` | What manim, TeX and matplotlib cache while rendering | outside the repo |
 | Keychain, "Narrated Proofs" | Provider keys saved in Settings | outside the repo |
 
@@ -280,13 +204,10 @@ To back up your work, copy `tts-studio/data/` and `video/projects/`.
 | --- | --- |
 | `command not found: brew` | Run the two commands the Homebrew installer printed under **Next steps**, then open a new Terminal window |
 | `npm install` fails building `better-sqlite3` | Your Node version has no prebuilt binary yet. Run `xcode-select --install` so it can compile, or install the current LTS Node (`brew install node@22`, then follow the PATH note it prints) |
-| `npm run setup` says it needs Python 3.10 to 3.12 | Install uv (`brew install uv`) and run it again; uv fetches a suitable Python |
-| `npm run setup` stops partway | It was most likely the download. Run it again; it carries on |
-| `tlmgr: command not found` | Run `eval "$(/usr/libexec/path_helper)"` or open a new Terminal window, so `/Library/TeX/texbin` is on your PATH |
-| `SmokeTex` fails on `File 'something.sty' not found` | `sudo tlmgr install something`, then run it again |
-| A smoke scene fails before drawing anything, about an adapter, a device or Metal | ManimGL draws through Metal. Render on the Mac itself rather than in a virtual machine |
-| `No manimgl at …/video/.venv/bin/manimgl` | Step 5 did not finish. Run its two `uv` commands again from `video/` |
-| `No Kokoro Python at …` | Step 4 did not finish. Run `npm run setup` in `tts-studio` |
+| `./install.sh` stops partway | It was most likely a download. Run it again; it carries on |
+| The test render fails on `File 'something.sty' not found` | `sudo tlmgr install something`, then run `./install.sh` again |
+| The test render fails before drawing anything, about an adapter, a device or Metal | ManimGL draws through Metal. Render on the Mac itself rather than in a virtual machine |
+| `No manimgl at …` or `No Kokoro Python at …` | `./install.sh` did not finish. Run it again |
 | `sandbox_probe.py` lists rules, or a lesson fails with "The sandbox may have stopped it" | See [When a project fails only inside the sandbox](video/README.md#when-a-project-fails-only-inside-the-sandbox). Meanwhile `VIDEO_SANDBOX=report npm start` lets scenes do what the rules stopped and logs it |
 | A lesson fails at "Writing the lesson" with a message about `claude` | Claude Code is not installed, not on the dashboard's PATH, or not signed in. Check `claude -p "hi"` in the same Terminal, or set `TTS_CLAUDE_BIN` in `.env` to its full path (`which claude`) |
 | `Port 8787 is already in use` | Another copy is running, or another program uses the port. Set `PORT=8788` in `tts-studio/.env` |
@@ -301,7 +222,7 @@ npm test           # server, lesson writer, MCP connector, page, engine and vide
 npm run lint
 ```
 
-None of the tests call Claude or any other model: fake OpenAI-, Ollama- and Anthropic-style servers stand in for the providers. The ones that load the real voice model are skipped until `npm run setup` has run, the sandbox tests run only on macOS, and the real render inside the sandbox only once `video/.venv` exists. GitHub Actions runs lint, the tests and a build on every push to `master` and every pull request, and renders the Text smoke scene inside the sandbox on macOS ([ci.yml](.github/workflows/ci.yml)).
+None of the tests call Claude or any other model: fake OpenAI-, Ollama- and Anthropic-style servers stand in for the providers. The ones that load the real voice model, and the real render inside the sandbox, are skipped until `./install.sh` has run; the sandbox tests run only on macOS. GitHub Actions runs lint, the tests and a build on every push to `master` and every pull request, and renders the Text smoke scene inside the sandbox on macOS ([ci.yml](.github/workflows/ci.yml)).
 
 ## Future improvements
 

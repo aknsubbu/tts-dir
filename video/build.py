@@ -10,9 +10,8 @@ A scene is rendered again only when something that decides its picture or sound 
 changed (see scene_keys); otherwise its video from an earlier build is reused from
 build/cache/. Narration is cached the same way, per block, by narrate.py.
 
-Needs ffmpeg and ffprobe on PATH, tts-studio/.venv (npm run setup in tts-studio)
-and video/.venv (see README). Any Python 3.10+ can run this file; it only starts
-the other two. Override their locations with $KOKORO_PYTHON and $MANIMGL.
+Needs ffmpeg and ffprobe on PATH and the repo's .venv (../install.sh). Any Python
+3.10+ can run this file; it only starts manimgl and narrate.py from that .venv. Override their locations with $KOKORO_PYTHON and $MANIMGL.
 """
 import argparse
 import ast
@@ -31,8 +30,9 @@ from captions import block_cues, group_cues, join_tokens, to_srt, to_vtt
 
 HERE = Path(__file__).resolve().parent
 RUNTIME = sandbox.RUNTIME  # what scenes import besides manim, and nothing else
-KOKORO_PYTHON = os.environ.get("KOKORO_PYTHON") or str(HERE.parent / "tts-studio" / ".venv" / "bin" / "python")
-MANIMGL = os.environ.get("MANIMGL") or str(HERE / ".venv" / "bin" / "manimgl")
+VENV = HERE.parent / ".venv"  # created by ../install.sh
+KOKORO_PYTHON = os.environ.get("KOKORO_PYTHON") or str(VENV / "bin" / "python")
+MANIMGL = os.environ.get("MANIMGL") or str(VENV / "bin" / "manimgl")
 QUALITY = {"low": ["-l"], "medium": ["-m"], "hd": ["--hd"], "4k": ["--uhd"], "default": []}
 SCENE_TIMEOUT = float(os.environ.get("VIDEO_SCENE_TIMEOUT") or 45 * 60)  # seconds for one scene's full render
 CACHE_VERSION = 1  # bump when a change here alters what a cached render would contain
@@ -65,14 +65,14 @@ def run(cmd, failed=None, timeout=None, **kw):
 
 def narrate(root):
     if not Path(KOKORO_PYTHON).exists():
-        raise BuildError(f"No Kokoro Python at {KOKORO_PYTHON}. Run `npm run setup` in tts-studio, or set KOKORO_PYTHON.")
+        raise BuildError(f"No Kokoro Python at {KOKORO_PYTHON}. Run ../install.sh, or set KOKORO_PYTHON.")
     run([KOKORO_PYTHON, HERE / "narrate.py", root])
 
 
 def render(root, config, scene, quality):
     """Render one scene in full with manimgl -w. Returns (mp4, timeline json)."""
     if not Path(MANIMGL).exists():
-        raise BuildError(f"No manimgl at {MANIMGL}. Set up video/.venv (see video/README.md), or set MANIMGL.")
+        raise BuildError(f"No manimgl at {MANIMGL}. Run ../install.sh, or set MANIMGL.")
     build = root / "build"
     timeline = build / "timeline" / f"{scene}.json"
     timeline.unlink(missing_ok=True)  # a stale one would put last build's timings in the captions
@@ -300,7 +300,7 @@ def shift_chapter(words, chapter, start):
 def title_card(root, n, title, quality):
     """The card before chapter n, rendered from cards.py and kept until its text or quality changes."""
     if not Path(MANIMGL).exists():
-        raise BuildError(f"No manimgl at {MANIMGL}. Set up video/.venv (see video/README.md), or set MANIMGL.")
+        raise BuildError(f"No manimgl at {MANIMGL}. Run ../install.sh, or set MANIMGL.")
     cards = root / "build" / "cards"
     key = hashlib.sha256(json.dumps([n, title, quality, (RUNTIME / "cards.py").read_text(encoding="utf-8"), manim_fingerprint()]).encode()).hexdigest()[:16]
     out = cards / f"card-{n:02}-{key}.mp4"

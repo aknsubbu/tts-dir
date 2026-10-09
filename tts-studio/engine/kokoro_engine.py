@@ -13,7 +13,7 @@ Other modes:
     kokoro_engine.py warmup   # download the model and voices once, then check they work
     kokoro_engine.py worker   # JSON lines on stdin/stdout; this is what the dashboard runs
 
-Run it with the Python in tts-studio/.venv (`npm run setup` creates it).
+Run it with the Python in the repo's .venv (../../install.sh creates it).
 """
 import argparse
 import importlib.util

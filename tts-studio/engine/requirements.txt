@@ -1,6 +1,0 @@
-# Python 3.10 to 3.12. Installed into tts-studio/.venv by `npm run setup`.
-kokoro>=0.9.4
-soundfile>=0.13
-misaki[zh]>=0.9.4  # Mandarin. Japanese is larger and separate: npm run setup:japanese
-# Without this floor uv backtracks to a 2021 release that needs a Rust compiler.
-transformers>=4.40

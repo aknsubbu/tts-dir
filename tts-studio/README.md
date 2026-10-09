@@ -10,33 +10,29 @@ A local dashboard with two tabs. **Lessons** turns a topic and your notes into a
 
 ## Run it
 
-The full installation, with LaTeX, ffmpeg, ManimGL and a lesson writer for the Lessons tab, is in the [main README](../README.md#install), step by step. The Audio tab alone needs only Node 20 or newer and Python 3.10 to 3.12 (or [uv](https://docs.astral.sh/uv/), which fetches a suitable Python itself):
+`../install.sh` installs everything, LaTeX, ffmpeg, ManimGL and Kokoro included (see the [main README](../README.md#install)). Then:
 
 ```bash
 cd tts-studio
-npm install
-npm run setup      # once: installs Kokoro into .venv and downloads the model
-npm run app        # builds the UI and starts everything on http://localhost:8787
+npm start          # starts everything on http://localhost:8787
 ```
 
-Then open <http://localhost:8787>.
-
-`npm run setup` needs the internet once. It downloads PyTorch and about 350 MB of model and voice files into `~/.cache/huggingface`, then speaks a test sentence in every language. After that everything works offline. Japanese needs a further 1 GB dictionary, so it is separate: `npm run setup:japanese`.
+The installer downloads PyTorch and about 350 MB of model and voice files into `~/.cache/huggingface` once, then speaks a test sentence in every language. After that everything works offline. Japanese needs a further 1 GB dictionary, so it is separate: `../install.sh --japanese`.
 
 For development with hot reload, run `npm run dev` and open <http://localhost:5173>.
 
 | Command | What it does |
 | --- | --- |
-| `npm run setup` | Install or repair the Kokoro engine (safe to re-run) |
+| `npm run setup` | Run `../install.sh`: install, update or repair everything (safe to re-run) |
 | `npm run setup:japanese` | The same, plus the Japanese voices (a further 1 GB) |
-| `npm run app` | Build the UI, then start the server (the everyday command) |
-| `npm start` | Start the server using the last build |
+| `npm start` | Start the server using the last build (the everyday command; `../install.sh` builds the page) |
+| `npm run app` | Build the UI, then start the server |
 | `npm run dev` | Server with auto-restart plus Vite dev server on port 5173 |
 | `npm run author` | The lesson writer on its own, for running it apart from the dashboard |
 | `npm run mcp` | The MCP connector over stdio, as Claude Code or the desktop app starts it |
 | `npm run mcp:pack` | The connector as a desktop extension, `extension/narrated-proofs.mcpb` |
 | `npm run bakeoff` | Make the same short lessons with each set-up writer and compare them (see below) |
-| `npm test` | Everything: server, lesson writer and MCP connector (`test:server`), the page (`test:client`), engine and `../video` (`test:python`). The ones that load the real model are skipped until `npm run setup` has run |
+| `npm test` | Everything: server, lesson writer and MCP connector (`test:server`), the page (`test:client`), engine and `../video` (`test:python`). The ones that load the real model are skipped until `../install.sh` has run |
 | `npm run lint` | ESLint over the server, the lesson writer and the page |
 
 The dashboard runs while its terminal is open; Ctrl-C stops it. A job running when it stops is marked "Interrupted by a server restart"; press **Retry** on its card. A lesson carries on from the files it had already written.
@@ -253,7 +249,7 @@ All optional. Put them in a `.env` in this folder or the one above it, or in the
 | --- | --- | --- |
 | `TTS_VOICE` | `af_heart` | Voice preselected on first run |
 | `TTS_DEVICE` | `auto` | `auto` uses the Apple GPU when there is one, else the CPU. Set `cpu` if you see audio glitches |
-| `TTS_PYTHON` | `.venv/bin/python` | A Python that has `kokoro` installed |
+| `TTS_PYTHON` | `../.venv/bin/python` | A Python that has `kokoro` installed |
 | `PORT` | `8787` | Port for `npm start` |
 | `TTS_DATA_DIR` | `./data` | Library location |
 | `TTS_ENV_DIR` | none | Another folder to read `.env` from |
@@ -349,7 +345,6 @@ Other useful routes:
 engine/
   kokoro_engine.py  the Kokoro engine: command line tool and the worker the server runs
   test_engine.py    text splitting tests
-  requirements.txt  Python packages
 server/
   index.js        start-up
   app.js          REST API
@@ -397,16 +392,15 @@ client/
                   (CodeMirror 6), History (versions and diffs), Transcript and Settings
   src/**/*.test.* vitest tests
 scripts/
-  setup.sh        creates .venv and downloads the model
   bakeoff.js      the writer bake-off (npm run bakeoff)
   mcp-pack.js     the desktop extension (npm run mcp:pack)
 ```
 
 ## Troubleshooting
 
-- **"Voice engine offline" in the header.** The red banner says why. Usually `npm run setup` hasn't been run, or was interrupted; run it again. The page reconnects by itself.
+- **"Voice engine offline" in the header.** The red banner says why. Usually `../install.sh` hasn't been run, or was interrupted; run it again. The page reconnects by itself.
 - **"Loading voice model…" for a long time.** The first start after a reboot takes 5 to 10 seconds. Longer than a minute means the worker is stuck; restart the server and look at its terminal output.
-- **A Japanese voice is greyed out.** Run `npm run setup:japanese`.
+- **A Japanese voice is greyed out.** Run `../install.sh --japanese`.
 - **A word is mispronounced (English voices only).** Write it as a link whose target is its phonemes between slashes, for example `[Kokoro](/kˈOkəɹO/)`. These hints are kept even when markdown is stripped.
 - **`npm install` fails on `better-sqlite3`.** It normally installs a prebuilt binary. If your Node version has none, install Xcode command line tools (`xcode-select --install`) so it can compile, or switch to an LTS Node.
 - **Port already in use.** Set `PORT=8788` in your `.env`.

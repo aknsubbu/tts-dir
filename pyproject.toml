@@ -1,0 +1,29 @@
+# The one Python environment, .venv here, created by ./install.sh (`uv sync`).
+# It renders the scenes (manimgl) and speaks the narration (Kokoro). Rendering never
+# imports torch, so having both in one environment costs nothing at render time.
+[project]
+name = "narrated-proofs"
+version = "0.0.0"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    # Pinned: PyPI's manimgl is stale, and this commit is the one the scenes are checked against.
+    "manimgl @ git+https://github.com/3b1b/manim@fafa083",
+    "av",  # VideoMobject needs it; manim lists it in requirements.txt but not in its package metadata
+]
+
+[dependency-groups]
+voice = [
+    "kokoro>=0.9.4",
+    "soundfile>=0.13",
+    "misaki[zh]>=0.9.4",  # Mandarin
+    "transformers>=4.40",  # without this floor uv backtracks to a 2021 release that needs Rust
+    # The English phonemizer's spaCy model. Without it here, misaki fetches it with pip on first use,
+    # and a uv environment has no pip.
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+]
+# A further 1 GB dictionary: ./install.sh --japanese
+japanese = ["misaki[ja]>=0.9.4"]
+
+[tool.uv]
+package = false
+default-groups = ["voice"]

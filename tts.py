@@ -9,10 +9,10 @@ Usage:
     python3 tts.py --list-voices
 
 One-time install:
-    cd tts-studio && npm run setup
+    ./install.sh
 
 This is a launcher. The engine is tts-studio/engine/kokoro_engine.py, and it runs
-with the Python in tts-studio/.venv (or the one named by TTS_PYTHON).
+with the Python in .venv (or the one named by TTS_PYTHON).
 """
 import os
 import sys
@@ -23,9 +23,9 @@ ENGINE = STUDIO / "engine" / "kokoro_engine.py"
 
 
 def main():
-    python = Path(os.environ.get("TTS_PYTHON") or STUDIO / ".venv" / "bin" / "python")
+    python = Path(os.environ.get("TTS_PYTHON") or STUDIO.parent / ".venv" / "bin" / "python")
     if not python.exists():
-        sys.exit(f"Kokoro is not installed yet. Run this once:\n    cd {STUDIO} && npm run setup")
+        sys.exit(f"Kokoro is not installed yet. Run this once:\n    {STUDIO.parent}/install.sh")
     os.execv(str(python), [str(python), str(ENGINE), *sys.argv[1:]])
 
 

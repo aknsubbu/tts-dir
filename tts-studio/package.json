@@ -8,8 +8,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "setup": "sh scripts/setup.sh",
-    "setup:japanese": "sh scripts/setup.sh --japanese",
+    "setup": "sh ../install.sh",
+    "setup:japanese": "sh ../install.sh --japanese",
     "dev": "concurrently -k -n api,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:client\"",
     "dev:server": "node --watch server/index.js",
     "dev:client": "vite",

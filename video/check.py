@@ -257,7 +257,7 @@ def tidy(output, limit=45):
 
 def narrate(root, report):
     if not Path(build.KOKORO_PYTHON).exists():
-        report.error("narration", f"no Kokoro Python at {build.KOKORO_PYTHON}; run `npm run setup` in tts-studio")
+        report.error("narration", f"no Kokoro Python at {build.KOKORO_PYTHON}; run ../install.sh")
         return None
     print(f"$ narrate.py {root}", file=sys.stderr, flush=True)
     done = subprocess.run(
@@ -373,7 +373,7 @@ def check(root, static_only=False, sync_scenes=False, strict=False):
     info = {"scenes": scenes or [], "blocks": [{"id": b, "words": v["words"]} for b, v in (blocks or {}).items()]}
     if not report.errors and not static_only:
         if not Path(build.MANIMGL).exists():
-            report.error("render", f"no manimgl at {build.MANIMGL}; set up video/.venv (see video/README.md)")
+            report.error("render", f"no manimgl at {build.MANIMGL}; run ../install.sh")
         manifest = narrate(root, report) if not report.errors else None
         if manifest:
             for b in info["blocks"]:
