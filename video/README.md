@@ -2,46 +2,24 @@
 
 Narrated manim videos, with audio from the Kokoro engine in `../tts-studio`.
 
-Two Python environments, kept apart so torch never loads while rendering:
-
-- `../tts-studio/.venv` speaks the narration (`narrate.py`). `npm run setup` in tts-studio creates it.
-- `video/.venv` renders the scenes with ManimGL (set up below).
+`../install.sh` sets everything up: ffmpeg, LaTeX, and one Python environment, `../.venv`, from `../pyproject.toml`, which has both ManimGL (renders the scenes) and Kokoro (speaks the narration, `narrate.py`). Rendering never imports torch, so sharing the environment costs nothing.
 
 `build.py` runs both. It only needs the standard library, so plain `python3` runs it: Python 3.9 or newer, such as the one Apple's command line tools install.
 
-## Setup (macOS)
-
-The [main README](../README.md#install) walks through the whole installation, these steps included. On their own they need [Homebrew](https://brew.sh) and [uv](https://docs.astral.sh/uv/) (`brew install uv`); uv fetches the Python 3.10 to 3.12 that ManimGL needs. Rendering draws through Metal, so it needs a Mac whose GPU supports it (every Apple Silicon Mac does), not a virtual machine without GPU access.
-
-```bash
-brew install ffmpeg
-brew install --cask basictex        # asks for your password; needed for Tex()
-eval "$(/usr/libexec/path_helper)"  # or open a new terminal, to pick up /Library/TeX/texbin
-sudo tlmgr update --self
-sudo tlmgr install dvisvgm standalone preview babel-english doublestroke setspace tipa relsize rsfs calligra fundus-calligra wasysym wasy ragged2e physics xcolor microtype cm-super
-
-cd video
-uv venv --python 3.12 .venv
-uv pip install --python .venv/bin/python -r requirements.txt
-```
-
-If `SmokeTex` fails on a missing `.sty`, install the package it names with `sudo tlmgr install <name>`.
-LaTeX is only needed for `Tex()`; the demo project uses `Text()` and runs without it. If you have [MacTeX](https://www.tug.org/mactex/) (the full TeX Live, about 5 GB), skip the BasicTeX and `tlmgr` lines: it has every package already.
-
-`requirements.txt` installs ManimGL from GitHub at a pinned commit, the one these scenes are checked against; PyPI's `manimgl` is older and differs.
+ManimGL is installed from GitHub at a pinned commit, the one these scenes are checked against; PyPI's `manimgl` is older and differs. Rendering draws through Metal, so it needs a Mac whose GPU supports it (every Apple Silicon Mac does), not a virtual machine without GPU access. LaTeX is only needed for `Tex()`; the demo project uses `Text()` and runs without it.
 
 ## Check it works
 
 ```bash
-.venv/bin/manimgl smoke/smoke_scene.py SmokeText -w --hd --video_dir smoke/out    # shapes and Text
-.venv/bin/manimgl smoke/smoke_scene.py SmokeTex -w --hd --video_dir smoke/out     # needs LaTeX
+../.venv/bin/manimgl smoke/smoke_scene.py SmokeText -w --hd --video_dir smoke/out    # shapes and Text
+../.venv/bin/manimgl smoke/smoke_scene.py SmokeTex -w --hd --video_dir smoke/out     # needs LaTeX
 echo "The derivative measures how fast a function changes." | python3 ../tts.py - -o smoke/out/line.wav
-.venv/bin/manimgl smoke/smoke_scene.py SmokeAudio -w --hd --video_dir smoke/out   # needs line.wav
+../.venv/bin/manimgl smoke/smoke_scene.py SmokeAudio -w --hd --video_dir smoke/out   # needs line.wav
 ```
 
 `-w` renders without opening a window. Leave it off to preview in a window, which is silent.
 
-Then check the whole path once, narration and the sandbox included (both need the voice from `npm run setup` in `../tts-studio`):
+Then check the whole path once, narration and the sandbox included :
 
 ```bash
 python3 build.py demo --quality low    # narrated and rendered as lessons are: projects/demo/build/demo.mp4
@@ -226,13 +204,12 @@ manim advances its clock before it draws each frame. So frame *n* of a scene sho
 | `VIDEO_SANDBOX` | `1` | `1`: scenes run under the strict rules. `report`: what the reading, starting and asking rules would stop is allowed and logged for `sandbox_probe.py`. `0`: no sandbox |
 | `VIDEO_SCENE_CACHE` | `~/Library/Caches/narrated-proofs-scenes` | The cache scenes share: manim's, TeX's, matplotlib's and fontconfig's |
 | `VIDEO_SCENE_TIMEOUT` | `2700` | Seconds one scene's full render may take |
-| `KOKORO_PYTHON` | `../tts-studio/.venv/bin/python` | The Python that speaks the narration |
-| `MANIMGL` | `.venv/bin/manimgl` | The manimgl that renders the scenes |
+| `KOKORO_PYTHON` | `../.venv/bin/python` | The Python that speaks the narration |
+| `MANIMGL` | `../.venv/bin/manimgl` | The manimgl that renders the scenes |
 
 ## Troubleshooting
 
-- **`No manimgl at …`.** `video/.venv` is missing or incomplete: run the two `uv` lines in [Setup](#setup-macos) again.
-- **`No Kokoro Python at …`.** The narration needs the voice: run `npm run setup` in `../tts-studio`, or set `KOKORO_PYTHON`.
+- **`No manimgl at …` or `No Kokoro Python at …`.** `../.venv` is missing or incomplete: run `../install.sh` again, or set `MANIMGL` / `KOKORO_PYTHON`.
 - **`File 'something.sty' not found`.** A LaTeX package is missing: `sudo tlmgr install something`. If `tlmgr` is not found, run `eval "$(/usr/libexec/path_helper)"` or open a new terminal.
 - **`latex`, `dvisvgm` or `ffmpeg` not found.** `build.py` adds `/Library/TeX/texbin`, `/opt/homebrew/bin` and `/usr/local/bin` to the PATH when they exist; anywhere else, put them on your PATH.
 - **A render fails before drawing anything, about an adapter, a device or Metal.** ManimGL draws through Metal. Render on the Mac itself, not in a virtual machine.

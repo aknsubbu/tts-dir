@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Narrate pass: speak a project's script with Kokoro and write its manifest.
 
-    ../tts-studio/.venv/bin/python narrate.py demo            # video/projects/demo
-    ../tts-studio/.venv/bin/python narrate.py path/to/project --force
+    ../.venv/bin/python narrate.py demo            # video/projects/demo
+    ../.venv/bin/python narrate.py path/to/project --force
 
 Reads <project>/project.json and its script, writes one WAV per block into
 <project>/build/audio/ and <project>/build/manifest.json. A block is only spoken
 again when its text, voice or speed changes.
 
-Run it with the Python in tts-studio/.venv; build.py does that for you. Nothing
+Run it with the Python in the repo's .venv; build.py does that for you. Nothing
 here imports torch until a block actually needs speaking.
 """
 import argparse

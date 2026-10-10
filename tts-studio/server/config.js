@@ -12,9 +12,9 @@ function candidateEnvFiles() {
   return dirs.map((d) => path.join(d, '.env'));
 }
 
-/** The Python that has Kokoro installed: TTS_PYTHON, else the venv `npm run setup` creates. */
+/** The Python that has Kokoro installed: TTS_PYTHON, else the repo's .venv that ../install.sh creates. */
 function findPython(override) {
-  const candidates = override ? [override] : [path.join(ROOT, '.venv', 'bin', 'python')];
+  const candidates = override ? [override] : [path.join(path.dirname(ROOT), '.venv', 'bin', 'python')];
   return candidates.find((p) => fs.existsSync(p)) || '';
 }
 

@@ -118,7 +118,7 @@ class RenderTest(unittest.TestCase):
     def test_the_smoke_scene_renders_inside_the_sandbox(self):
         import build
         if not Path(build.MANIMGL).exists() or not shutil.which("ffmpeg"):
-            self.skipTest("needs video/.venv (manimgl) and ffmpeg")
+            self.skipTest("needs .venv (manimgl, from install.sh) and ffmpeg")
         tmp = tempfile.TemporaryDirectory(dir=Path.home())
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name) / "smoke"

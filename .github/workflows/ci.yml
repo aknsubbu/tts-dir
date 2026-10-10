@@ -42,14 +42,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - uses: astral-sh/setup-uv@v6
       - run: brew install ffmpeg
-      - run: python -m venv .venv && .venv/bin/pip install -r requirements.txt
+      # Only manimgl: the voice (torch, Kokoro) is not needed to render.
+      - run: uv sync --locked --no-default-groups
       # manimgl draws with wgpu, which needs Metal. A runner without a usable GPU cannot render
       # at all, sandbox or not; that is reported as a warning rather than as the sandbox failing.
       - id: plain
         name: Render without the sandbox
         run: |
-          if .venv/bin/manimgl smoke/smoke_scene.py SmokeText -w -l --video_dir "$RUNNER_TEMP/plain"; then
+          if ../.venv/bin/manimgl smoke/smoke_scene.py SmokeText -w -l --video_dir "$RUNNER_TEMP/plain"; then
             echo "ok=1" >> "$GITHUB_OUTPUT"
           else
             echo "::warning::This runner cannot render with manimgl, so the render inside the sandbox was skipped."

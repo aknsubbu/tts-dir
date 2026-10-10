@@ -134,7 +134,7 @@ def main(argv=None):
     if sys.platform != "darwin" or not Path(sandbox.SANDBOX_EXEC).exists():
         sys.exit("error: the probe needs macOS, where scenes run inside sandbox-exec.")
     if not Path(build.MANIMGL).exists():
-        sys.exit(f"error: no manimgl at {build.MANIMGL}. Set up video/.venv first (see README.md).")
+        sys.exit(f"error: no manimgl at {build.MANIMGL}. Run ../install.sh first.")
 
     with tempfile.TemporaryDirectory(prefix="sandbox-probe-") as tmp:
         work = Path(tmp).resolve()
