@@ -1,38 +1,34 @@
 import crypto from 'node:crypto';
-import express from 'express';
 import { createAuthor, PROJECT_NAME } from './pipeline.js';
 import { normalizeWriter } from './writers/plan.js';
-import { localOnly } from '../server/local.js';
 import { MAX_NOTES } from '../shared/limits.js';
 
 const KEEP_FINISHED = 50;
 const KINDS = ['write', 'check', 'revise'];
 
+const invalid = (message, status = 400) => Object.assign(new Error(message), { status });
+
 /**
- * The lesson writer: a small service that turns a topic and notes into a video
- * project by asking Claude (`claude -p`) and checking what comes back.
+ * The lesson writer's job queue: turns a topic and notes into a video project by asking
+ * Claude (`claude -p`) or another writer, and checking what comes back. It runs inside the
+ * dashboard's process; server/lessons.js submits jobs and follows them.
  *
- *   POST /lessons             { project, topic, goal, notes, minutes, voice, writer, capUsd } -> 202 { job }
- *                             { project, kind: "check" } only checks a project's files again
- *                             { project, kind: "revise", request, scope, history, attachments } changes
- *                             a written lesson; { phase: "script" | "scenes" } writes the narration
- *                             alone, or the scenes for an approved one
- *                             writer is the plan for each step (provider, model, effort), as the
- *                             dashboard resolves it from Settings; it never carries a key
- *   GET  /lessons/:id         -> { job }   stage, and the result once status is "done"
- *   POST /lessons/:id/cancel  -> { job }
- *   GET  /health
+ *   submit({ project, topic, goal, notes, minutes, voice, writer, capUsd }) -> job
+ *          { project, kind: "check" } only checks a project's files again
+ *          { project, kind: "revise", request, scope, history, attachments } changes
+ *          a written lesson; { phase: "script" | "scenes" } writes the narration
+ *          alone, or the scenes for an approved one
+ *          writer is the plan for each step (provider, model, effort), as the
+ *          dashboard resolves it from Settings; it never carries a key
+ *          A bad request throws an error with .status 400, or 409 when the project is busy.
+ *   get(id)    -> job, or null     stage, and the result once status is "done"
+ *   cancel(id) -> job, or null
  *
  * Up to TTS_AUTHOR_PARALLEL jobs run at once, since most of a job is waiting on Claude.
  * Their checks still take turns (see createAuthor): each speaks with Kokoro and runs manim.
  * One project has at most one job.
  */
-export function createAuthorApp({ getConfig, author = createAuthor({ getConfig }) }) {
-  const app = express();
-  app.disable('x-powered-by');
-  app.use(localOnly());
-  app.use(express.json({ limit: '2mb' }));
-
+export function createAuthorJobs({ getConfig, author = createAuthor({ getConfig }) }) {
   const jobs = new Map(); // id -> { id, kind, project, status, stage, error, result, input, controller }
   const queue = [];
   const active = new Set();
@@ -64,27 +60,25 @@ export function createAuthorApp({ getConfig, author = createAuthor({ getConfig }
       });
   }
 
-  app.get('/health', (req, res) => res.json({ ok: true, queued: queue.length + active.size }));
-
-  app.post('/lessons', (req, res) => {
-    const b = req.body || {};
+  function submit(body = {}) {
+    const b = JSON.parse(JSON.stringify(body)); // the job's own copy, as it was when it came over HTTP
     const project = String(b.project || '');
-    if (!PROJECT_NAME.test(project)) return res.status(400).json({ error: 'A lesson needs a project name of letters, digits, - and _.' });
+    if (!PROJECT_NAME.test(project)) throw invalid('A lesson needs a project name of letters, digits, - and _.');
     const kind = b.kind === undefined ? 'write' : String(b.kind);
-    if (!KINDS.includes(kind)) return res.status(400).json({ error: `A job is one of: ${KINDS.join(', ')}.` });
+    if (!KINDS.includes(kind)) throw invalid(`A job is one of: ${KINDS.join(', ')}.`);
     const resume = kind !== 'write' || b.topic === undefined; // a retry or a check: the brief is already saved in the project
-    if (!resume && !String(b.topic).trim()) return res.status(400).json({ error: 'A lesson needs a topic.' });
-    if (kind === 'revise' && !String(b.request || '').trim()) return res.status(400).json({ error: 'Say what to change.' });
-    if (String(b.notes || '').length > MAX_NOTES) return res.status(400).json({ error: `Notes are limited to ${MAX_NOTES.toLocaleString('en-US')} characters.` });
+    if (!resume && !String(b.topic).trim()) throw invalid('A lesson needs a topic.');
+    if (kind === 'revise' && !String(b.request || '').trim()) throw invalid('Say what to change.');
+    if (String(b.notes || '').length > MAX_NOTES) throw invalid(`Notes are limited to ${MAX_NOTES.toLocaleString('en-US')} characters.`);
     if (b.writer !== undefined) {
       try {
         normalizeWriter(b.writer, getConfig());
       } catch (e) {
-        return res.status(400).json({ error: e.message });
+        throw invalid(e.message);
       }
     }
     if ([...jobs.values()].some((j) => j.project === project && ['queued', 'working'].includes(j.status))) {
-      return res.status(409).json({ error: `“${project}” is already being written.` });
+      throw invalid(`“${project}” is already being written.`, 409);
     }
     const job = {
       id: crypto.randomUUID(),
@@ -109,18 +103,17 @@ export function createAuthorApp({ getConfig, author = createAuthor({ getConfig }
     jobs.set(job.id, job);
     queue.push(job);
     pump();
-    res.status(202).json({ job: view(job) });
-  });
+    return view(job);
+  }
 
-  app.get('/lessons/:id', (req, res) => {
-    const job = jobs.get(req.params.id);
-    if (!job) return res.status(404).json({ error: 'No such lesson job.' });
-    res.json({ job: view(job) });
-  });
+  function get(id) {
+    const job = jobs.get(id);
+    return job ? view(job) : null;
+  }
 
-  app.post('/lessons/:id/cancel', (req, res) => {
-    const job = jobs.get(req.params.id);
-    if (!job) return res.status(404).json({ error: 'No such lesson job.' });
+  function cancel(id) {
+    const job = jobs.get(id);
+    if (!job) return null;
     const at = queue.indexOf(job);
     if (at !== -1) {
       queue.splice(at, 1);
@@ -128,17 +121,14 @@ export function createAuthorApp({ getConfig, author = createAuthor({ getConfig }
     } else if (active.has(job)) {
       job.controller.abort();
     }
-    res.json({ job: view(job) });
-  });
-
-  app.use((req, res) => res.status(404).json({ error: 'Not found' }));
-  // eslint-disable-next-line no-unused-vars
-  app.use((err, req, res, next) => res.status(err.status || 500).json({ error: err.message || 'Something went wrong' }));
+    return view(job);
+  }
 
   /** The server is going away: stop Claude and the check with it. */
-  app.stop = () => {
+  function stop() {
     queue.length = 0;
     for (const job of active) job.controller?.abort();
-  };
-  return app;
+  }
+
+  return { submit, get, cancel, stop };
 }

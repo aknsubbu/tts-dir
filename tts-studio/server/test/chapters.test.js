@@ -9,7 +9,7 @@ import { createApp } from '../app.js';
 import { createLessons } from '../lessons.js';
 import { createVideoBuilder } from '../video.js';
 import { createVersions } from '../versions.js';
-import { createAuthorApp } from '../../author/app.js';
+import { createAuthorJobs } from '../../author/jobs.js';
 import { sandbox, SCRIPT, scenes, until } from '../../author/test/fakes.js';
 
 /** A long lesson through the dashboard: outline, review, chapters, a joined build, chapter edits and revisions. */
@@ -47,7 +47,7 @@ const OUTLINE = {
 const chapter = (title) => ({ title, script: SCRIPT, scenes: scenes() });
 const EMPTY = { summary: '', blocks: [], remove_blocks: [], classes: [], remove_classes: [], preamble: '', whole_script: '', whole_scenes: '' };
 
-let dir, box, store, lessons, server, authorServer, authorApp, base, config;
+let dir, box, store, lessons, server, authorJobs, base, config;
 const j = async (method, url, body) => {
   const res = await fetch(base + url, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
   return { status: res.status, data: await res.json().catch(() => null) };
@@ -65,15 +65,11 @@ before(async () => {
   fs.writeFileSync(buildBin, FAKE_BUILD, { mode: 0o755 });
   config = { ...box.config, videoBuild: [buildBin], defaultVoiceId: 'af_zed', keepRenders: 3, authorParallel: 1 };
   const getConfig = () => config;
-  authorApp = createAuthorApp({ getConfig });
-  await new Promise((resolve) => {
-    authorServer = authorApp.listen(0, '127.0.0.1', resolve);
-  });
-  config.authorUrl = `http://127.0.0.1:${authorServer.address().port}`;
+  authorJobs = createAuthorJobs({ getConfig });
   store = createStore(path.join(dir, 'data'));
   const versions = createVersions({ store, getConfig });
   const runner = createRunner({ store, engine, video: createVideoBuilder({ getConfig }), versions });
-  lessons = createLessons({ store, runner, getConfig, versions, pollMs: 20 });
+  lessons = createLessons({ store, runner, getConfig, jobs: authorJobs, versions, pollMs: 20 });
   const app = createApp({ getConfig, store, runner, engine, lessons, versions });
   await new Promise((resolve) => {
     server = app.listen(0, '127.0.0.1', resolve);
@@ -83,9 +79,8 @@ before(async () => {
 
 after(async () => {
   lessons.stop();
-  authorApp.stop();
+  authorJobs.stop();
   await new Promise((resolve) => server.close(resolve));
-  await new Promise((resolve) => authorServer.close(resolve));
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });

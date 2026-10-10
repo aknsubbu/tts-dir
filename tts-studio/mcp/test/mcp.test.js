@@ -16,7 +16,7 @@ import { createVideoBuilder } from '../../server/video.js';
 import { createVersions } from '../../server/versions.js';
 import { createSecrets } from '../../server/secrets.js';
 import { createSettings } from '../../server/settings.js';
-import { createAuthorApp } from '../../author/app.js';
+import { createAuthorJobs } from '../../author/jobs.js';
 import { answer, sandbox, SCRIPT, scenes, until } from '../../author/test/fakes.js';
 import { squarePng } from '../../author/writers/probe.js';
 import { createMcpServer } from '../server.js';
@@ -46,7 +46,7 @@ const engine = {
   }),
 };
 
-let dir, box, store, lessons, server, authorServer, authorApp, base, client, settings;
+let dir, box, store, lessons, server, authorJobs, base, client, settings;
 
 before(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'np-mcp-'));
@@ -55,17 +55,13 @@ before(async () => {
   fs.writeFileSync(buildBin, FAKE_BUILD, { mode: 0o755 });
   const config = { ...box.config, videoBuild: [buildBin], defaultVoiceId: 'af_zed', dataDir: path.join(dir, 'data'), keys: {}, given: {}, claudeReadEffort: 'medium', claudeOutlineEffort: 'medium', lessonReview: 'render' };
   const getConfig = () => config;
-  authorApp = createAuthorApp({ getConfig });
-  await new Promise((resolve) => {
-    authorServer = authorApp.listen(0, '127.0.0.1', resolve);
-  });
-  config.authorUrl = `http://127.0.0.1:${authorServer.address().port}`;
+  authorJobs = createAuthorJobs({ getConfig });
   store = createStore(config.dataDir);
   const versions = createVersions({ store, getConfig });
   const secrets = createSecrets({ dataDir: config.dataDir, useKeychain: false });
   settings = createSettings({ db: store.db, getConfig, secrets });
   const runner = createRunner({ store, engine, video: createVideoBuilder({ getConfig }), versions });
-  lessons = createLessons({ store, runner, getConfig, versions, settings, pollMs: 20 });
+  lessons = createLessons({ store, runner, getConfig, jobs: authorJobs, versions, settings, pollMs: 20 });
   const app = createApp({ getConfig, store, runner, engine, lessons, versions, settings, secrets, mcp: mcpHandler() });
   await new Promise((resolve) => {
     server = app.listen(0, '127.0.0.1', resolve);
@@ -82,9 +78,8 @@ before(async () => {
 after(async () => {
   await client?.close();
   lessons.stop();
-  authorApp.stop();
+  authorJobs.stop();
   await new Promise((resolve) => server.close(resolve));
-  await new Promise((resolve) => authorServer.close(resolve));
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });

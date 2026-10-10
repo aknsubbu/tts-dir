@@ -10,7 +10,7 @@ import { createApp } from '../app.js';
 import { createLessons } from '../lessons.js';
 import { createVideoBuilder } from '../video.js';
 import { createVersions } from '../versions.js';
-import { createAuthorApp } from '../../author/app.js';
+import { createAuthorJobs } from '../../author/jobs.js';
 import { execFileSync } from 'node:child_process';
 import { alive, answer, sandbox, SCRIPT, until } from '../../author/test/fakes.js';
 import { kindOf, safeName } from '../notes.js';
@@ -19,7 +19,7 @@ import { kindOf, safeName } from '../notes.js';
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC';
 const MAC_TOOLS = fs.existsSync('/usr/bin/sips') && fs.existsSync('/usr/bin/textutil');
 
-let dir, box, store, runner, lessons, server, authorServer, authorApp, base, config;
+let dir, box, store, runner, lessons, server, authorJobs, base, config;
 
 /** Stands in for video/build.py, as in video.test.js: writes the three files and prints their paths. */
 const FAKE_BUILD = `#!/usr/bin/env node
@@ -71,16 +71,12 @@ before(async () => {
   config = { ...box.config, videoBuild: [buildBin], defaultVoiceId: 'af_zed' };
   const getConfig = () => config;
 
-  authorApp = createAuthorApp({ getConfig });
-  await new Promise((resolve) => {
-    authorServer = authorApp.listen(0, '127.0.0.1', resolve);
-  });
-  config.authorUrl = `http://127.0.0.1:${authorServer.address().port}`;
+  authorJobs = createAuthorJobs({ getConfig });
 
   store = createStore(path.join(dir, 'data'));
   const versions = createVersions({ store, getConfig });
   runner = createRunner({ store, engine, video: createVideoBuilder({ getConfig }), versions });
-  lessons = createLessons({ store, runner, getConfig, versions, pollMs: 20 });
+  lessons = createLessons({ store, runner, getConfig, jobs: authorJobs, versions, pollMs: 20 });
   const app = createApp({ getConfig, store, runner, engine, lessons, versions });
   await new Promise((resolve) => {
     server = app.listen(0, '127.0.0.1', resolve);
@@ -90,9 +86,8 @@ before(async () => {
 
 after(async () => {
   lessons.stop();
-  authorApp.stop();
+  authorJobs.stop();
   await new Promise((resolve) => server.close(resolve));
-  await new Promise((resolve) => authorServer.close(resolve));
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -304,22 +299,6 @@ test('the library can be filtered to videos or audio, and a built video has a po
   assert.equal(await poster.text(), 'JPG');
 });
 
-test('when the lesson writer is not running, the card says so', async () => {
-  const real = config.authorUrl;
-  config.authorUrl = 'http://127.0.0.1:9'; // nothing listens here
-  const made = await j('POST', '/api/lessons', LESSON);
-  config.authorUrl = real;
-  assert.equal(made.status, 201);
-  assert.equal(made.data.generation.status, 'error');
-  assert.match(made.data.generation.error, /lesson writer is not running at http:\/\/127\.0\.0\.1:9.*Retry/);
-  box.answers([answer()]);
-  // The brief was never saved by the writer, so this retry cannot resume: it says why.
-  await j('POST', `/api/generations/${made.data.generation.id}/retry`);
-  const g = await settled(made.data.generation.id);
-  assert.equal(g.status, 'error');
-  assert.match(g.error, /no brief for this project/);
-});
-
 test('an older library gains the stage column', () => {
   const old = fs.mkdtempSync(path.join(os.tmpdir(), 'tts-old-'));
   const first = createStore(old);
@@ -357,9 +336,8 @@ test('deleting a lesson keeps its project folder unless asked, and then removes 
   assert.ok(fs.existsSync(path.dirname(folder(gone))), 'and nothing above it');
 });
 
-test('only pages on this machine may talk to the dashboard or the lesson writer', async () => {
+test('only pages on this machine may talk to the dashboard', async () => {
   const ask = (url, headers, method = 'GET') => fetch(url, { method, headers }).then((r) => r.status);
-  const author = config.authorUrl;
   // A page that points its own domain at 127.0.0.1 still sends its own name as Host.
   const raw = (url, host) => new Promise((resolve, reject) => {
     const u = new URL(url);
@@ -368,13 +346,11 @@ test('only pages on this machine may talk to the dashboard or the lesson writer'
     sock.on('data', (d) => (said += d)).on('end', () => resolve(Number(said.split(' ')[1]))).on('error', reject);
   });
   assert.equal(await raw(`${base}/api/health`, 'evil.example:80'), 403);
-  assert.equal(await raw(`${author}/health`, 'evil.example'), 403);
   assert.equal(await raw(`${base}/api/health`, `localhost:${new URL(base).port}`), 200);
   assert.equal(await raw(`${base}/api/health`, '[::1]:8787'), 200);
 
   assert.equal(await ask(`${base}/api/health`, { Origin: 'https://evil.example' }), 403);
   assert.equal(await ask(`${base}/api/lessons`, { Origin: 'null', 'Content-Type': 'application/json' }, 'POST'), 403);
-  assert.equal(await ask(`${author}/health`, { Origin: 'https://evil.example' }), 403);
   assert.equal(await ask(`${base}/api/health`, { Origin: 'http://localhost:5173' }), 200, 'the vite dev page');
   assert.equal(await ask(`${base}/api/health`, {}), 200, 'curl sends no Origin');
 });
