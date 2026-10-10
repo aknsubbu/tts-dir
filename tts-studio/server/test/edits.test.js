@@ -9,7 +9,7 @@ import { createApp } from '../app.js';
 import { createLessons } from '../lessons.js';
 import { createVideoBuilder } from '../video.js';
 import { createVersions } from '../versions.js';
-import { createAuthorApp } from '../../author/app.js';
+import { createAuthorJobs } from '../../author/jobs.js';
 import { answer, sandbox, until } from '../../author/test/fakes.js';
 
 /** Editing, checking, rendering, discarding and restoring a lesson, with the fake writer, check and build. */
@@ -34,7 +34,7 @@ const engine = {
   catalog: () => ({ voices: [{ voiceId: 'af_zed', name: 'Zed', lang: 'a' }], languages: [{ code: 'a', name: 'American English', available: true }], samples: {} }),
 };
 
-let dir, box, store, lessons, server, authorServer, authorApp, base, config, id, gate;
+let dir, box, store, lessons, server, authorJobs, base, config, id, gate;
 
 const j = async (method, url, body) => {
   const res = await fetch(base + url, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
@@ -56,15 +56,11 @@ before(async () => {
   fs.writeFileSync(gate, '');
   config = { ...box.config, videoBuild: [buildBin], defaultVoiceId: 'af_zed', keepRenders: 3 };
   const getConfig = () => config;
-  authorApp = createAuthorApp({ getConfig });
-  await new Promise((resolve) => {
-    authorServer = authorApp.listen(0, '127.0.0.1', resolve);
-  });
-  config.authorUrl = `http://127.0.0.1:${authorServer.address().port}`;
+  authorJobs = createAuthorJobs({ getConfig });
   store = createStore(path.join(dir, 'data'));
   const versions = createVersions({ store, getConfig });
   const runner = createRunner({ store, engine, video: createVideoBuilder({ getConfig }), versions });
-  lessons = createLessons({ store, runner, getConfig, versions, pollMs: 20 });
+  lessons = createLessons({ store, runner, getConfig, jobs: authorJobs, versions, pollMs: 20 });
   const app = createApp({ getConfig, store, runner, engine, lessons, versions });
   await new Promise((resolve) => {
     server = app.listen(0, '127.0.0.1', resolve);
@@ -80,9 +76,8 @@ before(async () => {
 after(async () => {
   delete process.env.FAKE_BUILD_GATE;
   lessons.stop();
-  authorApp.stop();
+  authorJobs.stop();
   await new Promise((resolve) => server.close(resolve));
-  await new Promise((resolve) => authorServer.close(resolve));
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });

@@ -7,33 +7,15 @@ import { filesIn, hashOf, readProjectText } from './edits.js';
 import { chapterDir } from './versions.js';
 
 /**
- * Follows lessons through the lesson writer (author/), a separate small server.
+ * Follows lessons through the lesson writer's job queue (author/jobs.js).
  *
  * A lesson is a video whose script and scenes Claude writes from a topic and notes.
  * Writing takes minutes and needs no Kokoro, so it does not wait in the runner's
  * queue: the row sits at "processing" with a stage, and joins the queue as an
  * ordinary video build once its project is ready.
  */
-export function createLessons({ store, runner, getConfig, versions = null, settings = null, pollMs = 1500 }) {
-  const watching = new Map(); // generation id -> { jobId, timer, misses }
-
-  const base = () => {
-    const cfg = getConfig();
-    return cfg.authorUrl || `http://127.0.0.1:${cfg.authorPort}`;
-  };
-
-  async function call(method, route, body) {
-    const res = await fetch(base() + route, {
-      method,
-      headers: body ? { 'Content-Type': 'application/json' } : undefined,
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    const data = await res.json().catch(() => null);
-    if (!res.ok) throw new Error(data?.error || `The lesson writer answered ${res.status}.`);
-    return data;
-  }
-
-  const unreachable = () => `The lesson writer is not running at ${base()}. Restart Narrated Proofs, then press Retry.`;
+export function createLessons({ store, runner, getConfig, jobs, versions = null, settings = null, pollMs = 1500 }) {
+  const watching = new Map(); // generation id -> { jobId, timer }
 
   function fail(id, message) {
     watching.delete(id);
@@ -101,11 +83,11 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
     let job;
     try {
       const phase = phaseOf(lesson);
-      ({ job } = await call('POST', '/lessons', { project, ...brief, ...plan, ...(phase ? { phase } : {}), ...extra }));
+      job = jobs.submit({ project, ...brief, ...plan, ...(phase ? { phase } : {}), ...extra });
     } catch (e) {
-      return fail(id, e.cause ? unreachable() : e.message); // fetch sets .cause when it could not connect
+      return fail(id, e.message);
     }
-    watching.set(id, { jobId: job.id, misses: 0 });
+    watching.set(id, { jobId: job.id });
     schedule(id);
   }
 
@@ -119,18 +101,8 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
   async function poll(id) {
     const watch = watching.get(id);
     if (!watch) return;
-    let job;
-    try {
-      ({ job } = await call('GET', `/lessons/${watch.jobId}`));
-      watch.misses = 0;
-    } catch (e) {
-      if (!watching.has(id)) return; // cancelled while we were asking
-      // The writer forgets its jobs when it restarts, so a 404 will not get better.
-      watch.misses += 1;
-      if (!e.cause || watch.misses >= 5) return fail(id, e.cause ? unreachable() : 'The lesson writer restarted and lost this lesson. Press Retry.');
-      return schedule(id);
-    }
-    if (!watching.has(id)) return;
+    const job = jobs.get(watch.jobId);
+    if (!job) return fail(id, 'The lesson writer lost this lesson. Press Retry.');
     if (watch.kind === 'revise') {
       if (job.status === 'done') return finishRevise(id, job.result, watch);
       if (job.status === 'error') return endRevise(id, watch, job.error || 'The revision could not be made.');
@@ -250,12 +222,12 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
     store.update(id, { status: 'processing', stage: then === 'build' ? 'Checking your changes before rendering' : 'Checking your changes', error: null, progress_done: 0, progress_total: 0 });
     let job;
     try {
-      ({ job } = await call('POST', '/lessons', { project, kind: 'check', ...(chapter ? { chapter } : {}) }));
+      job = jobs.submit({ project, kind: 'check', ...(chapter ? { chapter } : {}) });
     } catch (e) {
       store.update(id, prior);
-      throw Object.assign(new Error(e.cause ? unreachable() : e.message), { status: 503 });
+      throw Object.assign(new Error(e.message), { status: e.status || 400 });
     }
-    watching.set(id, { jobId: job.id, misses: 0, kind: 'check', prior, then, quality, chapter });
+    watching.set(id, { jobId: job.id, kind: 'check', prior, then, quality, chapter });
     schedule(id);
   }
 
@@ -318,12 +290,12 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
     let job;
     try {
       const plan = await writerFor(settings.lesson);
-      ({ job } = await call('POST', '/lessons', { project: settings.project, kind: 'revise', request, scope, attachments, history, ...(chapter ? { chapter } : {}), ...plan }));
+      job = jobs.submit({ project: settings.project, kind: 'revise', request, scope, attachments, history, ...(chapter ? { chapter } : {}), ...plan });
     } catch (e) {
       store.update(id, prior);
-      throw Object.assign(new Error(e.cause ? unreachable() : e.message), { status: e.cause ? 503 : 400 });
+      throw Object.assign(new Error(e.message), { status: e.status || 400 });
     }
-    watching.set(id, { jobId: job.id, misses: 0, kind: 'revise', prior, review, request, scope, chapter });
+    watching.set(id, { jobId: job.id, kind: 'revise', prior, review, request, scope, chapter });
     schedule(id);
   }
 
@@ -382,7 +354,7 @@ export function createLessons({ store, runner, getConfig, versions = null, setti
     const watch = watching.get(id);
     if (!watch) return false;
     clearTimeout(watch.timer);
-    call('POST', `/lessons/${watch.jobId}/cancel`).catch(() => {});
+    jobs.cancel(watch.jobId);
     if (watch.kind === 'check') {
       endCheck(id, watch, null); // a cancelled check leaves the lesson as it was
       return true;

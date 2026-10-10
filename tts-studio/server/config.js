@@ -58,10 +58,7 @@ export function loadConfig() {
     // (default: python3 video/build.py). TTS_VIDEO_BUILD names another executable.
     videoDir: path.resolve(pick('TTS_VIDEO_DIR', path.join(path.dirname(ROOT), 'video'))),
     videoBuild: pick('TTS_VIDEO_BUILD', '') ? [String(pick('TTS_VIDEO_BUILD', '')).trim()] : null,
-    // The lesson writer (author/): a second small server that asks Claude for a script and scenes.
-    // The dashboard starts one itself unless TTS_AUTHOR_URL points at one running elsewhere.
-    authorPort: Number(pick('AUTHOR_PORT', 8790)),
-    authorUrl: String(pick('TTS_AUTHOR_URL', '')).trim().replace(/\/+$/, ''),
+    // The lesson writer (author/), which asks Claude for a script and scenes.
     claudeBin: String(pick('TTS_CLAUDE_BIN', 'claude')).trim(),
     claudeModel: String(pick('TTS_CLAUDE_MODEL', '')).trim(), // empty: whatever Claude Code defaults to
     // Effort per step: writing needs it, a fix is mechanical. "auto" leaves it to Claude Code.

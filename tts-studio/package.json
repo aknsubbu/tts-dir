@@ -15,7 +15,6 @@
     "dev:client": "vite",
     "build": "vite build",
     "start": "node server/index.js",
-    "author": "node author/index.js",
     "mcp": "node mcp/stdio.js",
     "mcp:pack": "node scripts/mcp-pack.js",
     "bakeoff": "node scripts/bakeoff.js",

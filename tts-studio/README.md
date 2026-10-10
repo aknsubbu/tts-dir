@@ -32,7 +32,6 @@ For development with hot reload, run `npm run dev` and open <http://localhost:51
 | `npm run app` | Build the UI, then start the server (the everyday command) |
 | `npm start` | Start the server using the last build |
 | `npm run dev` | Server with auto-restart plus Vite dev server on port 5173 |
-| `npm run author` | The lesson writer on its own, for running it apart from the dashboard |
 | `npm run mcp` | The MCP connector over stdio, as Claude Code or the desktop app starts it |
 | `npm run mcp:pack` | The connector as a desktop extension, `extension/narrated-proofs.mcpb` |
 | `npm run bakeoff` | Make the same short lessons with each set-up writer and compare them (see below) |
@@ -128,7 +127,7 @@ A two-minute video takes roughly five to ten minutes from start to finish. Most 
 
 **What you get on disk.** Every lesson is a normal project in `../video/projects/<topic>-<id>/`: `script.txt`, `scenes.py`, your `brief.json`, the attached files in `notes/`, under `build/author/` every prompt sent to the writer, every answer and what each cost, under `build/check/` the storyboard and the last check's report, and in `versions/NNN/` each version's files and storyboard. Edit it in the **Edit** tab, or in your own editor and render it from there (the tab notices), or with `python3 ../video/build.py <name>`.
 
-**How it works.** The lesson writer is a second small Express server in `author/`. `npm start` runs it in the same process on port 8790; `npm run author` runs it alone. It gives Claude no tools, so Claude can only send text back, and that text is checked by `../video/check.py` before anything is built. The prompts are plain files you can edit without restarting:
+**How it works.** The lesson writer is in `author/` and runs inside the dashboard's process, as a job queue the server hands lessons to. It gives Claude no tools, so Claude can only send text back, and that text is checked by `../video/check.py` before anything is built. The prompts are plain files you can edit without restarting:
 
 | File | What it is |
 | --- | --- |
@@ -278,8 +277,6 @@ All optional. Put them in a `.env` in this folder or the one above it, or in the
 | `TTS_LESSON_REVIEW` | `render` | `storyboard` makes new lessons sent without a choice (from `curl`, say) wait at their storyboard |
 | `TTS_NOTES_IMAGE_EDGE` | `1400` | Pixels on the long side of an attached photo |
 | `TTS_KEEP_RENDERS` | `3` | Videos kept per lesson, the current one included |
-| `AUTHOR_PORT` | `8790` | Port for the lesson writer |
-| `TTS_AUTHOR_URL` | none | Use a lesson writer running elsewhere and do not start one |
 | `TTS_VIDEO_DIR` | `../video` | The folder holding `build.py`, `check.py` and `projects/` |
 | `TTS_VIDEO_BUILD` | `python3 ../video/build.py` | Another executable to build a video with |
 | `TTS_AUTHOR_CHECK` | `python3 ../video/check.py` | Another executable to check a lesson with |
@@ -375,8 +372,7 @@ shared/
   providers.js    the kinds of provider, what each can do until tested, the default writer plan
   rates.js        what API providers charge, dated, and the cost of a request
 author/
-  index.js        the lesson writer on its own (npm run author)
-  app.js          its HTTP API: POST /lessons, GET /lessons/:id, POST /lessons/:id/cancel
+  jobs.js         its job queue: submit, get and cancel, a few lessons written at once
   pipeline.js     write (or the narration, then the scenes), revise, check, fix, polish
   claude.js       runs `claude -p` and reads its answer
   writers/        one interface over every provider: anthropic.js, openai.js (any OpenAI-compatible
@@ -420,5 +416,4 @@ scripts/
 - **A scene fails with "Operation not permitted", or the error says the sandbox may have stopped it.** Either the scene tried something scenes may not do (read a file outside its project, reach the network), which **Ask for a change** or the Edit tab fixes, or rendering on this Mac needs something the sandbox does not allow yet. To tell which, stop the dashboard, start it with `VIDEO_SANDBOX=report npm start` and press **Retry**. If it works now, run `python3 ../video/sandbox_probe.py` and see [the video README](../video/README.md#when-a-project-fails-only-inside-the-sandbox).
 - **"No manimgl at …" or "No Kokoro Python at …".** The video toolchain or the voice is not set up; see the [main README](../README.md#install), steps 4 and 5.
 - **Started from a login item or another app, the dashboard cannot find `claude`, LaTeX or ffmpeg.** Such programs get a short PATH. The build adds `/Library/TeX/texbin`, `/opt/homebrew/bin` and `/usr/local/bin` itself; for Claude Code, set `TTS_CLAUDE_BIN` to its full path.
-- **Port 8790 already in use.** That is the lesson writer's port; set `AUTHOR_PORT=8791` in `.env`.
 - **Rendering is slow.** The first render after installing fills the scene cache (fonts, LaTeX, shaders), and 4K takes far longer than 1080p. Use **480p, quickest** while you try things; a rebuild renders only the scenes that changed.

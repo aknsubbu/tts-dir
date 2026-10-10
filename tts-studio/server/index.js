@@ -7,7 +7,7 @@ import { createVideoBuilder } from './video.js';
 import { createLessons } from './lessons.js';
 import { createVersions } from './versions.js';
 import { createApp } from './app.js';
-import { createAuthorApp } from '../author/app.js';
+import { createAuthorJobs } from '../author/jobs.js';
 import { createAuthor } from '../author/pipeline.js';
 import { createSecrets } from './secrets.js';
 import { createSettings } from './settings.js';
@@ -22,23 +22,16 @@ const versions = createVersions({ store, getConfig: loadConfig });
 const secrets = createSecrets({ dataDir: cfg.dataDir, useKeychain: cfg.useKeychain });
 const settings = createSettings({ db: store.db, getConfig: loadConfig, secrets });
 const runner = createRunner({ store, engine, video: createVideoBuilder({ getConfig: loadConfig }), versions });
-const lessons = createLessons({ store, runner, getConfig: loadConfig, versions, settings });
+// The lesson writer runs in this process, its jobs alongside the server's.
+const jobs = createAuthorJobs({ getConfig: loadConfig, author: createAuthor({ getConfig: loadConfig, secrets }) });
+const lessons = createLessons({ store, runner, getConfig: loadConfig, jobs, versions, settings });
 const app = createApp({ getConfig: loadConfig, store, runner, engine, lessons, versions, settings, secrets, mcp: mcpHandler(), distDir: path.join(ROOT, 'dist') });
-
-// The lesson writer is its own small server. It runs in this process on its own port, so one
-// command starts everything; set TTS_AUTHOR_URL to use one started elsewhere with `npm run author`.
-const author = cfg.authorUrl ? null : createAuthorApp({ getConfig: loadConfig, author: createAuthor({ getConfig: loadConfig, secrets }) });
-const authorServer = author?.listen(cfg.authorPort, cfg.host);
-authorServer?.on('error', (e) => {
-  const why = e.code === 'EADDRINUSE' ? `port ${cfg.authorPort} is in use (set AUTHOR_PORT in your .env)` : e.message;
-  console.error(`  Lesson writer    NOT RUNNING: ${why}. Everything else works.\n`);
-});
 
 const server = app.listen(cfg.port, cfg.host, () => {
   console.log(`\n  Narrated Proofs  http://localhost:${cfg.port}`);
   console.log(`  Dev UI (vite)    http://localhost:5173   (when running npm run dev)`);
   console.log(`  Library data     ${cfg.dataDir}`);
-  console.log(`  Lesson writer    ${cfg.authorUrl || `http://localhost:${cfg.authorPort}`}   (who writes: Settings → Lesson writer)`);
+  console.log(`  Lesson writer    who writes: Settings → Lesson writer`);
   console.log(`  MCP connector    http://localhost:${cfg.port}/mcp   (Settings → Connect Claude)`);
   console.log(`  Kokoro           loading the model…`);
   if (interrupted) console.log(`  ${interrupted} unfinished job(s) from the last run were marked for retry.`);
@@ -63,8 +56,7 @@ const shutdown = () => {
   engine.stop(); // otherwise the Python process outlives every restart
   runner.stop(); // and so would a video build
   lessons.stop();
-  author?.stop(); // and Claude, and the check it runs
-  authorServer?.close();
+  jobs.stop(); // and Claude, and the check it runs
   server.close(() => {
     store.close();
     process.exit(0);
@@ -76,5 +68,5 @@ process.on('SIGTERM', shutdown);
 process.on('exit', () => {
   engine.stop();
   runner.stop();
-  author?.stop();
+  jobs.stop();
 });

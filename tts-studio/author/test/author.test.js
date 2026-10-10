@@ -3,41 +3,38 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createAuthorApp } from '../app.js';
+import { createAuthorJobs } from '../jobs.js';
 import { parseAnswer } from '../claude.js';
 import { createAuthor, normalizeDraft } from '../pipeline.js';
 import { fill, guide, lessonPrompt } from '../prompts.js';
 import { alive, answer, sandbox, scenes, SCRIPT, until } from './fakes.js';
 
-let dir, box, author, server, base;
+let dir, box, author, jobs;
 const BRIEF = { topic: 'Slope of a line', goal: 'What the number means', notes: 'rise over run\n$1 {{notes}} stay as typed', minutes: 1, voice: 'af_heart' };
 
-const j = async (method, url, body) => {
-  const res = await fetch(base + url, {
-    method,
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  return { status: res.status, data: await res.json().catch(() => null) };
-};
-const settled = (id) => until(async () => {
-  const { job } = (await j('GET', `/lessons/${id}`)).data;
+const settled = (id) => until(() => {
+  const job = jobs.get(id);
   return ['done', 'error', 'cancelled'].includes(job.status) ? job : null;
 });
+/** The status a submit is refused with, or null when it is accepted. */
+const refused = (body) => {
+  try {
+    jobs.submit(body);
+    return null;
+  } catch (e) {
+    return e.status;
+  }
+};
 
 before(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tts-author-test-'));
   box = sandbox(dir);
   author = createAuthor({ getConfig: box.getConfig });
-  const app = createAuthorApp({ getConfig: box.getConfig });
-  await new Promise((resolve) => {
-    server = app.listen(0, '127.0.0.1', resolve);
-  });
-  base = `http://127.0.0.1:${server.address().port}`;
+  jobs = createAuthorJobs({ getConfig: box.getConfig });
 });
 
-after(async () => {
-  await new Promise((resolve) => server.close(resolve));
+after(() => {
+  jobs.stop();
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -300,55 +297,53 @@ test('prompt templates fill completely', () => {
   assert.equal(fill('{{a}}', { a: '$& {{a}}' }), '$& {{a}}', 'values are inserted as they are');
 });
 
-test('over HTTP: a lesson is queued, written and reported', async () => {
+test('jobs: a lesson is queued, written and reported', async () => {
   box.answers([answer()]);
-  const made = await j('POST', '/lessons', { project: 'http-1', ...BRIEF });
-  assert.equal(made.status, 202);
-  assert.ok(['queued', 'working'].includes(made.data.job.status));
-  const job = await settled(made.data.job.id);
+  const made = jobs.submit({ project: 'http-1', ...BRIEF });
+  assert.ok(['queued', 'working'].includes(made.status));
+  const job = await settled(made.id);
   assert.equal(job.status, 'done');
   assert.equal(job.stage, 'Ready to build');
   assert.equal(job.result.title, 'Slope, quickly');
   assert.equal(job.result.script, SCRIPT);
-  assert.equal((await j('GET', '/health')).data.ok, true);
 });
 
-test('over HTTP: bad requests and failures', async () => {
-  assert.equal((await j('POST', '/lessons', { project: 'x y', topic: 'T' })).status, 400);
-  assert.equal((await j('POST', '/lessons', { project: 'ok', topic: '   ' })).status, 400);
-  assert.equal((await j('POST', '/lessons', { project: 'ok', topic: 'T', notes: 'n'.repeat(60001) })).status, 400);
-  assert.equal((await j('GET', '/lessons/nope')).status, 404);
-  assert.equal((await j('POST', '/lessons/nope/cancel')).status, 404);
+test('jobs: bad requests and failures', async () => {
+  assert.equal(refused({ project: 'x y', topic: 'T' }), 400);
+  assert.equal(refused({ project: 'ok', topic: '   ' }), 400);
+  assert.equal(refused({ project: 'ok', topic: 'T', notes: 'n'.repeat(60001) }), 400);
+  assert.equal(jobs.get('nope'), null);
+  assert.equal(jobs.cancel('nope'), null);
 
   box.answers([{ error: 'Credit balance is too low' }]);
-  const made = await j('POST', '/lessons', { project: 'http-2', ...BRIEF });
-  const job = await settled(made.data.job.id);
+  const made = jobs.submit({ project: 'http-2', ...BRIEF });
+  const job = await settled(made.id);
   assert.equal(job.status, 'error');
   assert.match(job.error, /Credit balance is too low/);
 });
 
-test('over HTTP: cancelling kills Claude and whatever it started; queued jobs wait their turn', async (t) => {
+test('jobs: cancelling kills Claude and whatever it started; queued jobs wait their turn', async (t) => {
   box.config.authorParallel = 1;
   t.after(() => (box.config.authorParallel = 2));
   box.answers([{ hang: true }, answer()]);
-  const first = (await j('POST', '/lessons', { project: 'http-3', ...BRIEF })).data.job;
-  const second = (await j('POST', '/lessons', { project: 'http-4', ...BRIEF })).data.job;
+  const first = jobs.submit({ project: 'http-3', ...BRIEF });
+  const second = jobs.submit({ project: 'http-4', ...BRIEF });
   assert.equal(second.status, 'queued');
-  assert.equal((await j('POST', '/lessons', { project: 'http-4', ...BRIEF })).status, 409, 'one job per project');
+  assert.equal(refused({ project: 'http-4', ...BRIEF }), 409, 'one job per project');
 
   const pidFile = path.join(dir, 'grandchild.pid');
   const pid = Number(await until(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8')));
   assert.ok(alive(pid));
-  await j('POST', `/lessons/${first.id}/cancel`);
+  jobs.cancel(first.id);
   assert.equal((await settled(first.id)).status, 'cancelled');
   await until(() => !alive(pid));
   assert.equal((await settled(second.id)).status, 'done', 'the next job runs once the first is out of the way');
 });
 
-test('over HTTP: two lessons are written at once, but their checks take turns', async () => {
+test('jobs: two lessons are written at once, but their checks take turns', async () => {
   box.answers([answer('# SLOW'), answer('# SLOW')]);
-  const one = (await j('POST', '/lessons', { project: 'side-1', ...BRIEF })).data.job;
-  const two = (await j('POST', '/lessons', { project: 'side-2', ...BRIEF })).data.job;
+  const one = jobs.submit({ project: 'side-1', ...BRIEF });
+  const two = jobs.submit({ project: 'side-2', ...BRIEF });
   assert.equal(two.status, 'working', 'the second does not wait for the first');
   assert.equal((await settled(one.id)).status, 'done');
   assert.equal((await settled(two.id)).status, 'done');
@@ -357,13 +352,13 @@ test('over HTTP: two lessons are written at once, but their checks take turns', 
   assert.ok(checks.every((c) => !c.overlap), 'never two checks at the same time');
 });
 
-test('over HTTP: a check job checks the files as they are, asking Claude nothing', async () => {
+test('jobs: a check job checks the files as they are, asking Claude nothing', async () => {
   box.answers([answer()]);
-  const written = (await j('POST', '/lessons', { project: 'recheck', ...BRIEF })).data.job;
+  const written = jobs.submit({ project: 'recheck', ...BRIEF });
   assert.equal((await settled(written.id)).status, 'done');
   fs.appendFileSync(path.join(box.project('recheck'), 'scenes.py'), '# CROWDED\n');
   box.answers([]);
-  const checking = (await j('POST', '/lessons', { project: 'recheck', kind: 'check' })).data.job;
+  const checking = jobs.submit({ project: 'recheck', kind: 'check' });
   assert.equal(checking.kind, 'check');
   const done = await settled(checking.id);
   assert.equal(done.status, 'done');
@@ -371,7 +366,7 @@ test('over HTTP: a check job checks the files as they are, asking Claude nothing
   assert.equal(done.result.warnings.length, 1);
   assert.equal(box.asked().length, 0);
   assert.ok(box.exists('recheck', 'build/check/storyboard.json'));
-  assert.equal((await j('POST', '/lessons', { project: 'recheck', kind: 'nonsense' })).status, 400);
-  const empty = (await j('POST', '/lessons', { project: 'never-written', kind: 'check' })).data.job;
+  assert.equal(refused({ project: 'recheck', kind: 'nonsense' }), 400);
+  const empty = jobs.submit({ project: 'never-written', kind: 'check' });
   assert.match((await settled(empty.id)).error, /no script and scenes to check/);
 });

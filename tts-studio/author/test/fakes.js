@@ -158,8 +158,6 @@ export function sandbox(dir) {
     authorParallel: 2,
     authorCheck: [checkBin],
     authorAutofix: [autofixBin],
-    authorPort: 0,
-    authorUrl: '',
   };
   const lines = (name) => {
     try {
