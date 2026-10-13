@@ -3,7 +3,7 @@
 #    `docker compose up` and open http://localhost:8787. Three stages:
 #      web      builds the page and installs the server's packages
 #      python   the two Python environments (Kokoro on the CPU, ManimGL) and the voice model
-#      runtime  what runs: Node, both environments, TeX, ffmpeg, and Mesa's CPU Vulkan driver
+#      runtime  what runs: Node, the environment, TeX, ffmpeg, and Mesa's CPU Vulkan driver
 #    ManimGL draws through wgpu. With no GPU in the container wgpu finds lavapipe, Mesa's
 #    Vulkan on the CPU, so scenes render headless and no display or GPU passthrough is needed. */
 
@@ -25,7 +25,7 @@ RUN npm ci
 COPY tts-studio/ ./
 RUN npm run build && npm prune --omit=dev
 
-# ---------- the two Python environments ----------
+# ---------- the Python environment ----------
 FROM ${PYTHON_IMAGE} AS python
 # AR: manimpango has no Linux wheel, so it is compiled here; only its result reaches the runtime.
 RUN apt-get update \
@@ -38,21 +38,22 @@ ENV UV_PYTHON=/usr/local/bin/python3.12 \
     UV_COMPILE_BYTECODE=1 \
     HF_HOME=/opt/huggingface
 
-# /* AR: The voice. PyTorch for the CPU goes in first, so kokoro does not pull the 2 GB CUDA build.
+# /* AR: The one environment (pyproject.toml, uv.lock), as ./install.sh makes it on a Mac. The
+#    renderer goes in first, then PyTorch for the CPU, so kokoro does not pull the CUDA build.
+#    The locked voice packages follow, minus torch and the CUDA libraries it would drag in.
 #    --seed gives the venv pip, which misaki uses to fetch its English model during the warmup. */
-COPY tts-studio/engine/requirements.txt /tmp/engine-requirements.txt
-RUN uv venv --seed /opt/kokoro \
-    && uv pip install --python /opt/kokoro/bin/python --index-url https://download.pytorch.org/whl/cpu torch \
-    && uv pip install --python /opt/kokoro/bin/python -r /tmp/engine-requirements.txt
-
-# AR: The renderer, kept apart from the voice's so PyTorch never loads while rendering (as on macOS).
-COPY video/requirements.txt /tmp/video-requirements.txt
-RUN uv venv /opt/manim \
-    && uv pip install --python /opt/manim/bin/python -r /tmp/video-requirements.txt
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+COPY pyproject.toml uv.lock ./
+RUN uv venv --seed /opt/venv \
+    && uv sync --locked --no-default-groups --no-install-project \
+    && uv pip install --python /opt/venv/bin/python --index-url https://download.pytorch.org/whl/cpu torch \
+    && uv export --locked --only-group voice --no-hashes --no-emit-project \
+        | grep -viE '^(nvidia-|triton|torch==)' > /tmp/voice.txt \
+    && uv pip install --python /opt/venv/bin/python -r /tmp/voice.txt
 
 # AR: The model and voices (about 350 MB) are baked in, so the first run is offline and instant.
 COPY tts-studio/engine/ /tmp/engine/
-RUN /opt/kokoro/bin/python /tmp/engine/kokoro_engine.py warmup
+RUN /opt/venv/bin/python /tmp/engine/kokoro_engine.py warmup
 
 # ---------- what runs ----------
 FROM ${PYTHON_IMAGE} AS runtime
@@ -89,8 +90,7 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && npm cache clean --force
 
 RUN useradd --create-home --uid 1000 app
-COPY --from=python /opt/kokoro /opt/kokoro
-COPY --from=python /opt/manim /opt/manim
+COPY --from=python /opt/venv /opt/venv
 COPY --from=python --chown=app:app /opt/huggingface /opt/huggingface
 COPY --from=web --chown=app:app /app/tts-studio /app/tts-studio
 COPY --chown=app:app video/ /app/video/
@@ -100,14 +100,14 @@ RUN chmod 755 /usr/local/bin/narrated-proofs \
     && mkdir -p /app/tts-studio/data /cache /home/app/.claude \
     && chown app:app /app/tts-studio/data /cache /home/app/.claude
 
-# /* AR: Every path the server and build.py would look for under tts-studio/.venv and video/.venv
-#    on macOS, pointed at the environments above. TTS_HOST is 0.0.0.0 because the container's
+# /* AR: The paths the server and build.py would find in the repo's .venv on macOS, pointed at
+#    the environment above. TTS_HOST is 0.0.0.0 because the container's
 #    loopback is its own; docker-compose.yml publishes the port on the host's 127.0.0.1 only. */
 ENV TTS_HOST=0.0.0.0 \
     PORT=8787 \
-    TTS_PYTHON=/opt/kokoro/bin/python \
-    KOKORO_PYTHON=/opt/kokoro/bin/python \
-    MANIMGL=/opt/manim/bin/manimgl \
+    TTS_PYTHON=/opt/venv/bin/python \
+    KOKORO_PYTHON=/opt/venv/bin/python \
+    MANIMGL=/opt/venv/bin/manimgl \
     HF_HOME=/opt/huggingface \
     TTS_DATA_DIR=/app/tts-studio/data \
     VIDEO_SCENE_CACHE=/cache/scenes \
