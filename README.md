@@ -4,7 +4,7 @@ Type a topic, drop in your notes, and get a narrated maths explainer in the styl
 
 Claude writes the lesson, or another model you choose, on this Mac or through an API. It is rendered with [ManimGL](https://github.com/3b1b/manim), the animation library Grant Sanderson wrote for the 3Blue1Brown videos. The voice is [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M), an open model that runs on your Mac. This project is not affiliated with 3Blue1Brown.
 
-Built for and tested on macOS with Apple Silicon. To install it, start at [Before you start](#before-you-start).
+Built for and tested on macOS with Apple Silicon. To install it, start at [Before you start](#before-you-start). On Windows or Linux, or to skip the setup on a Mac, [run it in Docker](#run-it-in-docker) instead.
 
 ## What it does
 
@@ -43,6 +43,7 @@ The demo project measures this in the finished video: the change on screen lands
 | --- | --- |
 | [tts-studio/](tts-studio/) | The dashboard you use (Node, React, SQLite), the lesson writer, the MCP connector, and the Kokoro voice engine. [README](tts-studio/README.md) |
 | [video/](video/) | The video toolchain (Python): speak a script, check and render ManimGL scenes, join them, write captions. Usable on its own for videos you write by hand. [README](video/README.md) |
+| [Dockerfile](Dockerfile), [docker-compose.yml](docker-compose.yml) | Everything above in one Linux image, for Windows, Linux or a Mac with no setup. See [Run it in Docker](#run-it-in-docker) |
 | [install.sh](install.sh), [pyproject.toml](pyproject.toml) | The installer, and the one Python environment it creates (ManimGL and Kokoro, locked in `uv.lock`) |
 | [tts.py](tts.py) | Optional command-line launcher for the voice engine: `python3 tts.py script.txt` writes `script.mp3` |
 
@@ -57,11 +58,55 @@ tts-studio/server ──> video/build.py ──> video/narrate.py    Kokoro spea
                                     └──> ffmpeg              joins scenes, adds captions and a poster
 ```
 
+## Run it in Docker
+
+One image holds everything the steps below install by hand: the dashboard, Kokoro and its voice model, ManimGL, TeX, ffmpeg and Claude Code. This is the way to run it on Windows, and it works the same on Linux and on a Mac.
+
+You need [Docker Desktop](https://www.docker.com/products/docker-desktop/) (on Windows, with its default WSL 2 backend), git, and about 10 GB of free disk space.
+
+```bash
+git clone https://github.com/aknsubbu/tts-dir.git
+cd tts-dir
+docker compose up --build
+```
+
+The first build downloads and installs everything once and takes 15 to 30 minutes; later starts take seconds. Open <http://localhost:8787> when the log says **Kokoro ready**.
+
+**A lesson writer.** Claude Code is in the image. Sign it in once, and the sign-in is kept in a volume:
+
+```bash
+docker compose exec app claude
+```
+
+Or put `ANTHROPIC_API_KEY`, or a `CLAUDE_CODE_OAUTH_TOKEN` made with `claude setup-token`, in `tts-studio/.env`. Any other writer is set up in **Settings → Lesson writer** as on a Mac. Keys saved there are kept in the library's volume, since there is no Keychain. Ollama or LM Studio running on your computer is at `http://host.docker.internal:11434` (or `:1234/v1`) from inside the container.
+
+**Everyday use.**
+
+| | |
+| --- | --- |
+| Start in the background, and follow the log | `docker compose up -d`, then `docker compose logs -f` |
+| Stop | `docker compose down` (your lessons and library stay) |
+| Update | `git pull`, then `docker compose up --build` |
+| Check or render a lesson from the terminal | `docker compose exec app python3 ../video/check.py <project>` (or `build.py`) |
+| Connect Claude Code on your computer | `claude mcp add --transport http narrated-proofs http://localhost:8787/mcp` |
+| Use another port | `PORT=8788 docker compose up`; in PowerShell, `$env:PORT=8788; docker compose up` |
+| Remove it, library included | `docker compose down -v`, then `docker image rm narrated-proofs` |
+
+**Where your files go.** Lessons are in `video/projects/` in this folder, as on a Mac, so you can open them in your own editor. The library (database, MP3s and videos), the render cache and Claude Code's sign-in are Docker volumes. The library is a volume rather than a folder because SQLite's write-ahead log is not safe on a folder shared from Windows. To back it up: `docker compose cp app:/app/tts-studio/data ./data-backup`.
+
+**How it differs from a Mac.**
+
+- **Rendering uses the CPU.** There is no GPU in the container, so ManimGL draws through lavapipe, Mesa's Vulkan for the CPU. On a 16-thread PC the 18-second demo is spoken and rendered at 480p in about 35 seconds, the 2-minute example lesson in about 4 minutes, and the demo's scenes at 1080p in under 30 seconds. Choose **480p, quickest** while you work on a lesson.
+- **The voice uses the CPU** as well, at about twice real time. It speaks on half the CPUs, at most 8, which in Docker is several times quicker than all of them; set `OMP_NUM_THREADS` in `tts-studio/.env` to choose.
+- **No macOS sandbox.** Scenes run inside the container, which holds the rest of your computer out, but not inside `sandbox-exec`: within the container they could reach the network, Claude Code's sign-in and saved keys. See [the sandbox](video/README.md#the-sandbox).
+- **Notes** are converted with libvips (photos, HEIC included), pandoc (Word, RTF, OpenDocument) and catdoc (old `.doc`) instead of `sips` and `textutil`.
+- **Settings → Connect Claude** also lists a connector that starts the dashboard itself. Its path is inside the container, so from your computer use the `/mcp` address above.
+
 ## Before you start
 
 | You need | Why |
 | --- | --- |
-| A Mac with Apple Silicon (M1 or later) | Kokoro speaks on its GPU, and ManimGL draws through Metal. Intel Macs with Metal may work but are untested. A virtual machine without GPU access cannot render. Other systems are not supported: see [Future improvements](#future-improvements) |
+| A Mac with Apple Silicon (M1 or later) | Kokoro speaks on its GPU, and ManimGL draws through Metal. Intel Macs with Metal may work but are untested. A virtual machine without GPU access cannot render. On Windows or Linux, [run it in Docker](#run-it-in-docker) instead |
 | Administrator access | Homebrew and BasicTeX ask for your password |
 | About 3 GB of free disk space | PyTorch, the voice model (about 350 MB), ManimGL and its packages, LaTeX, and the dashboard's packages. Videos and lessons need more as you make them |
 | An internet connection, during setup | Everything is downloaded once. Afterwards speech and rendering work offline; writing a lesson needs the writer you choose |
@@ -231,6 +276,7 @@ None of these exist yet.
 - **Claude in a browser.** The MCP connector works with Claude Code and the desktop app. claude.ai connects from Anthropic's servers, so it would need this Mac reachable over HTTPS with a login in front: a tunnel, OAuth, and expiring links for videos.
 - **Write it in the conversation.** Tools that hand Claude Code the lesson guide and let it submit a script and scenes itself, so the conversation's own Claude writes the lesson with everything it already knows.
 - **The sandbox's rules, from more Macs.** Scenes now read only what rendering needs and start only Python, ffmpeg and TeX, with the paths found on each Mac. The rules were written from how ManimGL, TeX and ffmpeg are installed and started, not yet from a run on a Mac; `python3 video/sandbox_probe.py` renders under them and lists anything a Mac's setup needs beyond them, which is what would widen them.
-- **Other platforms.** Attached photos and documents, and the sandbox, rely on tools that ship with macOS. Linux needs replacements for `sips`, `textutil` and `sandbox-exec` (bubblewrap, say); there scenes run with the short environment and the limits, but unconfined.
+- **A sandbox outside macOS.** Docker runs everything on Windows and Linux, and converts notes with libvips, pandoc and catdoc there, but scenes run unconfined inside the container. Running them as a second user with no network (bubblewrap, or a render container of their own) would bring back what `sandbox-exec` does on a Mac.
+- **The GPU in Docker.** Renders in the image use the CPU through lavapipe. Mesa's Vulkan over Direct3D 12 (dozen) could reach the GPU under WSL 2, and an NVIDIA image could reach it on Linux.
 - **Word-level sync in other languages.** Only the English voices report word timings, so lessons are English only.
 - **More of the page under test.** The lesson form, the workspace and its Outline, Edit and History tabs, the storyboard, Settings, the library's cards, the API wrapper and the helpers are tested; the audio details panel and drag and drop are not.

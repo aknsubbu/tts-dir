@@ -13,11 +13,23 @@ import { createVersions } from '../versions.js';
 import { createAuthorJobs } from '../../author/jobs.js';
 import { execFileSync } from 'node:child_process';
 import { alive, answer, sandbox, SCRIPT, until } from '../../author/test/fakes.js';
-import { kindOf, safeName } from '../notes.js';
+import { documentCommand, imageCommand, kindOf, safeName } from '../notes.js';
+import { which } from '../which.js';
 
-// A 1x1 PNG, and whether this machine has the macOS tools that read photos and documents.
+// A 1x1 PNG, and whether this machine has the tools that read photos and documents:
+// sips and textutil on macOS, libvips and pandoc on Linux and in the Docker image.
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC';
 const MAC_TOOLS = fs.existsSync('/usr/bin/sips') && fs.existsSync('/usr/bin/textutil');
+const LINUX_TOOLS = !MAC_TOOLS && Boolean(which('vipsthumbnail') && which('pandoc'));
+const NOTE_TOOLS = MAC_TOOLS || LINUX_TOOLS;
+
+/** Write `text` as a Word document at `docx`, with whichever tool this machine reads them with. */
+function writeDocx(text, docx) {
+  const txt = docx.replace(/\.docx$/, '.txt');
+  fs.writeFileSync(txt, text);
+  if (MAC_TOOLS) execFileSync('/usr/bin/textutil', ['-convert', 'docx', txt, '-output', docx]);
+  else execFileSync('pandoc', [txt, '-o', docx]);
+}
 
 let dir, box, store, runner, lessons, server, authorJobs, base, config;
 
@@ -229,10 +241,9 @@ test('requests that cannot work are refused before anything is asked of Claude',
   assert.equal((await settled(odd.data.generation.id)).status, 'done');
 });
 
-test('photos, PDFs and documents attached to the notes are saved, converted and shown to Claude', { skip: !MAC_TOOLS && 'needs sips and textutil (macOS)' }, async () => {
+test('photos, PDFs and documents attached to the notes are saved, converted and shown to Claude', { skip: !NOTE_TOOLS && 'needs sips and textutil (macOS), or vipsthumbnail and pandoc' }, async () => {
   const docx = path.join(dir, 'working.docx');
-  fs.writeFileSync(path.join(dir, 'working.txt'), 'The sigmoid derivative is y hat times one minus y hat.');
-  execFileSync('/usr/bin/textutil', ['-convert', 'docx', path.join(dir, 'working.txt'), '-output', docx]);
+  writeDocx('The sigmoid derivative is y hat times one minus y hat.', docx);
   const attachments = [
     { name: 'IMG 0042.PNG', data: PNG },
     { name: 'paper.pdf', data: Buffer.from('%PDF-1.4 not a real pdf').toString('base64') },
@@ -270,7 +281,7 @@ test('attachments that cannot be used are refused with the reason', async () => 
   assert.match(await bad([{ name: 'empty.png', data: '' }]), /empty\.png is empty/);
   assert.match(await bad(Array.from({ length: 13 }, (_, i) => ({ name: `p${i}.png`, data: PNG }))), /at most 12 attached files; this one has 13/);
   assert.match(await bad([{ name: 'big.pdf', data: Buffer.alloc(21 * 1024 * 1024).toString('base64') }]), /add up to 21\.0 MB\. The limit is 20 MB/);
-  if (MAC_TOOLS) assert.match(await bad([{ name: 'broken.png', data: Buffer.from('not an image').toString('base64') }]), /broken\.png could not be read as an image/);
+  if (NOTE_TOOLS) assert.match(await bad([{ name: 'broken.png', data: Buffer.from('not an image').toString('base64') }]), /broken\.png could not be read as an image/);
   assert.equal(box.asked().length, 0);
   assert.deepEqual(fs.readdirSync(path.join(config.videoDir, 'projects')).filter((p) => fs.existsSync(path.join(config.videoDir, 'projects', p, 'notes', 'broken.png'))), [], 'nothing is left behind');
 });
@@ -285,6 +296,21 @@ test('file names and kinds for notes', () => {
   assert.equal(safeName('my notes (1).png', taken), 'my-notes-1-.png');
   assert.equal(safeName('My Notes (1).png', taken), 'My-Notes-1--2.png');
   assert.equal(safeName('...', taken), 'file');
+});
+
+test('notes are converted with the tools this system has: sips and textutil, else vips, pandoc and catdoc', () => {
+  const none = { onPath: () => null, exists: () => false };
+  const linux = { onPath: (name) => `/usr/bin/${name}`, exists: () => false };
+  const mac = { onPath: () => assert.fail('macOS needs nothing from PATH'), exists: (p) => ['/usr/bin/sips', '/usr/bin/textutil'].includes(p) };
+
+  assert.deepEqual(imageCommand('a.heic', 'a.jpg', 1400, mac), ['/usr/bin/sips', ['-s', 'format', 'jpeg', '-s', 'formatOptions', '85', '-Z', '1400', 'a.heic', '--out', 'a.jpg']]);
+  assert.deepEqual(imageCommand('a.heic', 'a.jpg', 1400, linux), ['/usr/bin/vipsthumbnail', ['a.heic', '--size', '1400x1400>', '-o', 'a.jpg[Q=85,strip]']]);
+  assert.equal(imageCommand('a.heic', 'a.jpg', 1400, none), null);
+
+  assert.deepEqual(documentCommand('w.docx', mac), ['/usr/bin/textutil', ['-convert', 'txt', '-stdout', 'w.docx']]);
+  assert.deepEqual(documentCommand('w.rtf', linux), ['/usr/bin/pandoc', ['--to', 'plain', '--wrap', 'none', 'w.rtf']]);
+  assert.deepEqual(documentCommand('w.DOC', linux), ['/usr/bin/catdoc', ['-w', 'w.DOC']], 'pandoc cannot read the old binary .doc');
+  assert.equal(documentCommand('w.odt', none), null);
 });
 
 test('the library can be filtered to videos or audio, and a built video has a poster', async () => {

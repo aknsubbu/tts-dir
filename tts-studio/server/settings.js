@@ -69,7 +69,8 @@ export const LABELS = {
 const STEP_CONFIG = { read: 'claudeReadEffort', write: 'claudeEffort', fix: 'claudeFixEffort', polish: 'claudePolishEffort', outline: 'claudeOutlineEffort' };
 const STEP_LABEL = Object.fromEntries([...WRITER_STEPS, ['polish', 'Polishing']]);
 const MODEL_SHAPE = /^[\w.:/@+-]{0,200}$/;
-const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
+// AR: SPL. CASE# host.docker.internal is the machine Docker runs on, where Ollama or LM Studio are, seen from the container.
+const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1', 'host.docker.internal']);
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const isObject = (v) => v && typeof v === 'object' && !Array.isArray(v);
@@ -96,7 +97,7 @@ export function checkBaseUrl(kind, value) {
   if (!['http:', 'https:'].includes(url.protocol)) throw new SettingsError('A provider address starts with http:// or https://.');
   if (url.username || url.password) throw new SettingsError('Put the key in the key field, not in the address.');
   if (PROVIDER_KINDS[kind] && !PROVIDER_KINDS[kind].company && !LOCAL_HOSTS.has(url.hostname)) {
-    throw new SettingsError(`“${PROVIDER_KINDS[kind].label}” runs on this Mac, so its address is localhost or 127.0.0.1. For another machine, add it under Other.`);
+    throw new SettingsError(`“${PROVIDER_KINDS[kind].label}” runs on this Mac, so its address is localhost or 127.0.0.1 (host.docker.internal from Docker). For another machine, add it under Other.`);
   }
   return raw;
 }

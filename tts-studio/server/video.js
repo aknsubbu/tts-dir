@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { EngineError } from './kokoro.js';
+import { which } from './which.js';
 
 export const PROJECT_NAME = /^[A-Za-z0-9_-]{1,80}$/;
 
@@ -57,18 +58,12 @@ export function readProject(videoDir, name) {
   }
 }
 
-// A server started from a login item may not have Homebrew on its PATH.
-function findFfmpeg() {
-  const dirs = [...(process.env.PATH || '').split(path.delimiter), '/opt/homebrew/bin', '/usr/local/bin'];
-  return dirs.filter(Boolean).map((d) => path.join(d, 'ffmpeg')).find((f) => fs.existsSync(f)) || null;
-}
-
 /**
  * A still from a video, as build.py makes one: from late enough that the screen has something
  * on it. Resolves to true once `jpg` exists, false when it could not be made (no ffmpeg, say).
  */
 export function makePoster(mp4, jpg, durationSec) {
-  const ffmpeg = findFfmpeg();
+  const ffmpeg = which('ffmpeg');
   if (!ffmpeg) return Promise.resolve(false);
   const tmp = `${jpg}.part.jpg`;
   const shot = (at) =>

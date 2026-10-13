@@ -30,6 +30,46 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  linux:
+    # /* AR: The same tests on Linux, where notes are converted with libvips, pandoc and catdoc
+    #    instead of sips and textutil: what the Docker image runs. */
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tts-studio
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tts-studio/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libvips-tools pandoc catdoc poppler-utils
+      - run: npm ci
+      - run: npm test
+
+  docker:
+    # /* AR: The image Windows users run: build it, then make the demo end to end inside it (Kokoro
+    #    speaks, manim renders on lavapipe, TeX sets the equations, ffmpeg joins). */
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: narrated-proofs:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Render the demo inside the image
+        run: |
+          docker run --rm narrated-proofs:ci sh -c \
+            'python3 /app/video/build.py demo --quality low && test -s /app/video/projects/demo/build/demo.mp4'
+
   render:
     # A real render inside the strict scene sandbox: manimgl draws the Text smoke scene on the
     # GPU and writes it through ffmpeg. No TeX, which is too large to install here.

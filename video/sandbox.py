@@ -58,7 +58,11 @@ PRIVATE = (
 )
 
 # The environment a scene is given. Anything else the server has (API keys, tokens) stays out.
-PASS_ENV = ("PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "__CF_USER_TEXT_ENCODING")
+# AR: XDG_RUNTIME_DIR is only a folder's name; on Linux, Mesa's Vulkan loader warns on every scene without it.
+PASS_ENV = (
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "__CF_USER_TEXT_ENCODING",
+    "XDG_RUNTIME_DIR",
+)
 
 # What every scene may read: the system's libraries, frameworks, fonts and settings, and the
 # temporary folders it may write to. /System holds the frameworks, the GPU drivers and the

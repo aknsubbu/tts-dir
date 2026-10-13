@@ -61,10 +61,23 @@ SAMPLES = {
 PARAGRAPH_PAUSE = 0.45
 LINE_PAUSE = 0.2
 FORMATS = {".mp3": "MP3", ".wav": "WAV", ".flac": "FLAC", ".ogg": "OGG"}
+# AR: Most CPU threads speech is given on Linux; see cpu_threads().
+MAX_CPU_THREADS = 8
 
 
 class EngineError(Exception):
     pass
+
+
+# /* AR: On Linux PyTorch starts a thread per logical CPU, which oversubscribes Docker Desktop's VM:
+#    27 s of speech took 99-135 s on 16 threads and 12-15 s on 8. Half the CPUs, at most
+#    MAX_CPU_THREADS, unless OMP_NUM_THREADS says otherwise. macOS and the GPU are left as they were. */
+def cpu_threads(device, platform=sys.platform, env=os.environ, cpus=None):
+    """The number of threads PyTorch should speak with on `device`, or None to leave its default alone."""
+    if device != "cpu" or not platform.startswith("linux") or env.get("OMP_NUM_THREADS"):
+        return None
+    cpus = cpus or os.cpu_count() or 2
+    return max(1, min(MAX_CPU_THREADS, cpus // 2))
 
 
 # ---------- text ----------
@@ -274,6 +287,9 @@ class Engine:
 
         if self.device == "auto":
             self.device = "mps" if torch.backends.mps.is_available() else "cpu"
+        threads = cpu_threads(self.device)
+        if threads:
+            torch.set_num_threads(threads)
         self.model = KModel(repo_id=REPO_ID).to(self.device).eval()
 
     def warm(self):

@@ -148,6 +148,8 @@ test('"This Mac" providers stay on this Mac; others are added under Other', asyn
   await assert.rejects(settings.saveProvider('ollama', { baseUrl: 'http://10.0.0.5:11434' }), /runs on this Mac/);
   await settings.saveProvider('ollama', { baseUrl: 'http://localhost:11500/' });
   assert.equal(settings.provider('ollama').baseUrl, 'http://localhost:11500');
+  await settings.saveProvider('ollama', { baseUrl: 'http://host.docker.internal:11434' }); // the host, seen from Docker
+  assert.equal(settings.provider('ollama').baseUrl, 'http://host.docker.internal:11434');
   await assert.rejects(settings.saveProvider('openai', { baseUrl: 'https://example.com/v1' }), /always reached at its own address/);
   await assert.rejects(settings.saveProvider('new', { baseUrl: 'https://user:pw@example.com/v1' }), /key field/);
   const id = await settings.saveProvider('new', { baseUrl: 'https://openrouter.ai/api/v1', label: 'OpenRouter' });

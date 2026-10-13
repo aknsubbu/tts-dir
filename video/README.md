@@ -109,6 +109,8 @@ For lessons made in the dashboard, set the variable when you start it: `VIDEO_SA
 
 `sandbox-exec` ships with macOS; on a system without it scenes run unconfined. CI renders the Text smoke scene inside the strict sandbox on macOS, when the runner can render at all.
 
+**In Docker** (Windows and Linux) there is no `sandbox-exec`, so scenes run with the short environment and the limits but otherwise unconfined, inside the container. The container is what holds: a scene sees only the image, the lessons folder shared from your computer and the container's own volumes, never the rest of your disk. Inside it, though, a scene could use the network and read what the container keeps: Claude Code's sign-in and keys saved in Settings. Keep that in mind before you render a project someone else wrote.
+
 ## A project
 
 A project is a folder under `projects/`:

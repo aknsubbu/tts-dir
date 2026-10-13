@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DOC_EXT, IMAGE_EXT, MAX_BYTES, MAX_FILES } from '../shared/limits.js';
 import { keepPages, pageCount, pagesLabel, pageTexts, parsePages, PdfError } from './pdf.js';
+import { which } from './which.js';
 
 /**
  * Files a person adds to a lesson's notes that are not plain text.
@@ -17,8 +18,12 @@ import { keepPages, pageCount, pagesLabel, pageTexts, parsePages, PdfError } fro
 // Pixels on the long side: enough to read handwriting, and image tokens grow with pixel area,
 // so a smaller edge is a cheaper request. TTS_NOTES_IMAGE_EDGE changes it.
 const MAX_EDGE = 1400;
-const SIPS = '/usr/bin/sips'; // both ship with macOS
+// /* AR: macOS converts with sips and textutil, which ship with it. Elsewhere (Linux, the Docker
+//    image) libvips and pandoc do the same two jobs, and catdoc reads the old binary .doc that
+//    pandoc cannot. Whichever is found first is used; none found means the file is refused. */
+const SIPS = '/usr/bin/sips';
 const TEXTUTIL = '/usr/bin/textutil';
+const PLAIN_IMAGES = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
 
 export class NotesError extends Error {}
 
@@ -50,30 +55,54 @@ const run = (cmd, args) =>
     );
   });
 
+/** [command, args] that writes `source` as a JPEG at `dest`, at most maxEdge on its long side; null when nothing here can. */
+export function imageCommand(source, dest, maxEdge, { onPath = which, exists = fs.existsSync } = {}) {
+  if (exists(SIPS)) return [SIPS, ['-s', 'format', 'jpeg', '-s', 'formatOptions', '85', '-Z', String(maxEdge), source, '--out', dest]];
+  const vips = onPath('vipsthumbnail');
+  // AR: '>' only ever shrinks, and strip drops location and camera details as the re-encode does on macOS.
+  return vips ? [vips, [source, '--size', `${maxEdge}x${maxEdge}>`, '-o', `${dest}[Q=85,strip]`]] : null;
+}
+
+/** [command, args] that prints the text of the document `source`; null when nothing here can. */
+export function documentCommand(source, { onPath = which, exists = fs.existsSync } = {}) {
+  if (exists(TEXTUTIL)) return [TEXTUTIL, ['-convert', 'txt', '-stdout', source]];
+  if (ext(source) === 'doc') {
+    const catdoc = onPath('catdoc');
+    return catdoc ? [catdoc, ['-w', source]] : null;
+  }
+  const pandoc = onPath('pandoc');
+  return pandoc ? [pandoc, ['--to', 'plain', '--wrap', 'none', source]] : null;
+}
+
 /**
  * Make any image a JPEG no larger than maxEdge on its long side. Phone photos are HEIC,
  * which neither a browser nor Claude takes, and are several times larger than is useful.
+ * Returns the path written: `dest`, or a copy beside it when nothing here can convert.
  */
 async function normalizeImage(source, dest, maxEdge = MAX_EDGE) {
-  if (!fs.existsSync(SIPS)) {
-    if (!['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext(source))) {
+  const convert = imageCommand(source, dest, maxEdge);
+  if (!convert) {
+    if (!PLAIN_IMAGES.includes(ext(source))) {
       throw new NotesError(`${path.basename(source)} cannot be converted on this system. Use a PNG or JPEG.`);
     }
-    fs.copyFileSync(source, dest.replace(/\.jpg$/, path.extname(source).toLowerCase()));
-    return dest.replace(/\.jpg$/, path.extname(source).toLowerCase());
+    const copy = dest.replace(/\.jpg$/, path.extname(source).toLowerCase());
+    fs.copyFileSync(source, copy);
+    return copy;
   }
   try {
-    await run(SIPS, ['-s', 'format', 'jpeg', '-s', 'formatOptions', '85', '-Z', String(maxEdge), source, '--out', dest]);
+    await run(...convert);
   } catch (e) {
     throw new NotesError(`${path.basename(source)} could not be read as an image. ${e.message}`.trim());
   }
   return dest;
 }
 
+/** The text of a Word, RTF or OpenDocument file, trimmed. */
 async function documentText(source) {
-  if (!fs.existsSync(TEXTUTIL)) throw new NotesError(`${path.basename(source)} cannot be read on this system. Paste its text into the notes instead.`);
+  const convert = documentCommand(source);
+  if (!convert) throw new NotesError(`${path.basename(source)} cannot be read on this system. Paste its text into the notes instead.`);
   try {
-    return (await run(TEXTUTIL, ['-convert', 'txt', '-stdout', source])).trim();
+    return (await run(...convert)).trim();
   } catch (e) {
     throw new NotesError(`${path.basename(source)} could not be read. ${e.message}`.trim());
   }

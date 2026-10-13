@@ -52,7 +52,10 @@ export function loadConfig() {
     device: String(pick('TTS_DEVICE', '')).trim(), // auto (default), mps or cpu
     defaultVoiceId: String(pick('TTS_VOICE', 'af_heart')).trim(),
     port: Number(pick('PORT', 8787)),
-    host: '127.0.0.1', // local only; the dashboard is never exposed to your network
+    // /* AR: Local only; the dashboard is never exposed to your network. The Docker image sets
+    //    TTS_HOST=0.0.0.0 because a container's loopback is its own, and docker-compose.yml then
+    //    publishes the port on the host's 127.0.0.1 alone, so the rule still holds outside it. */
+    host: String(pick('TTS_HOST', '127.0.0.1')).trim(),
     dataDir: path.resolve(pick('TTS_DATA_DIR', path.join(ROOT, 'data'))),
     // Narrated videos: the video/ folder next to tts-studio, and the command that builds one
     // (default: python3 video/build.py). TTS_VIDEO_BUILD names another executable.

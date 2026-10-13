@@ -2,7 +2,10 @@
 import unittest
 from types import SimpleNamespace
 
-from kokoro_engine import LANGUAGES, LINE_PAUSE, PARAGRAPH_PAUSE, SAMPLE_RATE, clean, speak_segments, split_segments
+from kokoro_engine import (
+    LANGUAGES, LINE_PAUSE, MAX_CPU_THREADS, PARAGRAPH_PAUSE, SAMPLE_RATE, clean, cpu_threads, speak_segments,
+    split_segments,
+)
 
 SENTENCE = "This is a perfectly ordinary sentence about nothing in particular."
 
@@ -171,3 +174,14 @@ class TimingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CpuThreadsTest(unittest.TestCase):
+    def test_linux_cpu_speaks_on_half_the_cpus_up_to_the_cap(self):
+        for cpus, want in ((16, 8), (8, 4), (2, 1), (1, 1), (64, MAX_CPU_THREADS)):
+            self.assertEqual(cpu_threads("cpu", platform="linux", env={}, cpus=cpus), want, cpus)
+
+    def test_macos_the_gpu_and_a_chosen_count_are_left_alone(self):
+        self.assertIsNone(cpu_threads("cpu", platform="darwin", env={}, cpus=16))
+        self.assertIsNone(cpu_threads("mps", platform="linux", env={}, cpus=16))
+        self.assertIsNone(cpu_threads("cpu", platform="linux", env={"OMP_NUM_THREADS": "12"}, cpus=16))

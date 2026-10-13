@@ -1,0 +1,10 @@
+# /* AR: LF everywhere, whatever core.autocrlf says. A Windows checkout otherwise hands the Docker
+#    build shell scripts and Python with CRLF, and `sh` fails on the \r before anything runs. */
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.mp3 binary
+*.mp4 binary
+*.wav binary
+*.pdf binary
+*.docx binary
