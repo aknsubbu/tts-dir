@@ -38,7 +38,7 @@ Most requests are of this kind: derive a gradient, prove an identity, show where
 
 If the full derivation does not fit in the length asked for, do the central steps properly and state the routine ones, saying that you are doing so. Do not compress every step to fit them all in.
 
-Stay inside the length you are given. The voice speaks about 165 words a minute once pauses are counted, so the word budget in the request is the real limit.
+Stay inside the length you are given. The voice speaks about 150 words a minute once pauses are counted, so the word budget in the request is the real limit.
 
 # script.txt
 

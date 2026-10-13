@@ -58,8 +58,15 @@ SAMPLES = {
     "z": "你好。这就是我朗读时的声音。",
 }
 
-PARAGRAPH_PAUSE = 0.45
+# /* AR: Pauses added to Kokoro's own, in seconds at speed 1 (they shorten as the speed rises). Kokoro puts almost no gap
+#    between sentences it is given together, which sounds rushed, so each sentence is spoken on its
+#    own and followed by a pause for how it ended. A line with no full stop (a heading or list
+#    item) and a paragraph break pause longer, and a narration block ends on a breath of silence
+#    so that one section does not run into the next. */
+SENTENCE_PAUSES = {".": 0.25, "!": 0.25, "?": 0.3, "…": 0.35, "。": 0.25, "！": 0.25, "？": 0.3}
 LINE_PAUSE = 0.2
+PARAGRAPH_PAUSE = 0.7
+BLOCK_TAIL = 0.5
 FORMATS = {".mp3": "MP3", ".wav": "WAV", ".flac": "FLAC", ".ogg": "OGG"}
 # AR: Most CPU threads speech is given on Linux; see cpu_threads().
 MAX_CPU_THREADS = 8
@@ -100,6 +107,33 @@ def clean(text, strip_markdown=True):
 
 
 _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+|(?<=[。！？])")
+# AR: A full stop after these does not end a sentence: "e.g. the slope", "Fig. 2", "Dr. Lee".
+_ABBREVIATIONS = {"e.g.", "i.e.", "vs.", "cf.", "dr.", "mr.", "mrs.", "ms.", "prof.", "fig.", "eq.", "eqs.",
+                  "no.", "approx.", "sec.", "st.", "al."}
+
+
+def _sentences(line):
+    """Split a line into sentences, keeping together what only looks like a break."""
+    out = []
+    for piece in _SENTENCE_END.split(line):
+        piece = piece.strip() if piece else ""
+        if not piece:
+            continue
+        if out:
+            last = out[-1].split()[-1].lower()
+            joins = last in _ABBREVIATIONS or re.fullmatch(r"[A-Za-z]\.", last) or last == "etc." and piece[:1].islower()
+            if joins or piece[:1].islower():
+                out[-1] = f"{out[-1]} {piece}"
+                continue
+        out.append(piece)
+    return out
+
+
+def _pause_after(sentence):
+    """How long to rest after a sentence, from the mark that ended it."""
+    return SENTENCE_PAUSES.get(sentence.rstrip("\"')”’）)]")[-1:], LINE_PAUSE)
+
+
 _LINE_END = tuple(".!?…:;。！？\"')”’")
 
 
@@ -134,24 +168,17 @@ def _lines(paragraph):
 def split_segments(text, limit):
     """Cut text into [(segment, pause_after_seconds)], each at most `limit` characters.
 
-    Prefers paragraph breaks, then line breaks, then sentence ends, then spaces.
+    Each sentence is its own segment, followed by a pause for how it ended; a paragraph break
+    pauses longer. A sentence longer than `limit` is cut at spaces, with no pause inside it.
     """
     segments = []
     for paragraph in re.split(r"\n\s*\n", text):
         for line in _lines(paragraph):
-            cur = ""
-            for sentence in _SENTENCE_END.split(line):
-                sentence = sentence.strip() if sentence else ""
-                if not sentence:
-                    continue
-                for piece in [sentence] if len(sentence) <= limit else _hard_split(sentence, limit):
-                    if cur and len(cur) + 1 + len(piece) > limit:
-                        segments.append([cur, 0.0])
-                        cur = piece
-                    else:
-                        cur = f"{cur} {piece}" if cur else piece
-            if cur:
-                segments.append([cur, LINE_PAUSE])
+            for sentence in _sentences(line):
+                pieces = [sentence] if len(sentence) <= limit else _hard_split(sentence, limit)
+                for piece in pieces[:-1]:
+                    segments.append([piece, 0.0])
+                segments.append([pieces[-1], _pause_after(sentence)])
         if segments:
             segments[-1][1] = PARAGRAPH_PAUSE
     if segments:
@@ -252,7 +279,7 @@ def speak_segments(pipeline, segments, voice, speed, write, pad, on_progress=Non
             write(audio)
             samples += len(audio)
         if pause and samples:
-            silence = int(pause * SAMPLE_RATE)
+            silence = int(pause / max(speed, 0.5) * SAMPLE_RATE)
             pad(silence)
             samples += silence
         if on_progress:
@@ -319,8 +346,8 @@ class Engine:
             self.pipelines[lang] = KPipeline(lang_code=lang, repo_id=REPO_ID, model=self.model)
         return self.pipelines[lang]
 
-    def synthesize(self, text, out, voice=DEFAULT_VOICE, speed=1.0, fmt=None, on_progress=None):
-        """Speak `text` into the file `out`. Returns duration, size, segment count and word timings."""
+    def synthesize(self, text, out, voice=DEFAULT_VOICE, speed=1.0, fmt=None, on_progress=None, tail=0.0):
+        """Speak `text` into the file `out`, then `tail` seconds of silence. Returns duration, size, segment count and word timings."""
         import numpy as np
         import soundfile as sf
 
@@ -348,6 +375,9 @@ class Engine:
                 pad=lambda n: f.write(np.zeros(n, dtype="float32")),
                 on_progress=on_progress,
             )
+            if tail and samples:
+                f.write(np.zeros(int(tail * SAMPLE_RATE), dtype="float32"))
+                samples += int(tail * SAMPLE_RATE)
         if not samples:
             out.unlink(missing_ok=True)
             raise EngineError("Kokoro produced no audio for this text.")

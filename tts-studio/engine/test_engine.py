@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 
 from kokoro_engine import (
-    LANGUAGES, LINE_PAUSE, MAX_CPU_THREADS, PARAGRAPH_PAUSE, SAMPLE_RATE, clean, cpu_threads, speak_segments,
+    LANGUAGES, LINE_PAUSE, SENTENCE_PAUSES, MAX_CPU_THREADS, PARAGRAPH_PAUSE, SAMPLE_RATE, clean, cpu_threads, speak_segments,
     split_segments,
 )
 
@@ -47,6 +47,25 @@ class SplitTest(unittest.TestCase):
         segments = split_segments("First paragraph.\n\nitem one\nitem two\n\nLast.", 400)
         self.assertEqual([s for s, _ in segments], ["First paragraph.", "item one", "item two", "Last."])
         self.assertEqual([p for _, p in segments], [PARAGRAPH_PAUSE, LINE_PAUSE, PARAGRAPH_PAUSE, 0.0])
+
+    def test_each_sentence_is_a_segment_with_a_pause_for_how_it_ended(self):
+        segments = split_segments("It rises. Does it fall? No! Wait\u2026 Yes.", 400)
+        self.assertEqual([s for s, _ in segments], ["It rises.", "Does it fall?", "No!", "Wait\u2026", "Yes."])
+        self.assertEqual([p for _, p in segments][:-1], [SENTENCE_PAUSES[c] for c in ".?!\u2026"])
+        self.assertGreater(PARAGRAPH_PAUSE, max(SENTENCE_PAUSES.values()))
+
+    def test_abbreviations_and_lowercase_starts_do_not_end_a_sentence(self):
+        text = "The slope, e.g. rise over run, is shown in Fig. 2 by Dr. Lee. Then x = 3. and so on. Done."
+        self.assertEqual([s for s, _ in split_segments(text, 400)], [
+            "The slope, e.g. rise over run, is shown in Fig. 2 by Dr. Lee.",
+            "Then x = 3. and so on.",
+            "Done.",
+        ])
+
+    def test_a_long_sentence_is_cut_with_no_pause_inside_it(self):
+        segments = split_segments(" ".join(f"w{i}" for i in range(300)) + ". Next.", 220)
+        self.assertTrue(all(p == 0.0 for _, p in segments[:-2]))
+        self.assertEqual(segments[-2][1], SENTENCE_PAUSES["."])
 
     def test_hard_wrapped_prose_is_rejoined(self):
         wrapped = (
@@ -102,11 +121,11 @@ class FakePipeline:
         return iter(self.per_segment.pop(0))
 
 
-def run(per_segment, segments):
+def run(per_segment, segments, speed=1.0):
     written, padded = [], []
     pipe = FakePipeline(per_segment)
     samples, truncated, words = speak_segments(
-        pipe, segments, "af_heart", 1.0, write=lambda a: written.append(len(a)), pad=padded.append
+        pipe, segments, "af_heart", speed, write=lambda a: written.append(len(a)), pad=padded.append
     )
     return samples, truncated, words, written, padded, pipe
 
@@ -153,6 +172,10 @@ class TimingTest(unittest.TestCase):
         self.assertEqual(words, [])
         self.assertEqual(samples, int(1.5 * SAMPLE_RATE) + int(LINE_PAUSE * SAMPLE_RATE))
         self.assertEqual(padded, [int(LINE_PAUSE * SAMPLE_RATE)])
+
+    def test_pauses_shorten_as_the_speed_rises(self):
+        samples, _, _, _, padded, _ = run([[result(1.0, [])], [result(1.0, [])]], [("One.", 0.4), ("Two.", 0.0)], speed=2.0)
+        self.assertEqual(padded, [int(0.2 * SAMPLE_RATE)])
 
     def test_no_pause_before_any_audio_and_progress_per_segment(self):
         progress = []
