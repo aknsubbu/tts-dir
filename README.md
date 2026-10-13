@@ -232,9 +232,9 @@ What a lesson sends, by writer. Settings → Lesson writer says the same for the
 | Path | Contents | In git |
 | --- | --- | --- |
 | `tts-studio/data/` | The library: SQLite database (with Settings), MP3s, finished videos | no |
-| `video/projects/<name>/` | One folder per video: script, scenes, `project.json`, and `build/` (renders, the scene cache, the storyboard) | everything except `build/` and `versions/` |
+| `video/projects/<name>/` | One folder per video: script, scenes, `project.json`, and `build/` (renders, the scene cache, the storyboard) | no, except the `demo` project |
 | `video/projects/<name>/versions/` | Each version of a lesson: its script, scenes and storyboard as they were | no |
-| `video/projects/<name>/notes/`, `brief.json` | Your notes and attached files for a lesson | no, for new lessons; the example lesson's `brief.json` is tracked |
+| `video/projects/<name>/notes/`, `brief.json` | Your notes and attached files for a lesson | no |
 | `.venv/` | The Python environment (ManimGL and Kokoro), from `pyproject.toml` and `uv.lock` | no |
 | `tts-studio/.env` | Optional settings; see [tts-studio/.env.example](tts-studio/.env.example). Values set here win over the Settings page | no |
 | `~/.cache/huggingface/` | Kokoro's model and voices, downloaded by `./install.sh` | outside the repo |

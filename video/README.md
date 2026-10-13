@@ -123,7 +123,7 @@ projects/demo/
   build/         everything generated (git ignores it)
 ```
 
-A project the dashboard's lesson writer made also has `brief.json` (the topic and notes it was written from), `notes/` (attached photos and PDFs), `author.json` (written once the scenes passed their check, with what Claude cost) and `versions/` (each version's script, scenes and storyboard as they were). Git ignores `brief.json` and `notes/` for new lessons, because they hold your own notes. The example lesson's `brief.json` was committed before that rule and is still tracked.
+A project the dashboard's lesson writer made also has `brief.json` (the topic and notes it was written from), `notes/` (attached photos and PDFs), `author.json` (written once the scenes passed their check, with what Claude cost) and `versions/` (each version's script, scenes and storyboard as they were). Git ignores every project under `projects/` except `demo`, so your lessons and the notes in them are never committed.
 
 ```json
 { "voice": "af_heart", "speed": 1.0, "script": "script.txt", "scenes_file": "scenes.py", "scenes": ["Slope", "SyncCheck"] }

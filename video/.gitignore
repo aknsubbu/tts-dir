@@ -6,3 +6,7 @@ latex_cache/
 notes/
 brief.json
 versions/
+
+# Lessons are yours, not the repo's: only the demo project is tracked
+projects/*
+!projects/demo/
