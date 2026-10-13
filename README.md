@@ -1,123 +1,38 @@
 # Narrated Proofs
 
-Type a topic, drop in your notes, and get a narrated maths explainer in the style of [3Blue1Brown](https://www.3blue1brown.com/): equations that build up line by line, shapes that move, and a voice that explains each step as it appears on screen.
+Type a topic, add your notes, and get a narrated maths explainer in the style of [3Blue1Brown](https://www.3blue1brown.com/): equations that build line by line, shapes that move, and a voice that explains each step as it appears.
 
-Claude writes the lesson, or another model you choose, on this Mac or through an API. It is rendered with [ManimGL](https://github.com/3b1b/manim), the animation library Grant Sanderson wrote for the 3Blue1Brown videos. The voice is [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M), an open model that runs on your Mac. This project is not affiliated with 3Blue1Brown.
+Claude writes the lesson (or another model you choose). [ManimGL](https://github.com/3b1b/manim) renders it, and [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M), an open voice model, speaks it on your own machine. Not affiliated with 3Blue1Brown.
 
-Built for and tested on macOS with Apple Silicon. To install it, start at [Before you start](#before-you-start). On Windows or Linux, or to skip the setup on a Mac, [run it in Docker](#run-it-in-docker) instead.
+Built for macOS on Apple Silicon. On Windows or Linux, [use Docker](#docker).
 
-## What it does
+## How it works
 
-1. **You give it a topic**, what you want to understand, and optionally your notes: typed text, photos of handwritten pages, screenshots, PDFs or Word files.
-2. **Claude writes the lesson** through [Claude Code](https://claude.com/claude-code): a narration script and the ManimGL scenes that go with it, using your notation and your examples. Settings can hand any step to another writer instead: the Claude API, OpenAI, Groq, a model on this Mac (Ollama, LM Studio, llama.cpp, MLX), or any OpenAI-compatible service, with your own keys.
-3. **The scenes are checked.** Every scene is run once without drawing it. Common mistakes are fixed on the spot without asking Claude; if a scene still fails, or text overlaps, or an animation runs past its word, Claude is shown the problem and rewrites.
-4. **You can look before it renders.** The check leaves a storyboard: a still of the screen at every marked word and at the end of every block, with its narration. Play it as an animatic, then approve it, or let lessons render straight away. Or approve the narration before any animation is written.
-5. **Long lessons come in chapters.** From 10 minutes up to 30, the writer outlines the chapters and the notation they share first; you can change the outline before each chapter is written and checked on its own, and the video is joined with chapter markers and title cards.
-6. **The narration is spoken locally** by Kokoro, which also reports when each word starts.
-7. **The animations are timed to the words.** A mark in the script, such as `<mark name="slope"/>`, makes an animation land on the exact frame that word is spoken.
-8. **You get an MP4** with captions and a clickable transcript, in a searchable library. Each lesson shows who wrote it and what it cost. Ask for a change ("slow down the second scene") and only that is rewritten; or edit the script and scenes in the page. Each change is a new version you can compare and restore, and a rebuild renders only the scenes that changed.
-9. **Or ask Claude for one.** An MCP connector lets Claude Code and the Claude desktop app start a lesson from a conversation, follow its stages and hand you the video.
+1. **You give it a topic**, and optionally notes: text, photos, screenshots, PDFs or Word files.
+2. **A model writes the lesson**: a narration script and the ManimGL scenes for it. Claude Code is the default. Settings can switch any step to the Claude API, OpenAI, Groq, or a local model (Ollama, LM Studio, llama.cpp, MLX).
+3. **Every scene is checked** without drawing it. Common mistakes are fixed automatically; anything else goes back to the writer.
+4. **You review it first**, if you want: a storyboard with a still for every marked word, or just the narration.
+5. **Kokoro speaks it**, and each animation is timed to its word with a mark such as `<mark name="slope"/>`.
+6. **You get an MP4** with captions and a transcript, kept in a searchable library. Ask for a change ("slow down the second scene") and only that part is rewritten.
 
-A two-minute video takes roughly five to ten minutes, most of it Claude writing; a long one, about that per chapter plus the render. The one example in this repo, on the gradient of logistic regression, cost about $0.70 of Claude usage.
-
-The dashboard also has an **Audio** tab: drop a `.txt` or `.md` script and get an MP3 in the same voice, with no Claude and no network.
-
-## How the narration stays in sync
-
-Each block of narration is spoken first, so its length and the start time of every word are known before anything is drawn. A scene then asks for durations instead of guessing them:
-
-```python
-class Intro(VoiceoverScene, Scene):
-    def construct(self):
-        with self.voiceover("intro") as vo:
-            self.play(Write(title), run_time=vo.until("slope"))      # ends as "slope" is spoken
-            self.play(ShowCreation(line), run_time=vo.until("rise"))
-            self.play(GrowArrow(arrow), run_time=vo.remaining())     # ends with the sentence
-```
-
-The demo project measures this in the finished video: the change on screen lands within one frame of the word.
+Lessons of 10 to 30 minutes are written in chapters. A two-minute video takes about five to ten minutes. The dashboard also has an **Audio** tab that turns a `.txt` or `.md` into an MP3, with no model and no network. Claude Code and the Claude desktop app can start lessons too, through an [MCP connector](#connect-claude).
 
 ## What is here
 
 | Path | What it is |
 | --- | --- |
-| [tts-studio/](tts-studio/) | The dashboard you use (Node, React, SQLite), the lesson writer, the MCP connector, and the Kokoro voice engine. [README](tts-studio/README.md) |
-| [video/](video/) | The video toolchain (Python): speak a script, check and render ManimGL scenes, join them, write captions. Usable on its own for videos you write by hand. [README](video/README.md) |
-| [Dockerfile](Dockerfile), [docker-compose.yml](docker-compose.yml) | Everything above in one Linux image, for Windows, Linux or a Mac with no setup. See [Run it in Docker](#run-it-in-docker) |
-| [install.sh](install.sh), [pyproject.toml](pyproject.toml) | The installer, and the one Python environment it creates (ManimGL and Kokoro, locked in `uv.lock`) |
-| [tts.py](tts.py) | Optional command-line launcher for the voice engine: `python3 tts.py script.txt` writes `script.mp3` |
+| [tts-studio/](tts-studio/README.md) | The dashboard (Node, React, SQLite), the lesson writer, the MCP connector and the voice engine |
+| [video/](video/README.md) | The video toolchain (Python): narrate, check, render, join, caption. Works on its own |
+| [install.sh](install.sh), [pyproject.toml](pyproject.toml) | The installer and the one Python environment it makes (ManimGL and Kokoro) |
+| [Dockerfile](Dockerfile), [docker-compose.yml](docker-compose.yml) | The same thing as a Linux image |
+| [tts.py](tts.py) | `python3 tts.py script.txt` writes `script.mp3` |
 
-```
-topic + notes ──> tts-studio/author ──> claude -p, or the    writes script.txt and scenes.py
-  (page or MCP)                          writer in Settings
-                        │
-                        └──> video/check.py                  runs every scene once; errors go back to Claude
-                                  │
-tts-studio/server ──> video/build.py ──> video/narrate.py    Kokoro speaks, with word timings
-                                    ├──> manimgl             renders each scene, in a sandbox
-                                    └──> ffmpeg              joins scenes, adds captions and a poster
-```
+## Install (macOS)
 
-## Run it in Docker
+You need an Apple Silicon Mac, administrator access (Homebrew and LaTeX ask for a password), about 3 GB of disk, and a connection for the first run. Setup takes 20 to 40 minutes, mostly downloads.
 
-One image holds everything the steps below install by hand: the dashboard, Kokoro and its voice model, ManimGL, TeX, ffmpeg and Claude Code. This is the way to run it on Windows, and it works the same on Linux and on a Mac.
-
-You need [Docker Desktop](https://www.docker.com/products/docker-desktop/) (on Windows, with its default WSL 2 backend), git, and about 10 GB of free disk space.
-
-```bash
-git clone https://github.com/aknsubbu/tts-dir.git
-cd tts-dir
-docker compose up --build
-```
-
-The first build downloads and installs everything once and takes 15 to 30 minutes; later starts take seconds. Open <http://localhost:8787> when the log says **Kokoro ready**.
-
-**A lesson writer.** Claude Code is in the image. Sign it in once, and the sign-in is kept in a volume:
-
-```bash
-docker compose exec app claude
-```
-
-Or put `ANTHROPIC_API_KEY`, or a `CLAUDE_CODE_OAUTH_TOKEN` made with `claude setup-token`, in `tts-studio/.env`. Any other writer is set up in **Settings → Lesson writer** as on a Mac. Keys saved there are kept in the library's volume, since there is no Keychain. Ollama or LM Studio running on your computer is at `http://host.docker.internal:11434` (or `:1234/v1`) from inside the container.
-
-**Everyday use.**
-
-| | |
-| --- | --- |
-| Start in the background, and follow the log | `docker compose up -d`, then `docker compose logs -f` |
-| Stop | `docker compose down` (your lessons and library stay) |
-| Update | `git pull`, then `docker compose up --build` |
-| Check or render a lesson from the terminal | `docker compose exec app python3 ../video/check.py <project>` (or `build.py`) |
-| Connect Claude Code on your computer | `claude mcp add --transport http narrated-proofs http://localhost:8787/mcp` |
-| Use another port | `PORT=8788 docker compose up`; in PowerShell, `$env:PORT=8788; docker compose up` |
-| Remove it, library included | `docker compose down -v`, then `docker image rm narrated-proofs` |
-
-**Where your files go.** Lessons are in `video/projects/` in this folder, as on a Mac, so you can open them in your own editor. The library (database, MP3s and videos), the render cache and Claude Code's sign-in are Docker volumes. The library is a volume rather than a folder because SQLite's write-ahead log is not safe on a folder shared from Windows. To back it up: `docker compose cp app:/app/tts-studio/data ./data-backup`.
-
-**How it differs from a Mac.**
-
-- **Rendering uses the CPU.** There is no GPU in the container, so ManimGL draws through lavapipe, Mesa's Vulkan for the CPU. On a 16-thread PC the 18-second demo is spoken and rendered at 480p in about 35 seconds, the 2-minute example lesson in about 4 minutes, and the demo's scenes at 1080p in under 30 seconds. Choose **480p, quickest** while you work on a lesson.
-- **The voice uses the CPU** as well, at about twice real time. It speaks on half the CPUs, at most 8, which in Docker is several times quicker than all of them; set `OMP_NUM_THREADS` in `tts-studio/.env` to choose.
-- **No macOS sandbox.** Scenes run inside the container, which holds the rest of your computer out, but not inside `sandbox-exec`: within the container they could reach the network, Claude Code's sign-in and saved keys. See [the sandbox](video/README.md#the-sandbox).
-- **Notes** are converted with libvips (photos, HEIC included), pandoc (Word, RTF, OpenDocument) and catdoc (old `.doc`) instead of `sips` and `textutil`.
-- **Settings → Connect Claude** also lists a connector that starts the dashboard itself. Its path is inside the container, so from your computer use the `/mcp` address above.
-
-## Before you start
-
-| You need | Why |
-| --- | --- |
-| A Mac with Apple Silicon (M1 or later) | Kokoro speaks on its GPU, and ManimGL draws through Metal. Intel Macs with Metal may work but are untested. A virtual machine without GPU access cannot render. On Windows or Linux, [run it in Docker](#run-it-in-docker) instead |
-| Administrator access | Homebrew and BasicTeX ask for your password |
-| About 3 GB of free disk space | PyTorch, the voice model (about 350 MB), ManimGL and its packages, LaTeX, and the dashboard's packages. Videos and lessons need more as you make them |
-| An internet connection, during setup | Everything is downloaded once. Afterwards speech and rendering work offline; writing a lesson needs the writer you choose |
-| A lesson writer | By default Claude Code, signed in with a Claude Pro or Max plan or an Anthropic API account. Or a key for the Claude API, OpenAI or Groq, or a model running on this Mac with Ollama or LM Studio. The Audio tab needs none |
-
-Setting everything up takes roughly 20 to 40 minutes, most of it downloads, and is one command.
-
-## Install
-
-1. Install Apple's command line tools (`xcode-select --install`) and [Homebrew](https://brew.sh) if you do not have them. Homebrew's installer ends by printing two commands under **Next steps**; run them, then open a new Terminal window.
-2. Get the code and run the installer:
+1. Install Apple's command line tools (`xcode-select --install`) and [Homebrew](https://brew.sh). Run the two commands Homebrew prints under **Next steps**, then open a new Terminal.
+2. Run the installer. It is safe to run again if it stops partway:
 
    ```bash
    git clone https://github.com/aknsubbu/tts-dir.git
@@ -125,158 +40,146 @@ Setting everything up takes roughly 20 to 40 minutes, most of it downloads, and 
    ./install.sh
    ```
 
-   It installs Node, [uv](https://docs.astral.sh/uv/), ffmpeg and BasicTeX with Homebrew (it asks for your password for LaTeX), creates one Python environment in `.venv` with ManimGL and Kokoro, installs and builds the dashboard, downloads the voice model (about 350 MB) and speaks a test sentence, and renders a test equation. Anything already installed is skipped, so if it stops partway, run it again. If you have [MacTeX](https://www.tug.org/mactex/), it is used as it is. Japanese voices need a further 1 GB: `./install.sh --japanese`.
+   It installs Node, uv, ffmpeg and BasicTeX (an existing MacTeX is used as is), creates `.venv`, builds the dashboard, downloads the voice model (about 350 MB) and renders a test equation. Japanese voices need another 1 GB: `./install.sh --japanese`.
+3. Install a lesson writer. For Claude Code: `npm install -g @anthropic-ai/claude-code`, then run `claude` once to sign in. Or pick another writer later in Settings.
 
-3. Install a lesson writer. **Claude Code** is the default: `npm install -g @anthropic-ai/claude-code`, then run `claude` once and sign in. Lessons use your Claude plan's limits, or your API credits if you signed in with an Anthropic Console account. Check: `claude -p "Reply with the word ready"` prints `ready`. **Or** skip it and choose another writer in the dashboard: see [Writing lessons without Claude Code](#writing-lessons-without-claude-code).
-
-Then start it:
+Start it:
 
 ```bash
 cd tts-studio
-npm start          # serves the dashboard on http://localhost:8787
+npm start          # http://localhost:8787, and Ctrl-C to stop
 ```
 
-Open <http://localhost:8787>. Within a few seconds the header says **Kokoro ready**. Leave the Terminal window open while you use the dashboard; **Ctrl-C** stops it.
+The header says **Kokoro ready** after a few seconds. To check rendering and the sandbox, run `python3 build.py demo --quality low` and `python3 sandbox_probe.py` in `video/`.
 
-Optionally, check the whole pipeline and the sandbox from `video/`: `python3 build.py demo --quality low` renders the narrated demo to `projects/demo/build/demo.mp4`, and `python3 sandbox_probe.py` (a few minutes) renders inside the scene sandbox and should say **The strict rules stopped nothing these renders needed**. If it lists rules instead, see [When a project fails only inside the sandbox](video/README.md#when-a-project-fails-only-inside-the-sandbox).
+## Your first lesson
 
-## Make your first lesson
+1. On **Lessons**, type a topic, such as "Why the derivative of x² is 2x".
+2. Optionally drop in notes, a photo or a PDF.
+3. Choose **About 1 minute**, **480p, quickest**, and **Show me the storyboard**.
+4. Press **Make the video**. Writing takes a few minutes.
+5. When the card says **Storyboard ready**, open it, play the animatic, and press **Approve and render**.
 
-1. On the **Lessons** tab, under **Explain it to me**, type a topic, such as "Why the derivative of x² is 2x", and what you want to understand.
-2. Optionally add notes: type them, drop a photo or PDF anywhere on the page, or paste a screenshot.
-3. Choose **About 1 minute**, quality **480p, quickest**, and under **Before it renders** choose **Show me the storyboard**. The line above the button says who will write it and about what it will cost.
-4. Press **Make the video**. The card in the library shows each stage: writing, checking, perhaps fixing. Writing usually takes a few minutes.
-5. When the card says **Storyboard ready**, open it. The **Storyboard** tab shows a still of every step with its narration; **Play as animatic** plays the narration with them. Press **Approve and render**.
-6. The video plays on the **Watch** tab, with captions and a transcript beside it. Below it is what writing it took: who wrote it, the cost and the fixes.
-
-From there, type into **Ask for a change** at the bottom ("slow down the second scene"), or edit the script and scenes in the **Edit** tab. Every lesson tab is described in [tts-studio/README.md](tts-studio/README.md#explain-it-to-me-a-video-from-a-topic).
+Then type into **Ask for a change** or edit the script and scenes in the **Edit** tab. Every tab is described in the [dashboard README](tts-studio/README.md#lessons-a-video-from-a-topic).
 
 ## Everyday use
 
-```bash
-cd tts-dir/tts-studio
-npm start
-```
+- **Update:** `git pull && ./install.sh`. The library upgrades itself on start; copy `tts-studio/data/` first if you want a way back.
+- **Lessons are folders** in `video/projects/<topic>-<id>/`. Edit `script.txt` or `scenes.py` and run `python3 video/check.py <project>` or `python3 video/build.py <project>`, or use the Edit tab.
+- **Settings** (the gear) choose the writer, defaults and spending caps. Optional environment settings go in `tts-studio/.env`; see [.env.example](tts-studio/.env.example).
 
-- **The dashboard runs while its Terminal window is open.** A lesson or build that is running when it stops is marked failed; press **Retry** on its card and it carries on from the files already written.
-- **Lessons are folders.** Each one is a normal project in `video/projects/<topic>-<id>/`. Edit `script.txt` or `scenes.py` in your own editor if you like, then check and render it from the dashboard's Edit tab, or from Terminal:
+## Other lesson writers
 
-  ```bash
-  python3 video/check.py <project>     # check it without rendering
-  python3 video/build.py <project>     # render it again
-  ```
+In **Settings → Lesson writer**:
 
-- **Plain text to speech.** The **Audio** tab turns scripts into MP3s; `python3 tts.py script.md` does the same from Terminal.
-- **Settings**, the gear in the header, chooses the writer, the defaults for new lessons, spending caps, and what Claude may change through the connector.
-- **Optional settings** go in `tts-studio/.env`; copy [tts-studio/.env.example](tts-studio/.env.example), which lists them all. A value there wins over the Settings page.
+- **An API key** (Claude, OpenAI, Groq): paste it, press **Save key**, **Test**, then choose it under **Who does each step**. For OpenAI and Groq, add their prices under **Costs → Rates**, or their cost counts as unknown.
+- **A local model**: install [Ollama](https://ollama.com) and pull a model, or start LM Studio's server. Your notes then never leave your Mac.
+- **A mix**: choose **Per step**, for example Claude for writing and a local model for fixes.
 
-## Writing lessons without Claude Code
+ManimGL is niche and most models learned the other Manim, so non-Claude writers fail the check more often. `npm run bakeoff` compares writers first. See [the dashboard README](tts-studio/README.md#settings-who-writes-your-lessons).
 
-Open **Settings → Lesson writer** in the dashboard.
+## Connect Claude
 
-- **An API key** (Claude API, OpenAI or Groq): open the provider, paste the key, press **Save key**, then **Test** with the model you want. Under **Who does each step**, choose that provider and model. Keys are kept in the macOS Keychain. For OpenAI and Groq, add their prices under **Costs → Rates**, or their costs show as unknown and the spending caps cannot count them.
-- **A model on this Mac, for free**: install [Ollama](https://ollama.com) (`brew install ollama`, then `ollama serve` in its own Terminal window, or open the Ollama app) and pull a coding model with `ollama pull <model>`. Or start [LM Studio](https://lmstudio.ai)'s server. In Settings, **Test** **This Mac: Ollama** (or **This Mac: OpenAI-compatible** for LM Studio, llama.cpp, MLX or vLLM), and choose it under **Who does each step**. Your notes then never leave this Mac.
-- **A mix**: choose **Per step** to have, say, Claude write the lesson and a local model fix the scenes, handing back to Claude when a fix keeps failing.
-
-ManimGL is a niche library and most models learned the other Manim, so other writers fail the check more often than Claude. `npm run bakeoff` compares writers on the same lessons before you switch. The details are in [tts-studio/README.md](tts-studio/README.md#who-writes-your-lessons-settings).
-
-## Connect Claude (optional)
-
-With the dashboard running, Claude Code can make lessons from a conversation ("make a 3-minute lesson on what we just derived"):
+With the dashboard running:
 
 ```bash
 claude mcp add --transport http narrated-proofs http://localhost:8787/mcp
 ```
 
-**Settings → Connect Claude** shows this command with your port, a version that starts the connector itself, and the entry for the Claude desktop app's `claude_desktop_config.json`. `npm run mcp:pack` in `tts-studio` makes a desktop extension, `tts-studio/extension/narrated-proofs.mcpb`, to open instead. The tools are listed in [tts-studio/README.md](tts-studio/README.md#make-lessons-from-claude-the-mcp-connector).
+**Settings → Connect Claude** shows this with your port, plus the entry for the desktop app. The tools are listed in the [dashboard README](tts-studio/README.md#make-lessons-from-claude-the-mcp-connector).
 
-## Updating
+## Docker
+
+One image holds the dashboard, Kokoro, ManimGL, TeX, ffmpeg and Claude Code. You need Docker Desktop (on Windows, with WSL 2), git and about 8 GB of disk.
 
 ```bash
+git clone https://github.com/aknsubbu/tts-dir.git
 cd tts-dir
-git pull
-./install.sh       # quick when nothing changed; rebuilds the page
+docker compose up --build
 ```
 
-If you installed before `install.sh` existed, it tells you to delete the old `tts-studio/.venv` and `video/.venv`, which are no longer used.
+The first build takes 15 to 30 minutes. Open <http://localhost:8787> when the log says **Kokoro ready**. Sign Claude Code in once with `docker compose exec app claude`, or put `ANTHROPIC_API_KEY` in `tts-studio/.env`.
 
-The library's database upgrades itself when the dashboard starts. Copy `tts-studio/data/` first if you want a way back. Your lessons in `video/projects/` show up as untracked files in `git status`; they are yours, and `git pull` leaves them alone.
+| | |
+| --- | --- |
+| Run in the background | `docker compose up -d`, then `docker compose logs -f` |
+| Stop (lessons and library stay) | `docker compose down` |
+| Update | `git pull`, then `docker compose up --build` |
+| Check or render from a terminal | `docker compose exec app python3 ../video/check.py <project>` |
+| Another port | `PORT=8788 docker compose up` |
+| Remove everything | `docker compose down -v`, then `docker image rm narrated-proofs` |
 
-## Uninstalling
+Lessons are in `video/projects/` as on a Mac. The library, the render cache and Claude's sign-in are Docker volumes; back up the library with `docker compose cp app:/app/tts-studio/data ./data-backup`.
 
-1. In **Settings → Lesson writer**, remove any keys you saved. They are in the Keychain under **Narrated Proofs**, so Keychain Access also finds them.
-2. If you connected Claude Code: `claude mcp remove narrated-proofs`. For the desktop app, remove the `narrated-proofs` entry from its config or the extension from its settings.
-3. Delete the `tts-dir` folder. That removes the library (`tts-studio/data/`), your lessons (`video/projects/`) and the Python environment, so copy anything you want to keep first.
-4. Delete the caches outside it: the voice model in `~/.cache/huggingface/hub/models--hexgrad--Kokoro-82M` (other programs may share `~/.cache/huggingface`, so delete only that folder) and the scene cache in `~/Library/Caches/narrated-proofs-scenes`.
-5. Optionally, `brew uninstall --cask basictex` and `brew uninstall node uv ffmpeg`, if nothing else of yours uses them.
+Differences from a Mac:
 
-## What leaves your machine
+- **CPU only.** Without a GPU, ManimGL draws through lavapipe. The 2-minute example takes about 4 minutes on a 16-thread PC; choose **480p** while you work. The voice also runs on the CPU, at about twice real time.
+- **No sandbox.** Scenes run inside the container but not under `sandbox-exec`, so they could use the network and read Claude's sign-in and saved keys. Don't render a project you don't trust. See [the sandbox](video/README.md#the-sandbox).
+- **Notes** are converted with libvips, pandoc and catdoc instead of `sips` and `textutil`.
+- **Ollama or LM Studio** on your computer is at `http://host.docker.internal:11434` (or `:1234/v1`).
 
-What a lesson sends, by writer. Settings → Lesson writer says the same for the writers you have chosen, step by step.
+## Privacy
 
 | Writer | Your topic, notes and files go to |
 | --- | --- |
-| Claude Code (the default), Claude API | Anthropic |
-| OpenAI | OpenAI |
-| Groq | Groq |
-| This Mac: Ollama, LM Studio, llama.cpp, MLX, vLLM | Nobody: they stay on this Mac |
-| Other | The service at the address you gave |
+| Claude Code, Claude API | Anthropic |
+| OpenAI, Groq | OpenAI, Groq |
+| A local model | Nobody |
+| Other | The address you gave |
 
-- **Stays local:** speech, rendering and the library. The server listens on `127.0.0.1` only and refuses requests from pages on other sites; the MCP connector's `/mcp` address is behind the same checks. Do not put it behind a tunnel or a proxy: it has no login.
-- **Keys** are kept in the macOS Keychain, are never shown again in the page, and never reach the scenes or `claude -p`.
-- **The code the writer produces runs in a sandbox:** no network; no writing outside the lesson's `build/` folder and a cache kept for scenes; reading only the lesson and what rendering needs; starting no program but Python, ffmpeg and TeX; no Apple Events, Launch Services or clipboard; and none of the environment's API keys or tokens. Details are in [video/README.md](video/README.md#the-sandbox).
-- **Claude in a conversation** can start lessons and change the settings you allow, but never add a provider, change an address, touch a key or raise a spending cap.
+Speech, rendering and the library stay on your machine. The server listens on `127.0.0.1` only and refuses requests from other sites. It has no login, so don't put it behind a tunnel or proxy. Keys live in the macOS Keychain and never reach scenes or `claude -p`. On a Mac, generated scene code runs in a sandbox: no network, no writing outside the lesson's `build/` folder, no reading your keys or home folder, no programs except Python, ffmpeg and TeX. Claude, through the connector, can start lessons and change the settings you allow, but never add a provider, touch a key or raise a spending cap.
 
 ## Where your files go
 
 | Path | Contents | In git |
 | --- | --- | --- |
-| `tts-studio/data/` | The library: SQLite database (with Settings), MP3s, finished videos | no |
-| `video/projects/<name>/` | One folder per video: script, scenes, `project.json`, and `build/` (renders, the scene cache, the storyboard) | no, except the `demo` project |
-| `video/projects/<name>/versions/` | Each version of a lesson: its script, scenes and storyboard as they were | no |
-| `video/projects/<name>/notes/`, `brief.json` | Your notes and attached files for a lesson | no |
-| `.venv/` | The Python environment (ManimGL and Kokoro), from `pyproject.toml` and `uv.lock` | no |
-| `tts-studio/.env` | Optional settings; see [tts-studio/.env.example](tts-studio/.env.example). Values set here win over the Settings page | no |
-| `~/.cache/huggingface/` | Kokoro's model and voices, downloaded by `./install.sh` | outside the repo |
-| `~/Library/Caches/narrated-proofs-scenes/` | What manim, TeX and matplotlib cache while rendering | outside the repo |
-| Keychain, "Narrated Proofs" | Provider keys saved in Settings | outside the repo |
+| `tts-studio/data/` | Library: database, settings, MP3s, videos | no |
+| `video/projects/<name>/` | One folder per lesson: script, scenes, `build/`, `versions/`, `notes/` | no, except `demo` |
+| `.venv/` | The Python environment | no |
+| `tts-studio/.env` | Optional settings; they win over the Settings page | no |
+| `~/.cache/huggingface/` | Kokoro's model | outside the repo |
+| `~/Library/Caches/narrated-proofs-scenes/` | Render caches | outside the repo |
+| Keychain, "Narrated Proofs" | Saved provider keys | outside the repo |
 
 To back up your work, copy `tts-studio/data/` and `video/projects/`.
 
-## Troubleshooting the setup
+## Uninstall
+
+1. Remove saved keys in **Settings → Lesson writer**, and `claude mcp remove narrated-proofs` if you connected Claude.
+2. Delete the `tts-dir` folder. This also deletes your library and lessons, so copy what you want first.
+3. Delete `~/.cache/huggingface/hub/models--hexgrad--Kokoro-82M` and `~/Library/Caches/narrated-proofs-scenes`.
+4. Optionally `brew uninstall --cask basictex` and `brew uninstall node uv ffmpeg`.
+
+## Troubleshooting
 
 | What you see | What to do |
 | --- | --- |
-| `command not found: brew` | Run the two commands the Homebrew installer printed under **Next steps**, then open a new Terminal window |
-| `npm install` fails building `better-sqlite3` | Your Node version has no prebuilt binary yet. Run `xcode-select --install` so it can compile, or install the current LTS Node (`brew install node@22`, then follow the PATH note it prints) |
-| `./install.sh` stops partway | It was most likely a download. Run it again; it carries on |
-| The test render fails on `File 'something.sty' not found` | `sudo tlmgr install something`, then run `./install.sh` again |
-| The test render fails before drawing anything, about an adapter, a device or Metal | ManimGL draws through Metal. Render on the Mac itself rather than in a virtual machine |
+| `command not found: brew` | Run the commands Homebrew printed under **Next steps**, in a new Terminal |
+| `npm install` fails on `better-sqlite3` | Run `xcode-select --install`, or use Node 22 (`brew install node@22`) |
+| `./install.sh` stops partway | Usually a download. Run it again |
+| `File 'something.sty' not found` | `sudo tlmgr install something`, then `./install.sh` |
+| Render fails about an adapter, device or Metal | Render on the Mac itself, not in a virtual machine |
 | `No manimgl at …` or `No Kokoro Python at …` | `./install.sh` did not finish. Run it again |
-| `sandbox_probe.py` lists rules, or a lesson fails with "The sandbox may have stopped it" | See [When a project fails only inside the sandbox](video/README.md#when-a-project-fails-only-inside-the-sandbox). Meanwhile `VIDEO_SANDBOX=report npm start` lets scenes do what the rules stopped and logs it |
-| A lesson fails at "Writing the lesson" with a message about `claude` | Claude Code is not installed, not on the dashboard's PATH, or not signed in. Check `claude -p "hi"` in the same Terminal, or set `TTS_CLAUDE_BIN` in `.env` to its full path (`which claude`) |
-| `Port 8787 is already in use` | Another copy is running, or another program uses the port. Set `PORT=8788` in `tts-studio/.env` |
+| "The sandbox may have stopped it" | See [video/README.md](video/README.md#when-a-project-fails-only-inside-the-sandbox). `VIDEO_SANDBOX=report npm start` logs what the rules stopped |
+| Failure at "Writing the lesson" about `claude` | Claude Code isn't installed or signed in. Check `claude -p "hi"`, or set `TTS_CLAUDE_BIN` in `.env` |
+| `Port 8787 is already in use` | Set `PORT=8788` in `tts-studio/.env` |
 
-Problems with the dashboard itself are covered in [tts-studio/README.md](tts-studio/README.md#troubleshooting), and with rendering in [video/README.md](video/README.md#troubleshooting).
+More in the [dashboard](tts-studio/README.md#troubleshooting) and [video](video/README.md#troubleshooting) READMEs.
 
 ## Tests
 
 ```bash
 cd tts-studio
-npm test           # server, lesson writer, MCP connector, page, engine and video tests
+npm test
 npm run lint
 ```
 
-None of the tests call Claude or any other model: fake OpenAI-, Ollama- and Anthropic-style servers stand in for the providers. The ones that load the real voice model, and the real render inside the sandbox, are skipped until `./install.sh` has run; the sandbox tests run only on macOS. GitHub Actions runs lint, the tests and a build on every push to `master` and every pull request, and renders the Text smoke scene inside the sandbox on macOS ([ci.yml](.github/workflows/ci.yml)).
+No test calls a model; fake providers stand in. Tests that load the real voice or render in the sandbox are skipped until `./install.sh` has run, and the sandbox tests run only on macOS. CI runs lint, tests and a build on every push and pull request ([ci.yml](.github/workflows/ci.yml)).
 
-## Future improvements
+## Not built yet
 
-None of these exist yet.
-
-- **Claude in a browser.** The MCP connector works with Claude Code and the desktop app. claude.ai connects from Anthropic's servers, so it would need this Mac reachable over HTTPS with a login in front: a tunnel, OAuth, and expiring links for videos.
-- **Write it in the conversation.** Tools that hand Claude Code the lesson guide and let it submit a script and scenes itself, so the conversation's own Claude writes the lesson with everything it already knows.
-- **The sandbox's rules, from more Macs.** Scenes now read only what rendering needs and start only Python, ffmpeg and TeX, with the paths found on each Mac. The rules were written from how ManimGL, TeX and ffmpeg are installed and started, not yet from a run on a Mac; `python3 video/sandbox_probe.py` renders under them and lists anything a Mac's setup needs beyond them, which is what would widen them.
-- **A sandbox outside macOS.** Docker runs everything on Windows and Linux, and converts notes with libvips, pandoc and catdoc there, but scenes run unconfined inside the container. Running them as a second user with no network (bubblewrap, or a render container of their own) would bring back what `sandbox-exec` does on a Mac.
-- **The GPU in Docker.** Renders in the image use the CPU through lavapipe. Mesa's Vulkan over Direct3D 12 (dozen) could reach the GPU under WSL 2, and an NVIDIA image could reach it on Linux.
-- **Word-level sync in other languages.** Only the English voices report word timings, so lessons are English only.
-- **More of the page under test.** The lesson form, the workspace and its Outline, Edit and History tabs, the storyboard, Settings, the library's cards, the API wrapper and the helpers are tested; the audio details panel and drag and drop are not.
+- **Claude in a browser.** claude.ai connects from Anthropic's servers, so this Mac would need HTTPS and a login.
+- **Write it in the conversation.** Let Claude Code submit a script and scenes itself.
+- **A sandbox outside macOS** (bubblewrap, or a render container) for Docker.
+- **GPU rendering in Docker** (Vulkan over Direct3D 12 on WSL 2, or an NVIDIA image).
+- **Word-level sync outside English.** Only English voices report word timings.

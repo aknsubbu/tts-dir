@@ -11,6 +11,7 @@ tts-studio/data
 tts-studio/dist
 tts-studio/extension
 video/smoke/out
-video/projects/*/build
-video/projects/*/versions
-video/projects/*/notes
+# Lessons stay out of the image; only the demo is baked in
+video/projects/*
+!video/projects/demo
+video/projects/demo/build

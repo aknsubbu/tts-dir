@@ -1,195 +1,167 @@
 # Narrated Proofs: the dashboard
 
-A local dashboard with two tabs. **Lessons** turns a topic and your notes into a narrated, animated explainer video. **Audio** turns a `.txt` or `.md` script into an MP3. Everything you make is kept in a searchable library. The voice is [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M), an open model that runs on your Mac: no API key, no quota, and it works offline.
-
-- **Drop or paste** one or many scripts. Audio generation starts straight away (or review a batch first).
-- **Library** of everything you've generated, with full-text search over titles, script text and tags, plus filters for status, voice, favorites and tags.
-- **Player** with speed control, seeking and 15-second skips, plus MP3 and script downloads.
-- **Speech never leaves your Mac.** The model runs in a local Python process. The server binds to `127.0.0.1` and refuses requests that come from a page on another site.
-- **54 voices** in American and British English, Spanish, French, Hindi, Italian, Brazilian Portuguese and Mandarin, with Japanese as an optional extra. Each one has a preview.
+A local dashboard with two tabs. **Lessons** turns a topic and your notes into a narrated, animated explainer video. **Audio** turns a `.txt` or `.md` script into an MP3. Everything you make goes into a searchable library. The voice is [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M), which runs on your machine: no API key, no quota, works offline. It has 54 voices in American and British English, Spanish, French, Hindi, Italian, Brazilian Portuguese and Mandarin, plus Japanese as an extra.
 
 ## Run it
 
-`../install.sh` installs everything, LaTeX, ffmpeg, ManimGL and Kokoro included (see the [main README](../README.md#install)). Then:
+`../install.sh` installs everything (see the [main README](../README.md#install-macos)). Then:
 
 ```bash
-cd tts-studio
-npm start          # starts everything on http://localhost:8787
+npm start          # http://localhost:8787
 ```
 
-The installer downloads PyTorch and about 350 MB of model and voice files into `~/.cache/huggingface` once, then speaks a test sentence in every language. After that everything works offline. Japanese needs a further 1 GB dictionary, so it is separate: `../install.sh --japanese`.
-
-For development with hot reload, run `npm run dev` and open <http://localhost:5173>.
+The dashboard runs while its terminal is open; Ctrl-C stops it. A job running at that moment is marked "Interrupted by a server restart"; press **Retry** on its card and it carries on from the files already written. For hot reload, run `npm run dev` and open <http://localhost:5173>.
 
 | Command | What it does |
 | --- | --- |
-| `npm run setup` | Run `../install.sh`: install, update or repair everything (safe to re-run) |
-| `npm run setup:japanese` | The same, plus the Japanese voices (a further 1 GB) |
-| `npm start` | Start the server using the last build (the everyday command; `../install.sh` builds the page) |
-| `npm run app` | Build the UI, then start the server |
-| `npm run dev` | Server with auto-restart plus Vite dev server on port 5173 |
-| `npm run mcp` | The MCP connector over stdio, as Claude Code or the desktop app starts it |
-| `npm run mcp:pack` | The connector as a desktop extension, `extension/narrated-proofs.mcpb` |
-| `npm run bakeoff` | Make the same short lessons with each set-up writer and compare them (see below) |
-| `npm test` | Everything: server, lesson writer and MCP connector (`test:server`), the page (`test:client`), engine and `../video` (`test:python`). The ones that load the real model are skipped until `../install.sh` has run |
-| `npm run lint` | ESLint over the server, the lesson writer and the page |
+| `npm start` | Start the server using the last build |
+| `npm run app` | Build the page, then start |
+| `npm run dev` | Server with auto-restart, plus Vite on port 5173 |
+| `npm run setup` / `setup:japanese` | Run `../install.sh` (optionally with Japanese voices) |
+| `npm run mcp`, `mcp:pack` | The MCP connector over stdio; a desktop extension, `extension/narrated-proofs.mcpb` |
+| `npm run bakeoff` | Compare lesson writers on the same lessons |
+| `npm test`, `npm run lint` | Server, writer, MCP, page, engine and `../video` tests; ESLint |
 
-The dashboard runs while its terminal is open; Ctrl-C stops it. A job running when it stops is marked "Interrupted by a server restart"; press **Retry** on its card. A lesson carries on from the files it had already written.
+## Audio
 
-## Using it
+Switch to **Audio** in the header.
 
-The page opens on the **Lessons** tab, described in the next section. Switch to **Audio** in the header for plain text-to-speech:
+1. Drop files anywhere on the page, or click the drop zone. They are generated one at a time. Turn off **Generate immediately on drop** to review a batch first.
+2. Pick a **voice** and speed. **Preview** plays a sample.
+3. Click a card to see the player and script. Search matches word prefixes and stems (`simmering` finds `simmer`). Add tags and favorites to filter.
 
-1. **Drop files anywhere on the page**, or click the drop zone. Multiple files are queued and generated one at a time.
-2. Pick a **voice** and speed on the left, in the language your script is written in. **Preview** plays a sample. Settings are remembered.
-3. Watch progress on the cards. Click a card (or its play button) to open the details panel with the player and the full script.
-4. Use the **search box** to find any script you've ever generated. It matches word prefixes and stems, so `simmering` finds `simmer`. The matching words are highlighted in the list and in the script.
-5. Add **tags** and **favorites** in the details panel, then filter by them.
+Good to know:
 
-Turn off **Generate immediately on drop** to collect files into a batch first. You can then edit titles and see character counts and estimated length before generating.
+- **Duplicates are caught.** Same text, voice and settings is not generated twice; you can open the old one or generate again.
+- **Long scripts** are split at paragraph, line and sentence boundaries, with a pause between sentences, and encoded once (24 kHz mono MP3). Expect 10 to 25 times faster than real time on Apple Silicon.
+- **One voice, one language.** Match the voice to the script. To fix a mispronounced English word, write it as `[Kokoro](/kˈOkəɹO/)`.
+- **Markdown is stripped** before speaking (you can turn that off).
+- **Cancel works mid-job** and restarts the voice engine. If the engine crashes mid-job, the job is retried once.
 
-### Good to know
+## Lessons: a video from a topic
 
-- **Duplicates are caught.** If the script text, voice and settings match something you already generated, it isn't generated twice. You get a toast offering "Open it" or "Generate again". Titles and tags don't count as a difference.
-- **Long scripts are split automatically** at paragraph, line and sentence boundaries, with a short pause between paragraphs, and encoded once into a single MP3 (24 kHz mono, 80 kbps). Expect roughly 10 to 25 times faster than real time on Apple Silicon.
-- **One voice speaks one language.** A British voice reads Spanish text with English pronunciation rules, so match the voice to the script.
-- **Regenerate** in the details panel re-runs a stored script with whatever voice and settings are currently selected on the left. Handy for trying another voice.
-- **Markdown is stripped** before speaking (headings, bold, links, code blocks, bullet markers). You can turn this off.
-- **Cancel works mid-job.** It restarts the voice engine, which takes a few seconds. If the engine crashes during a job, the job is retried once. Other failures show the reason on the card, with a Retry button. If the server restarts mid-job, that job is marked failed so you can retry it.
-
-## Explain it to me: a video from a topic
-
-The **Lessons** tab makes a narrated, animated explainer from a topic and your notes. It is built for mathematics: derivations, proofs, the maths behind machine learning.
+Built for mathematics: derivations, proofs, the maths behind machine learning.
 
 1. Type a **topic** and what you want to understand.
-2. Add your **notes**: type or paste them, drop files anywhere on the page, or paste a screenshot. Notes are optional, but with them the video uses your notation and your examples.
-3. Pick a length (1 to 30 minutes), a quality and an English voice. Under **Before it renders**, choose **Render right away**, or **Show me the storyboard** to look the lesson over first. Then press **Make the video**.
+2. Add **notes**: type or paste, drop files anywhere, or paste a screenshot. With them, the video uses your notation and examples.
+3. Pick a length (1 to 30 minutes), a quality and an English voice. Under **Before it renders**, choose **Render right away**, **Show me the storyboard**, or **Show me the narration first**. Press **Make the video**.
 
-The card in the library shows each stage. Click it to open the lesson's workspace, a full-width page with five tabs, each with its own address (`#lesson/<id>/watch`, `/storyboard`, `/edit`, `/history`, `/notes`), and a sixth, **Outline**, for a lesson in chapters:
+The card shows each stage. Click it for the lesson's workspace, which has these tabs (each with its own address, such as `#lesson/<id>/watch`):
 
-- **Watch**: the video with captions, or what is happening to it. Below it, what writing the lesson took: who wrote each step, the cost, the tokens read (and how many came from the cache) and written, how many fixes the writer made and how many common mistakes were fixed without it.
-- **Storyboard**: every narration block, scene by scene, with a still of the screen at each marked word and at the end of the block, its narration with the marks shown, any timing or layout problem, and a button to hear it. **Play as animatic** plays the narration block after block and changes the picture on the marked words, so a lesson can be judged before it is rendered. The stills come from the check, which skips animations, so each shows where things end up, not how they move.
-- **Edit**: `script.txt` and `scenes.py` in a code editor, side by side (as tabs on a narrow screen), with the voice and speed above them. Each `[block]` line shows its word count and, once checked, how long it takes to say. **⌘S** saves and runs the quick check in a moment (blocks, marks, imports, scene classes), and problems are underlined on their lines and listed below; click one to go to it. **Check** runs the full check, which speaks changed blocks and runs every scene without drawing, and refreshes the storyboard. **Render v2** does the same and, if it passes, makes the next version and builds it; with the narration and scene caches only what you changed is redone, and the old video plays meanwhile. **Discard** goes back to the current version. A save made from files that changed underneath (another editor, say) is refused with an offer to load theirs or keep yours, and nothing can be saved while the lesson is being written, checked or built. Projects written by hand stay read-only here.
-- **History**: every version, what made it (written, edited, restored), what it cost, whether it passed its check and was built. Compare any two: the narration block by block with changed words marked, and `scenes.py` as a line diff. **Restore** makes an earlier version the next one; when its render is still kept it plays at once, otherwise it is built.
-- **Notes**: what you asked for, the files you attached and the narration.
+- **Watch:** the video with captions and a transcript that highlights each word (click one to jump). Below it is what writing took: who wrote each step, the cost, the tokens and the fixes made.
+- **Storyboard:** every block, scene by scene, with a still at each marked word and at the end, the narration, any problems, and a button to hear it. **Play as animatic** plays the narration and changes the picture on the marked words. Stills come from the check, which skips animations, so they show where things end up.
+- **Edit:** `script.txt` and `scenes.py` in a code editor. **⌘S** saves and runs a quick check; **Check** runs the full one; **Render v2** checks, then builds the next version while the old video keeps playing. **Discard** goes back to the current version. Saves from stale files are refused with a choice of theirs or yours. Hand-written projects are read-only.
+- **History:** every version, what made it, its cost and whether it built. Compare any two (narration by block, scenes as a diff) and **Restore** one.
+- **Notes:** what you asked for, your files and the narration.
+- **Outline:** for lessons in chapters.
 
-**Ask for a change** sits at the bottom of every tab of a written lesson: "slow down the second scene", "use my notation for the loss". Narrow it to a scene or a block (or press **Change this…** on a storyboard card), or to the moment the video is paused at; attach notes, such as a photo of your notation; and tick **Show me the storyboard first** to look before it renders. The writer answers with only the blocks and scene classes it changes, which `../video/splice.py` puts in place, so unchanged narration is reused as recorded and unchanged scenes are not rendered again: a small change takes minutes. The result is checked and fixed like a new lesson, becomes the next version with the request, the writer's one-line summary, its cost and anything it changed outside the part you picked, and renders while the old video plays. A revision that fails, or is cancelled, leaves the lesson and its files as they were. Each request is sent with the last three requests and their summaries, so "undo that" makes sense.
+**Ask for a change** sits under every tab: "slow down the second scene". Narrow it to a scene, a block, or the paused moment, attach notes, and tick **Show me the storyboard first** if you want. The writer answers with only what changes, which `../video/splice.py` applies, so unchanged narration is reused and unchanged scenes aren't re-rendered. A failed or cancelled revision leaves the lesson as it was. Each request carries the last three, so "undo that" makes sense.
 
-**Show me the narration first** (in the form's **Before it renders**) stops after the narration is written. Read it on the Watch tab, change it in the Edit tab if you like, then **Approve the narration** and the scenes are written for it. Animation code is paid for only once the direction is right.
+**Narration first.** Stops after the narration is written. Read or edit it, then **Approve the narration** and the scenes follow, so you pay for animation code only once the direction is right.
 
-**Long lessons, in chapters.** A lesson of 10 minutes or more is written in chapters. First the writer reads your notes and writes an **outline**: the lesson's title and the thread through it, the notation every chapter shares (each symbol with its meaning and one colour, kept from the first chapter to the last), and the chapters in order, each with a length of 1 to 8 minutes, what you should understand by its end, what it covers, which of your attached files it uses, and how it picks up from the one before. With **Show me the outline before writing the chapters** ticked (the default), the lesson waits at its **Outline** tab: rename, resize, reorder, add or remove chapters, change a symbol's colour, then **Write the N chapters**; or say what to change and **Write it again**. Each chapter is then written on its own as a full lesson project in `chapters/<id>/`, checked, fixed and polished like a short lesson, with the outline's notation as one shared `COLORS` line and the end of the chapter before it (its narration, and its last frame for a writer that can see) so it picks up where that one stopped. While one chapter is checked, the next is already being written. The build joins the chapters into one MP4 with chapter markers, captions and a transcript across all of them, with a title card before each chapter unless you untick **A title card before each chapter**. In the workspace, **Storyboard**, **Edit** and **History** show one chapter at a time, picked above them; a change you ask for names its chapter (a paused moment finds its own), and a rebuild renders only what changed. Beside the video, the chapters are listed with their start times; click one to go there. A long lesson costs more per minute than a short one, since every chapter reads the guide again (from the cache after the first), so the form shows the estimate for the outline and the chapters, and warns when it could reach the cap per lesson in **Settings → Costs** ($15 unless you change it). At most 8 chapters (`TTS_MAX_CHAPTERS`).
+**Long lessons, in chapters.** From 10 minutes, the writer first makes an **outline**: the thread of the lesson, the notation every chapter shares (each symbol with a meaning and one colour), and 1 to 8 minutes per chapter (up to `TTS_MAX_CHAPTERS`, 8). By default it waits at the **Outline** tab: rename, resize, reorder, add or remove chapters, then **Write the N chapters**, or ask for it again. Each chapter is a full project in `chapters/<id>/`, written to pick up where the last one stopped, while the next is already being written. The build joins them with chapter markers, captions, a transcript and optional title cards. A long lesson costs more per minute, since every chapter reads the guide again; the form shows the estimate.
 
-Beside the video, the **transcript** marks each word as it is spoken; click a word to jump there. It comes from the build's word timings, so lessons built before this release show none until they are built again.
+**Looking over frames.** **Let the writer look over its own frames** sends the storyboard's stills in one more request, to catch what the checks can't measure, such as a shape over a label. Its changes are kept only if they break nothing.
 
-A lesson that waits for you says **Storyboard ready** on its card, and the header counts them. In its workspace, **Approve and render** renders it at the quality you pick there, and **Don't render** cancels it (Retry renders it after all). While a lesson is rebuilt, it keeps playing its last built version.
+A lesson waiting for you says **Storyboard ready** on its card, and the header counts them. **Approve and render** builds it at the quality you choose; **Don't render** cancels it.
 
-**Let the writer look over its own frames** sends the storyboard's end-of-block stills in one more request, to catch what the checks cannot measure: a shape over a label, a crowded frame, colours hard to tell apart. Its changes are kept only if they break nothing. A polisher that cannot see pictures gets the warnings alone.
+### Notes
 
-Notes can be more than text:
-
-| Kind of file | What happens to it |
+| File | What happens |
 | --- | --- |
-| `.txt`, `.md` | Read in the browser and added to the notes box |
-| Images (PNG, JPEG, WebP, GIF, HEIC, TIFF, BMP) | Shown to Claude as pictures: handwritten working, textbook pages, diagrams. Each is re-encoded as a JPEG of at most 1400 pixels on its long side (`TTS_NOTES_IMAGE_EDGE`), which also drops the location and camera details in phone photos. A picture costs Claude tokens by its area, so a smaller one is a cheaper request |
-| PDF | Shown to Claude whole, pages and figures included. Type pages under it (`1-3, 7`) to send only those, or tick **text only** to send its text: cheaper, and readable by any model, but figures and handwriting are lost |
-| Word, RTF, OpenDocument (`.docx`, `.doc`, `.rtf`, `.odt`) | Turned into text and added to the typed notes |
+| `.txt`, `.md` | Added to the notes box |
+| Images (PNG, JPEG, WebP, GIF, HEIC, TIFF, BMP) | Shown to the writer, re-encoded as JPEG of at most 1400 px (`TTS_NOTES_IMAGE_EDGE`), which also drops location and camera data |
+| PDF | Shown whole. Type pages (`1-3, 7`) to send only those, or tick **text only**: cheaper and readable by any model, but figures and handwriting are lost |
+| `.docx`, `.doc`, `.rtf`, `.odt` | Turned into text |
 
-A lesson takes up to 12 attached files and 20 MB in total, and 60,000 characters of text. Converting images and documents uses `sips` and `textutil`, which ship with macOS; elsewhere PNG, JPEG, WebP and GIF images are accepted as they are, and other images and all documents are refused. Choosing PDF pages and taking a PDF's text use PDFKit on macOS and poppler (`pdfinfo`, `pdftotext`, `pdfseparate`, `pdfunite`) elsewhere.
+Limits: 12 files, 20 MB, 60,000 characters of text. On macOS, conversion uses `sips`, `textutil` and PDFKit; elsewhere libvips, pandoc, catdoc and poppler.
 
-| Stage on the card | What is happening |
+### Stages on a card
+
+| Stage | What is happening |
 | --- | --- |
-| Reading the notes with Claude Code | Only when another writer reads your notes than writes the lesson: the reader writes out the pictures and PDFs as text first |
-| Writing the lesson (or Reading the notes and writing the lesson) | The writer writes the narration and the animation code |
-| Checking the scenes | The narration is spoken and every scene is run once without drawing it, leaving the storyboard |
-| Waiting for another lesson to finish its check | Two lessons can be written at once, but checks take turns |
-| Checking the automatic fixes | A common mistake (a name from Manim Community, a mistyped mark) was fixed without asking Claude, and the scenes are checked again |
-| Fixing the scenes (1 of 3) | A scene still failed, so the writer is shown the error and rewrites. With another fixer than the writer, the stage names it |
-| Handing the fixes back to Claude Code | The cheaper fixer failed as many times as Settings allow, so the main writer takes over |
-| Polishing timing and layout | It runs, but text overlaps or an animation ran past its word, so Claude gets one go at those |
-| Looking over the frames | The same, with the storyboard's stills, when you asked Claude to look over its own frames |
-| Storyboard ready: have a look | Waiting for you to approve it |
-| Narration ready: have a look | Waiting for you to read and approve the narration; the scenes come after |
-| Writing the outline (or Redoing the outline) | A long lesson: the writer plans its chapters and their shared notation |
-| Outline ready: 4 chapters, about 18 minutes | Waiting for you to look over the outline and approve it |
-| Writing chapter 2 of 4: The chain rule | Each chapter is written, then checked, fixed and polished, as a short lesson is |
-| Revising: … | The writer is making a change you asked for; then the check, as above |
-| Building 2/5 | Rendering each scene and joining them, as for any narrated video. A scene unchanged since an earlier build is reused |
+| Reading the notes | Another model than the writer reads pictures and PDFs and writes them out as text |
+| Writing the lesson | The writer writes the narration and animation code |
+| Checking the scenes | The narration is spoken and each scene runs once without drawing |
+| Waiting for another lesson | Two lessons can be written at once, but checks take turns |
+| Checking the automatic fixes | A common mistake was fixed without the writer; checking again |
+| Fixing the scenes (1 of 3) | A scene failed; the writer sees the error and rewrites |
+| Handing the fixes back | A cheaper fixer failed as often as Settings allow, so the main writer takes over |
+| Polishing timing and layout / Looking over the frames | One go at overlaps and late animations, with or without stills |
+| Storyboard / Narration / Outline ready | Waiting for you |
+| Writing chapter 2 of 4 | Each chapter is written, checked, fixed and polished |
+| Revising | The writer is making a change you asked for |
+| Building 2/5 | Rendering and joining; unchanged scenes are reused |
 
-A two-minute video takes roughly five to ten minutes from start to finish. Most of that is Claude writing.
+### Cost and what's on disk
 
-**What it needs.** A writer: by default [Claude Code](https://claude.com/claude-code) installed and signed in (`claude` on your PATH); see **Who writes your lessons** below for the others. And the `video/` folder set up as its README describes (manim, ffmpeg, LaTeX). A lesson is one request to write, plus one for each fix and one for the polish. The form shows who will write it and about what it will cost, and the header shows what lessons cost this month.
+A lesson needs a writer (by default [Claude Code](https://claude.com/claude-code), installed and signed in) and `../video` set up. The form shows who writes it and about what it costs, and the header shows this month's total. Cost is kept down by asking each step with its own effort (writing `high`, fixes `low`, polish `medium`; see [Configuration](#configuration)), fixing common mistakes with `../video/autofix.py` first, having fixes and revisions answer with only what changes, showing the polish only the scenes it needs, and a small tested kit of layouts for scenes (`../video/runtime/kit.py`).
 
-**What it costs, and how it is kept down.** Most of a request's cost is what the writer writes, thinking included. So each step asks with its own effort: writing at high, fixes at low (a fix is mechanical), the polish at medium (`TTS_CLAUDE_EFFORT`, `TTS_CLAUDE_FIX_EFFORT`, `TTS_CLAUDE_POLISH_EFFORT`; `auto` leaves it to Claude Code). Common mistakes are fixed by `../video/autofix.py` before the writer is asked. Fixes, the polish and revisions answer with only the blocks and classes they change, not both files again. The polish is shown only the scenes its warnings are in, and is skipped when the only warnings are animations running less than half a second long. Scenes can use a small kit of tested layouts (`../video/runtime/kit.py`: derivations lined up on their equals signs, boxed results, cancelled terms, axes with a graph), which makes them shorter and less likely to fail. Every request's token counts and cost are saved beside its prompt in `build/author/`.
+Every lesson is a normal project in `../video/projects/<topic>-<id>/`: `script.txt`, `scenes.py`, `brief.json`, your files in `notes/`, every prompt, answer and cost in `build/author/`, the storyboard and report in `build/check/`, and each version in `versions/NNN/`. Edit it here, or in your own editor and render from the Edit tab, or run `python3 ../video/build.py <name>`.
 
-**What you get on disk.** Every lesson is a normal project in `../video/projects/<topic>-<id>/`: `script.txt`, `scenes.py`, your `brief.json`, the attached files in `notes/`, under `build/author/` every prompt sent to the writer, every answer and what each cost, under `build/check/` the storyboard and the last check's report, and in `versions/NNN/` each version's files and storyboard. Edit it in the **Edit** tab, or in your own editor and render it from there (the tab notices), or with `python3 ../video/build.py <name>`.
+### How the writer works
 
-**How it works.** The lesson writer is in `author/` and runs inside the dashboard's process, as a job queue the server hands lessons to. It gives Claude no tools, so Claude can only send text back, and that text is checked by `../video/check.py` before anything is built. The prompts are plain files you can edit without restarting:
+The lesson writer in `author/` runs inside the dashboard's process as a job queue. It gives the model no tools, so it can only send text back, and `../video/check.py` checks that text before anything is built. The prompts are plain files you can edit without restarting:
 
 | File | What it is |
 | --- | --- |
-| `author/prompts/guide.md` | The system prompt: how to plan a lesson, the script and scene formats, the ManimGL reference |
-| `author/prompts/lesson.md` | The request, with `{{topic}}`, `{{goal}}`, `{{notes}}` and the length filled in |
-| `author/prompts/repair.md` | The follow-up when the check finds problems |
-| `author/prompts/revise.md` | A change asked for after the lesson was made |
-| `author/prompts/edit-format.md` | How fixes, the polish and revisions answer: only what changes |
-| `author/prompts/read.md`, `scenes.md` | Writing out attached notes for another writer; the scenes for an approved narration |
-| `author/prompts/outline.md`, `chapter.md` | A long lesson's outline, and each of its chapters |
-| `author/prompts/example/` | The worked example shown to Claude. `npm test` checks it still passes |
+| `author/prompts/guide.md` | System prompt: how to plan a lesson, the formats, the ManimGL reference |
+| `lesson.md`, `repair.md`, `revise.md` | The request; the follow-up on check problems; a requested change |
+| `edit-format.md` | How fixes, polish and revisions answer: only what changes |
+| `read.md`, `scenes.md` | Writing out notes for another writer; scenes for an approved narration |
+| `outline.md`, `chapter.md` | A long lesson's outline and chapters |
+| `example/` | The worked example shown to the model; `npm test` checks it still passes |
 
-**Good to know**
+### Good to know
 
-- The scenes are Python that Claude wrote and your machine runs. Two things confine them. The check refuses imports beyond manim, numpy, `math`, `random`, `itertools` and `functools`, and names such as `open`, `eval`, `os`, `sys` and `getattr`. And every scene runs inside the macOS sandbox: no network; no writing outside its project's `build/` folder and a cache kept for scenes; reading only its own project and what rendering needs (Python, the system's libraries and fonts, TeX, ffmpeg), never `~/.ssh`, keychains and the like; starting no program but Python, ffmpeg and TeX; no Apple Events, Launch Services or clipboard; and only a short list of environment variables, so no API keys or tokens. See `../video/README.md`, which also says what to do when a hand-written project fails only inside the sandbox.
-- Lessons need an English voice, because animations follow individual words and only the English voices report word timings.
-- If Claude cannot get the scenes to run in three fixes, the card fails with the last error. **Retry** carries on from the files already written.
-- Cancel works at every stage, and stops Claude, the check or the build.
-- Pictures and PDFs go to the writer with the first request only. A fix is about code that failed, so it is sent the script and scenes alone.
-- A fix from another provider that cannot even answer in the format asked for counts as a failed fix when there is a writer to hand back to; otherwise the lesson fails with the provider's message. A provider's rate limit is retried after the time it asks for; a daily limit fails with a message naming it.
-- Each version is kept in `versions/NNN/` beside the lesson, with its storyboard, and the renders of the last three are kept in `data/video/<id>/`. A lesson made before versions existed becomes version 1 the first time it is edited.
+- **Scenes are confined.** The check refuses imports beyond manim, numpy and a few standard modules, and names such as `open`, `eval`, `os` and `sys`. On macOS every scene also runs in a sandbox with no network and no access to your keys. See [`../video/README.md`](../video/README.md#the-sandbox).
+- Lessons need an English voice, since only English voices report word timings.
+- If the scenes won't run after three fixes, the card fails with the last error. **Retry** carries on from the files already written.
+- Cancel works at every stage.
+- Pictures and PDFs go with the first request only; fixes see just the script and scenes.
+- A provider's rate limit is retried after the time it asks for; a daily limit fails with a message naming it.
+- Each version is kept with its storyboard, and the renders of the last three are kept in `data/video/<id>/`.
 
-## Who writes your lessons: Settings
+## Settings: who writes your lessons
 
-The gear in the header opens **Settings** (`#settings`). Its **Lesson writer** section chooses who writes lessons:
+The gear in the header opens **Settings** (`#settings`).
 
-| Provider | Connects through | Structured answers | Pictures | PDFs | Cost shown |
-| --- | --- | --- | --- | --- | --- |
-| Claude Code (the default) | `claude -p` and your sign-in | Schema | Yes | Yes | Claude Code's own figure |
-| Claude API | Your key, Anthropic's SDK | Schema | Yes | Yes | From token counts |
-| OpenAI | Your key, OpenAI's SDK | Schema | Yes | Yes | From token counts, once you add a rate |
-| Groq | Your key, its OpenAI-compatible API | Schema on some models, JSON mode on others | Some models | No: text is taken from PDFs | From token counts, once you add a rate |
-| This Mac: Ollama | Ollama's own API | Schema | Vision models only | No | Free |
-| This Mac: OpenAI-compatible (LM Studio, llama.cpp, MLX, vLLM) | Its address | Whatever the Test finds | Vision models only | No | Free |
-| Other (OpenRouter, Together, your own server) | Its address and key | Whatever the Test finds | | | Your rates |
+| Provider | Connects through | Pictures | PDFs | Cost shown |
+| --- | --- | --- | --- | --- |
+| Claude Code (default) | `claude -p` and your sign-in | Yes | Yes | Claude Code's figure |
+| Claude API | Your key | Yes | Yes | From token counts |
+| OpenAI | Your key | Yes | Yes | From token counts, once you add a rate |
+| Groq | Your key | Some models | No (text only) | From token counts, once you add a rate |
+| This Mac: Ollama | Ollama's API | Vision models | No | Free |
+| This Mac: OpenAI-compatible (LM Studio, llama.cpp, MLX, vLLM) | Its address | Vision models | No | Free |
+| Other (OpenRouter, Together, your own server) | Its address and key | | | Your rates |
 
-- **Test** checks a provider: the key, its models, and for the model you pick whether it gives structured answers (schema, JSON mode or neither), sees pictures, reads PDFs and takes an effort setting, how long its context is and how fast it writes. Each check is a tiny request.
-- **One for all, or per step.** Reading your notes, writing the lesson, fixing and polishing, and outlines can each have their own provider, model and effort. Effort left at **Default** follows `TTS_CLAUDE_*_EFFORT`.
-- **Hand-back.** With another fixer than the writer, say a model on this Mac, a fix that fails a set number of times goes back to the main writer, which gets its own rounds.
-- **Reading notes.** When the reader and the writer differ, the reader writes out the attached pictures and PDFs as text first (kept as `notes/transcribed.md`), so a writer that cannot see still gets everything in them. PDFs go to a model that cannot read them as their text; a scanned PDF, or a picture for a model that cannot see, is refused with what to change. The form says so before you start.
-- **Per lesson.** The form's **Written by** list can pick any set-up provider for one lesson.
-- **On record.** Each version notes the provider and model of every request, its tokens and its cost, in `build/author/` and on the lesson.
-- **Where your notes go** is stated under the steps: the company each step sends your topic, notes and files to. With every step on this Mac, nothing leaves it. Scenes always run only on this Mac.
+- **Test** checks a provider with a tiny request: the key, its models, and for your chosen model whether it gives structured answers, sees pictures, reads PDFs, takes an effort setting, its context length and its speed.
+- **One for all, or per step.** Reading notes, writing, fixing and polishing, and outlines can each have their own provider, model and effort. A lesson's **Written by** list can pick another for one lesson.
+- **Hand-back.** If a cheaper fixer fails a set number of times, the main writer takes over.
+- **Reading notes.** When the reader and writer differ, the reader writes out pictures and PDFs as text first (`notes/transcribed.md`). A scanned PDF, or a picture for a model that can't see, is refused with what to change.
+- **Where your notes go** is listed under each step. With every step on this Mac, nothing leaves it.
 
-**Keys** go in once and never come back to the page, which shows only how a key ends. On macOS they are kept in the Keychain under "Narrated Proofs" (through the built-in `security` command, with the key on its standard input, never on a command line); elsewhere, or with `TTS_KEYCHAIN=0`, in `data/secrets.json`, readable only by you. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `GROQ_API_KEY` in the environment or `.env` win over a key saved here. Keys are never logged, never written into projects or the prompt logs, and never reach scenes. A key saved here is never given to `claude -p` either, so Claude Code keeps using your plan; an `ANTHROPIC_API_KEY` in the environment is seen by Claude Code, as before.
+**Keys** are entered once and never shown again. On macOS they are in the Keychain under "Narrated Proofs"; elsewhere, or with `TTS_KEYCHAIN=0`, in `data/secrets.json`, readable only by you. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `GROQ_API_KEY` in the environment or `.env` win. Keys never reach logs, projects, prompts, scenes, or `claude -p`.
 
-**The other sections:** **Lesson defaults** (length, quality, voice, review, frames review: what the form starts with), **Claude (MCP)** (see below), **Costs** (this month's total, a cap per lesson, default $15, and a monthly cap; rates), **Connect Claude** and **Storage**.
+**Other sections:** Lesson defaults, Claude (MCP), Costs, Connect Claude, Storage.
 
-**Caps and rates.** A lesson that reaches its cap stops and keeps what it wrote; raise the cap and press **Retry** and it continues, counting what it already spent. Anthropic's rates ship with the app, dated; add others in **Costs** as dollars per million tokens. Without a rate, a provider's cost shows as unknown and the caps cannot count it. Claude Code reports what the API would charge; on a Pro or Max plan the caps still count that figure.
+**Caps and rates.** A lesson at its cap ($15 by default; there is a monthly cap too) stops and keeps what it wrote; raise the cap and **Retry**. Anthropic's rates ship with the app; add others in **Costs** as dollars per million tokens, or their cost is unknown and caps can't count it.
 
-**Which value wins:** the environment, then `.env`, then Settings, then the built-in default. A value fixed by the environment shows **Set in .env** and cannot be changed in the page. Settings live in the `settings` table of `data/studio.db`; every change is kept with when and who made it (you, or Claude through MCP), and **Undo** puts it back.
+**Which value wins:** the environment, then `.env`, then Settings, then the default. A value set by the environment shows **Set in .env**. Every Settings change is kept with when and who made it (you, or Claude through MCP), and **Undo** reverts it.
 
-**A writer bake-off.** `npm run bakeoff` makes the same short lessons with each set-up provider (or `--writers claude-code,ollama:qwen3-coder:30b`, `--topics topics.json`), stopping at the storyboard so nothing is rendered. It asks before spending on paid providers (`--yes` skips the question), then reports how often each writer's lessons passed the check, the fix rounds, time and cost, and writes `data/bakeoff/<time>.html` with the storyboards side by side. ManimGL is a niche library and most models learned the other Manim, so expect other writers to fail the check more often; measure before switching.
+**A writer bake-off.** `npm run bakeoff` makes the same short lessons with each writer (`--writers claude-code,ollama:qwen3-coder:30b`, `--topics topics.json`), stops at the storyboard so nothing renders, asks before spending (`--yes` skips), and writes `data/bakeoff/<time>.html` comparing pass rates, fix rounds, time and cost.
 
 ## Make lessons from Claude: the MCP connector
 
-Claude Code and the Claude desktop app can make lessons from a conversation: "make a 3-minute lesson on what we just derived, using my notation from notes/softmax.jpg". **Settings → Connect Claude** shows these with your real paths:
+Claude Code and the desktop app can make lessons from a conversation: "make a 3-minute lesson on what we just derived, using my notation from notes/softmax.jpg". **Settings → Connect Claude** shows these with your real paths:
 
 ```bash
-# Claude Code, while the dashboard runs
-claude mcp add --transport http narrated-proofs http://localhost:8787/mcp
-# or started by Claude Code itself
-claude mcp add narrated-proofs -- node /path/to/tts-studio/mcp/stdio.js
+claude mcp add --transport http narrated-proofs http://localhost:8787/mcp   # while the dashboard runs
+claude mcp add narrated-proofs -- node /path/to/tts-studio/mcp/stdio.js    # started by Claude Code
 ```
 
-For the desktop app, add an entry to `~/Library/Application Support/Claude/claude_desktop_config.json` (create the file if it is missing), then quit and reopen the app. Settings shows it with your paths; it looks like this, with the full path of `node` (`which node`) and of your clone:
+For the desktop app, add this to `~/Library/Application Support/Claude/claude_desktop_config.json` (use the full path of `node` and of your clone), then restart it. Or run `npm run mcp:pack` and open `extension/narrated-proofs.mcpb`.
 
 ```json
 {
@@ -203,211 +175,139 @@ For the desktop app, add an entry to `~/Library/Application Support/Claude/claud
 }
 ```
 
-Or run `npm run mcp:pack` and open `extension/narrated-proofs.mcpb`. The connector talks to the running dashboard (`NARRATED_PROOFS_URL`, default `http://127.0.0.1:8787`); with `TTS_MCP_AUTOSTART=1`, as above, the stdio connector starts the dashboard when it is not running. Check it from Claude Code with `claude mcp list`, or ask Claude to list the voices. claude.ai in a browser is not supported: it would need this Mac reachable from the internet.
+The connector talks to the running dashboard (`NARRATED_PROOFS_URL`); with `TTS_MCP_AUTOSTART=1` it starts it if needed. Check with `claude mcp list`. claude.ai in a browser isn't supported.
 
 | Tool | Does |
 | --- | --- |
-| `make_lesson` | Start a lesson: topic, goal, notes, file paths (with PDF pages or text only), length (up to 30 minutes; from 10 in chapters), quality, voice, title, tags, review (none, storyboard or narration), whether a long lesson's outline waits for the person (`outline`) and has title cards, and optionally a set-up writer. Returns at once with its id, link and estimated cost |
-| `revise_lesson` | Ask for a change, narrowed to a scene, a block or a time in the video, with new note files; for a lesson in chapters, the chapter. It becomes the next version |
-| `approve_lesson` | Continue a lesson waiting on its storyboard, its narration or its outline, when the person says so; an outline can be sent back with their changes |
-| `redo_outline` | Have a long lesson's outline written again with a change the person asked for |
-| `wait_for_lesson` | Waits up to 50 seconds and returns as soon as the lesson's stage changes, with progress notifications while it waits. Claude calls it again until the lesson is done |
-| `lesson_status`, `search_lessons`, `get_lesson` | Where a lesson is; the library's search; its brief, outline, script and scenes (one chapter's, for a lesson in chapters), and up to 12 storyboard stills as images |
-| `get_video` | The MP4's path, its captions and poster, its length and link, with the poster as an image |
-| `cancel_lesson`, `retry_lesson`, `list_voices` | As the buttons do; the English voices |
+| `make_lesson` | Start a lesson (topic, goal, notes, files, length, quality, voice, review, outline options, writer). Returns at once with an id, link and estimated cost |
+| `revise_lesson`, `redo_outline` | Ask for a change, narrowed to a scene, block, time or chapter; have an outline rewritten |
+| `approve_lesson` | Continue a lesson waiting on its storyboard, narration or outline |
+| `wait_for_lesson` | Waits up to 50 seconds for a stage change; Claude calls it until done |
+| `lesson_status`, `search_lessons`, `get_lesson`, `get_video` | Progress, search, the brief, script, scenes and stills, and the finished MP4's path, captions and poster |
+| `cancel_lesson`, `retry_lesson`, `list_voices` | As the buttons do |
 | `get_settings`, `update_settings`, `test_writer` | Settings as Claude may see and change them (never keys); a provider's Test |
 
-It also offers each lesson's script, scenes and captions as resources (`lesson://<id>/script`), and a prompt, `/mcp__narrated-proofs__explain`, that turns the conversation into a lesson.
+It also offers each lesson's script, scenes and captions as resources (`lesson://<id>/script`) and a prompt, `/mcp__narrated-proofs__explain`.
 
-Files are read by path: images, PDFs, Word, RTF and text files only, within the page's limits, and never from the folders where keys and logins are kept (`~/.ssh`, `~/.aws`, `~/.config`, keychains and the rest of the list in `../video/sandbox.py`, links followed). Lessons Claude starts use **Settings → Claude (MCP)**: the page's writer, or one of their own, and their own defaults. What Claude may change from a conversation is set there too. By default it may choose among providers you have already set up for its own lessons, change effort and its defaults, and lower a spending cap. It can never add a provider, change an address, see or set a key, raise a cap, or change what it is allowed: a conversation that read a hostile web page could otherwise be talked into sending your notes somewhere new. Every change Claude makes shows in Settings with an **Undo**. The HTTP connector is behind the same Host and Origin checks as the rest of the dashboard.
+Files are read by path: images, PDFs, Word, RTF and text only, within the page's limits, and never from `~/.ssh`, `~/.aws`, `~/.config`, keychains or the rest of the list in `../video/sandbox.py`. Lessons Claude starts use **Settings → Claude (MCP)**. By default Claude may choose among providers you set up, change effort and its defaults, and lower a spending cap. It can never add a provider, change an address, see or set a key, raise a cap, or change what it may do, so a conversation that read a hostile web page can't send your notes somewhere new. Every change shows in Settings with **Undo**. The HTTP connector has the same Host and Origin checks as the rest of the dashboard.
 
 ## Where things are stored
 
-Everything lives in `data/` inside the project (override with `TTS_DATA_DIR`):
+In `data/` (override with `TTS_DATA_DIR`); back it up by copying the folder:
 
 ```
 data/
-  studio.db        SQLite database: scripts, status, the full-text index, Settings and their history
-  secrets.json     provider keys, off macOS or with TTS_KEYCHAIN=0 (readable only by you)
-  bakeoff/         reports from npm run bakeoff
-  audio/<id>.mp3   one MP3 per finished generation
-  video/<id>.*     each finished video: .mp4, captions as .srt and .vtt, and a .jpg still for its card
-  video/<id>/v<n>.*  a lesson's earlier versions, the last three renders kept (TTS_KEEP_RENDERS)
+  studio.db        scripts, status, search index, Settings and their history
+  secrets.json     provider keys, off macOS or with TTS_KEYCHAIN=0
+  audio/<id>.mp3
+  video/<id>.*     the .mp4, .srt, .vtt and a .jpg still; earlier renders in video/<id>/v<n>.*
   previews/        cached voice samples
+  bakeoff/         bake-off reports
 ```
 
-Back it up by copying that folder. Deleting an item in the UI removes its database row, its search entry and its MP3 or video files.
-
-A lesson also has a project folder in `../video/projects/`, holding the script, the scenes, your notes and any photos or PDFs you attached. Deleting a lesson asks a second question: whether to delete that folder too. Say no and it stays, so you can rebuild from it. Projects you wrote by hand, such as `demo`, are never deleted from the dashboard. From the command line it is `DELETE /api/generations/:id?project=1`.
+Deleting an item removes its row, search entry and files. Deleting a lesson also asks whether to delete its project folder in `../video/projects/`; say no to keep it and rebuild later. Hand-written projects such as `demo` are never deleted from the dashboard.
 
 ## Configuration
 
-All optional. Put them in a `.env` in this folder or the one above it, or in the environment.
+All optional. Put them in `.env` here or one folder up, or in the environment. Copy [.env.example](.env.example) for the full list with comments.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `TTS_VOICE` | `af_heart` | Voice preselected on first run |
-| `TTS_DEVICE` | `auto` | `auto` uses the Apple GPU when there is one, else the CPU. Set `cpu` if you see audio glitches |
-| `TTS_PYTHON` | `../.venv/bin/python` | A Python that has `kokoro` installed |
 | `PORT` | `8787` | Port for `npm start` |
+| `TTS_HOST` | `127.0.0.1` | Address to listen on. Docker sets `0.0.0.0` and publishes the port on `127.0.0.1` only |
 | `TTS_DATA_DIR` | `./data` | Library location |
-| `TTS_ENV_DIR` | none | Another folder to read `.env` from |
-| `TTS_CLAUDE_BIN` | `claude` | The Claude Code command the lesson writer runs |
-| `TTS_CLAUDE_MODEL` | Claude Code's default | Model Claude Code writes lessons with, such as `opus` or `sonnet`. Fixes the model chosen in Settings |
-| `TTS_CLAUDE_EFFORT` | `high` | Effort for writing a lesson: `low`, `medium`, `high`, `xhigh`, `max`, or `auto` for Claude Code's default |
-| `TTS_CLAUDE_FIX_EFFORT` | `low` | Effort for fixing failing scenes |
-| `TTS_CLAUDE_POLISH_EFFORT` | `medium` | Effort for the round on timing and layout |
-| `TTS_CLAUDE_READ_EFFORT` | `medium` | Effort for writing out attached notes, when another writer reads them |
-| `TTS_CLAUDE_OUTLINE_EFFORT` | `medium` | Effort for outlines of long lessons |
-| `TTS_AUTHOR_MAX_COST_USD` | Settings ($15) | What one lesson may cost before it stops |
-| `TTS_MAX_CHAPTERS` | `8` | Most chapters in a long lesson (up to 12) |
-| `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GROQ_API_KEY` | none | Provider keys; they win over keys saved in Settings |
-| `TTS_KEYCHAIN` | `1` | `0` keeps keys in `data/secrets.json` instead of the macOS Keychain |
-| `NARRATED_PROOFS_URL` | `http://127.0.0.1:8787` | Where the stdio MCP connector and the bake-off find the dashboard |
-| `TTS_MCP_AUTOSTART` | `0` | `1` lets the stdio connector start the dashboard when it is not running |
-| `TTS_CLAUDE_TIMEOUT_MIN` | `20` | Minutes one request to Claude may take |
-| `TTS_AUTHOR_FIXES` | `3` | How many times Claude may be asked to fix failing scenes |
-| `TTS_AUTHOR_POLISH` | `1` | `0` skips the extra round for timing and layout warnings |
-| `TTS_AUTHOR_VISUAL_REVIEW` | `0` | `1` shows Claude the storyboard's stills in that round for every lesson; the lesson form can ask for it per lesson |
-| `TTS_AUTHOR_PARALLEL` | `2` | Lessons the writer works on at once. Their checks still take turns |
-| `TTS_LESSON_REVIEW` | `render` | `storyboard` makes new lessons sent without a choice (from `curl`, say) wait at their storyboard |
-| `TTS_NOTES_IMAGE_EDGE` | `1400` | Pixels on the long side of an attached photo |
-| `TTS_KEEP_RENDERS` | `3` | Videos kept per lesson, the current one included |
-| `TTS_VIDEO_DIR` | `../video` | The folder holding `build.py`, `check.py` and `projects/` |
-| `TTS_VIDEO_BUILD` | `python3 ../video/build.py` | Another executable to build a video with |
-| `TTS_AUTHOR_CHECK` | `python3 ../video/check.py` | Another executable to check a lesson with |
-| `TTS_AUTHOR_AUTOFIX` | `python3 ../video/autofix.py` | Another executable to fix common mistakes with |
+| `TTS_VOICE` | `af_heart` | Voice preselected on first run |
+| `TTS_DEVICE` | `auto` | `auto` uses the Apple GPU if there is one; `cpu` if you hear glitches |
+| `TTS_PYTHON` | `../.venv/bin/python` | A Python with `kokoro` |
+| `TTS_CLAUDE_BIN` | `claude` | The Claude Code command |
+| `TTS_CLAUDE_MODEL` | Claude Code's default | Such as `opus` or `sonnet` |
+| `TTS_CLAUDE_EFFORT` | `high` | Writing a lesson: `low`, `medium`, `high`, `xhigh`, `max` or `auto` |
+| `TTS_CLAUDE_FIX_EFFORT` | `low` | Fixing failing scenes |
+| `TTS_CLAUDE_POLISH_EFFORT` | `medium` | The timing and layout round |
+| `TTS_CLAUDE_READ_EFFORT`, `_OUTLINE_EFFORT` | `medium` | Reading notes; outlines |
+| `TTS_CLAUDE_TIMEOUT_MIN` | `20` | Minutes one request may take |
+| `TTS_AUTHOR_MAX_COST_USD` | Settings ($15) | Cost at which a lesson stops |
+| `TTS_AUTHOR_FIXES` | `3` | Fix rounds |
+| `TTS_AUTHOR_POLISH` | `1` | `0` skips the polish round |
+| `TTS_AUTHOR_VISUAL_REVIEW` | `0` | `1` shows stills in the polish round for every lesson |
+| `TTS_AUTHOR_PARALLEL` | `2` | Lessons written at once; checks take turns |
+| `TTS_MAX_CHAPTERS` | `8` | Most chapters (up to 12) |
+| `TTS_LESSON_REVIEW` | `render` | `storyboard` makes lessons sent without a choice wait at it |
+| `TTS_NOTES_IMAGE_EDGE` | `1400` | Long side of an attached photo, in pixels |
+| `TTS_KEEP_RENDERS` | `3` | Videos kept per lesson |
+| `TTS_KEYCHAIN` | `1` | `0` keeps keys in `data/secrets.json` |
+| `NARRATED_PROOFS_URL` | `http://127.0.0.1:8787` | Where the stdio connector and bake-off find the dashboard |
+| `TTS_MCP_AUTOSTART` | `0` | `1` lets the stdio connector start the dashboard |
+| `TTS_VIDEO_DIR`, `TTS_VIDEO_BUILD`, `TTS_AUTHOR_CHECK`, `TTS_AUTHOR_AUTOFIX` | `../video` and its scripts | Use other folders or executables |
+| `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GROQ_API_KEY` | none | Provider keys; win over saved keys |
 
 ## From the terminal
 
-`tts.py` in the folder above uses the same engine without the dashboard:
-
 ```bash
-python3 ../tts.py script.md                      # writes script.mp3 next to the input
+python3 ../tts.py script.md                                  # writes script.mp3
 python3 ../tts.py script.md -o out.wav --voice bm_george --speed 1.1
+python3 ../tts.py script.md -o out.wav --timings out.json    # plus word times (English)
 python3 ../tts.py --list-voices
-python3 ../tts.py script.md -o out.wav --timings out.json   # plus word start/end times (English voices)
 ```
 
-The dashboard also has a small JSON API, so scripts can be pushed into the library from the command line:
+The dashboard has a JSON API, so you can push scripts and lessons from the command line:
 
 ```bash
-curl -s localhost:8787/api/generations \
-  -H 'Content-Type: application/json' \
+curl -s localhost:8787/api/generations -H 'Content-Type: application/json' \
   -d "$(jq -n --rawfile t script.txt '{title:"My script", text:$t, voiceId:"af_heart"}')"
+
+curl -s localhost:8787/api/lessons -H 'Content-Type: application/json' \
+  -d "$(jq -n --rawfile n notes.md '{topic:"Gradient of logistic regression", notes:$n, minutes:2, quality:"low"}')"
 ```
 
-A lesson can be started the same way:
-
-```bash
-curl -s localhost:8787/api/lessons \
-  -H 'Content-Type: application/json' \
-  -d "$(jq -n --rawfile n notes.md '{topic:"Gradient of logistic regression", goal:"Why it collapses to (y_hat - y) x", notes:$n, minutes:2, quality:"low"}')"
-```
-
-They show up in the library like anything dropped in the UI. To attach files, add `attachments: [{ name, data, pages, asText }]` with each file's bytes in base64. `writer: { provider, model }` picks a set-up provider for that lesson.
-
-Other useful routes:
+For attachments add `attachments: [{ name, data, pages, asText }]` with base64 data; `writer: { provider, model }` picks a provider for one lesson.
 
 | Route | What it gives |
 | --- | --- |
-| `GET /api/generations?q=search+terms&kind=video` | The library. `kind` is `audio` or `video`; `status`, `voiceId`, `tag`, `favorite`, `sort`, `limit` and `offset` also filter |
-| `GET /api/generations/:id/audio` | The MP3 |
-| `GET /api/generations/:id/video`, `/poster`, `/captions.srt`, `/captions.vtt` | A video, its still and its captions |
-| `GET /api/generations/:id/notes/:file` | An image or PDF attached to a lesson |
-| `POST /api/videos` | Build a project in `../video/projects/`: `{ project, quality }` |
-| `POST /api/generations/:id/retry`, `/cancel` | Retry a failed or cancelled item, or stop a running one. Cancelling a lesson that waits at its storyboard means "don't render" |
-| `POST /api/generations/:id/approve` | Continue a lesson that waits for you: `{ action: "render", quality }` after its storyboard, `{ action: "scenes" }` after its narration, `{ action: "chapters", outline }` after its outline (with your changes, if any) |
-| `GET /api/generations/:id/outline`, `PUT` the same, `POST …/outline/redo` | A long lesson's outline with which chapters are written; changed while it waits for you; written again with `{ request }` |
-| `POST /api/generations/:id/revise` | Ask for a change: `{ request, scope, attachments, review, chapter }`, with `scope` `{ kind: "lesson" }`, `{ kind: "scene", name }`, `{ kind: "block", id }` or `{ kind: "time", at }`. A lesson in chapters needs `chapter`, except for a time |
-| `GET /api/generations/:id/storyboard` | The storyboard: per scene and block, the narration, marks, stills and problems. `?version=n` for an earlier version's, `?chapter=<id>` for a chapter's |
-| `GET /api/generations/:id/storyboard/:file`, `/narration/:block` | A still the storyboard lists, and a block's narration as a WAV |
-| `GET /api/generations/:id/versions` | A lesson's versions: what made each, what it cost, whether it was built |
-| `GET /api/events` | Every change to the library as it happens, as Server-Sent Events |
-| `GET /api/generations/:id/source` | A lesson's working copy (script, scenes, voice, speed), its `hash`, the version, whether it is a `draft`, and the last checks' reports. `?chapter=<id>` for a chapter's; the source, check, build and version routes all take a chapter the same way |
-| `PUT /api/generations/:id/source` | Save `{ base, script, scenes, voice, speed }` and run the quick check: `{ hash, report }`. 409 when `base` is stale (with the `current` files) or the lesson is busy |
-| `POST /api/generations/:id/check`, `/build`, `/discard` | The full check; the check then a render of the next version (`{ quality }`); the working copy back to the current version |
-| `POST /api/generations/:id/restore` | `{ version }` becomes the next version, at once when its render is kept |
-| `GET /api/generations/:id/versions/:n/source`, `/transcript`, `/chapters.vtt` | A version's files; the built video's words with their times (and its chapters); a long lesson's chapters as WebVTT |
-| `GET /api/generations/:id/files` | Where a lesson's video, captions, poster and project are on disk |
-| `GET /api/settings`, `PATCH /api/settings`, `POST /api/settings/undo` | Settings (never keys), a change as `{ "lesson.defaults": { "quality": "medium" } }`, and Undo |
-| `PUT /api/providers/:id`, `PUT /api/providers/:id/key`, `POST /api/providers/:id/test` | A provider's address (`new` adds one), its key (write-only), and its Test |
-| `POST /api/estimate` | About what a lesson will cost: `{ minutes, notesChars, images, pdfPages, writer }` |
-| `POST /mcp` | The MCP connector over Streamable HTTP |
-| `GET /api/video/projects`, `/api/voices`, `/api/stats`, `/api/health` | Projects, voices, counts, and the engine's state |
+| `GET /api/generations?q=…&kind=video` | The library; also `status`, `voiceId`, `tag`, `favorite`, `sort`, `limit`, `offset` |
+| `GET /api/generations/:id/audio`, `/video`, `/poster`, `/captions.srt`, `/captions.vtt` | Files |
+| `POST /api/videos` | Build a project: `{ project, quality }` |
+| `POST /api/generations/:id/retry`, `/cancel` | Retry or stop. Cancelling a lesson at its storyboard means "don't render" |
+| `POST /api/generations/:id/approve` | `{ action: "render", quality }`, `{ action: "scenes" }` or `{ action: "chapters", outline }` |
+| `GET`/`PUT /api/generations/:id/outline`, `POST …/outline/redo` | A long lesson's outline |
+| `POST /api/generations/:id/revise` | `{ request, scope, attachments, review, chapter }`; `scope` is `{ kind: "lesson" }`, `{ kind: "scene", name }`, `{ kind: "block", id }` or `{ kind: "time", at }` |
+| `GET /api/generations/:id/storyboard`, `/versions`, `/files` | Storyboard (`?version=n`, `?chapter=<id>`), versions, file locations |
+| `GET`/`PUT /api/generations/:id/source` | The working copy and its hash; save `{ base, script, scenes, voice, speed }` with a quick check (409 if stale or busy). Also takes `?chapter=<id>` |
+| `POST /api/generations/:id/check`, `/build`, `/discard`, `/restore` | Full check; check and render the next version; back to current; restore `{ version }` |
+| `GET /api/events` | Every library change, as Server-Sent Events |
+| `GET`/`PATCH /api/settings`, `POST /api/settings/undo` | Settings (never keys) |
+| `PUT /api/providers/:id`, `…/key`, `POST …/test` | A provider's address, key (write-only) and Test |
+| `POST /api/estimate` | About what a lesson will cost |
+| `POST /mcp` | The MCP connector |
+| `GET /api/video/projects`, `/api/voices`, `/api/stats`, `/api/health` | Projects, voices, counts, engine state |
 
 ## Project layout
 
 ```
-engine/
-  kokoro_engine.py  the Kokoro engine: command line tool and the worker the server runs
-  test_engine.py    text splitting tests
-server/
-  index.js        start-up
-  app.js          REST API
-  config.js       reads optional settings
-  kokoro.js       starts the Python worker and talks to it
-  runner.js       serial job queue
-  db.js           SQLite schema, FTS5 index, queries
-  text.js         markdown cleanup
-  test/           node:test suite (fake engine, plus tests against the real one)
-  lessons.js      follows a lesson through the lesson writer, then queues its build or waits at its storyboard
-  versions.js     a lesson's versions: snapshots of its files and storyboard, and its kept renders
-  notes.js        saves the images, PDFs and documents attached to a lesson
-  video.js        runs video/build.py, and makes a poster for a video that has none
-  local.js        refuses requests that do not come from this machine's own pages
-  settings.js     Settings: values, history and Undo, providers, what Claude may change, each step's writer
-  settings-routes.js  the Settings page's routes
-  secrets.js      provider keys in the Keychain or a private file
-  estimate.js     about what a lesson will cost before it is written
-  pdf.js          PDF page counts, text and page selection
-  edits.js        the Edit tab: saving with a stale-copy check, full checks, renders, discard and restore
-shared/
-  limits.js       what a lesson may be given; imported by the server and the page
-  providers.js    the kinds of provider, what each can do until tested, the default writer plan
-  rates.js        what API providers charge, dated, and the cost of a request
-author/
-  jobs.js         its job queue: submit, get and cancel, a few lessons written at once
-  pipeline.js     write (or the narration, then the scenes), revise, check, fix, polish
-  claude.js       runs `claude -p` and reads its answer
-  writers/        one interface over every provider: anthropic.js, openai.js (any OpenAI-compatible
-                  address), ollama.js, the plan each job carries (plan.js), and the Test (probe.js)
-  prompts.js      fills the templates in prompts/
-  prompts/        the prompt templates and the worked example
-  test/           tests with a fake claude, a fake check and fake providers
-mcp/
-  server.js       the MCP tools, resources and prompt, over the dashboard's API
-  stdio.js        the connector for the desktop app and Claude Code (npm run mcp)
-  http.js         the connector at /mcp, inside the dashboard
-  files.js        which files a lesson may be given by path
-  test/           an MCP client against the dashboard with the fake writer
-client/
-  src/App.jsx     state, polling, drag and drop, the Lessons and Audio tabs
-  src/components/ Header, LessonPanel, Composer, VideoPanel, Library, Drawer, Toasts,
-                  Workspace (a lesson, full width), RevisionBar, Storyboard, EditTab with CodeEditor
-                  (CodeMirror 6), History (versions and diffs), Transcript and Settings
-  src/**/*.test.* vitest tests
-scripts/
-  bakeoff.js      the writer bake-off (npm run bakeoff)
-  mcp-pack.js     the desktop extension (npm run mcp:pack)
+engine/    the Kokoro engine: command line tool and the worker the server runs
+server/    REST API, SQLite and search, job queue, notes, settings and keys, video builds, edits
+shared/    limits, provider kinds and rates, used by the server and the page
+author/    the lesson writer: jobs, pipeline, claude.js, writers/ (one per provider), prompts/
+mcp/       the connector: tools, stdio and HTTP transports, which files it may read
+client/    the page (React, Vite, CodeMirror), with vitest tests beside the code
+scripts/   bakeoff.js and mcp-pack.js
 ```
 
 ## Troubleshooting
 
-- **"Voice engine offline" in the header.** The red banner says why. Usually `../install.sh` hasn't been run, or was interrupted; run it again. The page reconnects by itself.
-- **"Loading voice model…" for a long time.** The first start after a reboot takes 5 to 10 seconds. Longer than a minute means the worker is stuck; restart the server and look at its terminal output.
+- **"Voice engine offline".** The banner says why. Usually `../install.sh` wasn't run or was interrupted; run it again. The page reconnects by itself.
+- **"Loading voice model…" for over a minute.** Restart the server and read its terminal output.
 - **A Japanese voice is greyed out.** Run `../install.sh --japanese`.
-- **A word is mispronounced (English voices only).** Write it as a link whose target is its phonemes between slashes, for example `[Kokoro](/kˈOkəɹO/)`. These hints are kept even when markdown is stripped.
-- **`npm install` fails on `better-sqlite3`.** It normally installs a prebuilt binary. If your Node version has none, install Xcode command line tools (`xcode-select --install`) so it can compile, or switch to an LTS Node.
-- **Port already in use.** Set `PORT=8788` in your `.env`.
-- **"This server only answers on localhost."** Open the dashboard as `http://localhost:8787` or `http://127.0.0.1:8787`, not through another hostname or a tunnel.
-- **"… has no key" or "has not passed its Test" when making a lesson.** The writer chosen for that step is not set up. Add its key or run its Test in Settings → Lesson writer, or choose another writer.
-- **A provider's Test fails with "Could not reach".** For a model on this Mac, start Ollama or the server first and check the address in Settings.
-- **Claude says the dashboard is not running.** The MCP connector needs `npm start` (or `npm run app`) running, or `TTS_MCP_AUTOSTART=1`.
-- **A lesson fails at "Writing the lesson".** The card shows the writer's message. With Claude Code, run `claude -p "hi"` in the terminal you start the dashboard from: if `claude` is not found, set `TTS_CLAUDE_BIN` in `.env` to the path `which claude` prints; if it asks you to sign in, run `claude` and sign in. If Claude Code reports a usage limit, press **Retry** once it resets.
-- **A lesson fails after its fixes.** The writer could not get a scene to run in three rounds (`TTS_AUTHOR_FIXES`). The card shows the last error. **Retry** carries on from the files already written, with fresh rounds; or look at the error in the **Edit** tab, fix it there and render.
-- **A lesson stopped at its spending cap.** Raise the cap in **Settings → Costs** and press **Retry**. It carries on, counting what it already spent.
-- **A scene fails with "Operation not permitted", or the error says the sandbox may have stopped it.** Either the scene tried something scenes may not do (read a file outside its project, reach the network), which **Ask for a change** or the Edit tab fixes, or rendering on this Mac needs something the sandbox does not allow yet. To tell which, stop the dashboard, start it with `VIDEO_SANDBOX=report npm start` and press **Retry**. If it works now, run `python3 ../video/sandbox_probe.py` and see [the video README](../video/README.md#when-a-project-fails-only-inside-the-sandbox).
-- **"No manimgl at …" or "No Kokoro Python at …".** The video toolchain or the voice is not set up; see the [main README](../README.md#install), steps 4 and 5.
-- **Started from a login item or another app, the dashboard cannot find `claude`, LaTeX or ffmpeg.** Such programs get a short PATH. The build adds `/Library/TeX/texbin`, `/opt/homebrew/bin` and `/usr/local/bin` itself; for Claude Code, set `TTS_CLAUDE_BIN` to its full path.
-- **Rendering is slow.** The first render after installing fills the scene cache (fonts, LaTeX, shaders), and 4K takes far longer than 1080p. Use **480p, quickest** while you try things; a rebuild renders only the scenes that changed.
+- **`npm install` fails on `better-sqlite3`.** Run `xcode-select --install`, or use an LTS Node.
+- **Port in use.** Set `PORT=8788` in `.env`.
+- **"This server only answers on localhost."** Open it as `http://localhost:8787` or `http://127.0.0.1:8787`, not through another hostname or a tunnel.
+- **"… has no key" or "has not passed its Test".** The writer for that step isn't set up. Add its key or run its Test in Settings, or choose another.
+- **A provider's Test says "Could not reach".** Start Ollama or the local server and check its address.
+- **Claude says the dashboard isn't running.** Run `npm start`, or set `TTS_MCP_AUTOSTART=1`.
+- **A lesson fails at "Writing the lesson".** Run `claude -p "hi"` in the terminal you start the dashboard from. If `claude` isn't found, set `TTS_CLAUDE_BIN` to the path `which claude` prints; if it asks you to sign in, do. After a usage limit, **Retry** once it resets.
+- **A lesson fails after its fixes.** The scenes didn't run in three rounds. **Retry** gives fresh rounds, or fix the error in the **Edit** tab.
+- **A lesson stopped at its cap.** Raise it in **Settings → Costs** and **Retry**.
+- **"Operation not permitted", or "the sandbox may have stopped it".** Either the scene tried something scenes can't do, which **Ask for a change** or Edit fixes, or rendering needs a rule the sandbox lacks. Start with `VIDEO_SANDBOX=report npm start` and **Retry**; if that works, run `python3 ../video/sandbox_probe.py` and see [the video README](../video/README.md#when-a-project-fails-only-inside-the-sandbox).
+- **"No manimgl at …" or "No Kokoro Python at …".** Run `../install.sh` again.
+- **Started from a login item, it can't find `claude`, LaTeX or ffmpeg.** Such programs get a short PATH. The build adds the usual TeX and Homebrew folders; set `TTS_CLAUDE_BIN` for Claude Code.
+- **Rendering is slow.** The first render fills the scene cache, and 4K takes far longer than 1080p. Use **480p, quickest** while you try things.
