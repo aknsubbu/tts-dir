@@ -581,6 +581,7 @@ del { background: var(--err-soft); color: var(--err); border-radius: 3px; }
 .swatch { width: 30px; height: 30px; border-radius: 50%; border: 3px solid transparent; padding: 0; }
 .swatch.on { border-color: var(--text); }
 .glyph-input { width: 6em; }
+.pin-cap { width: 9em; }
 .pin-field { width: 7em; letter-spacing: 0.3em; text-align: center; }
 .field-error { color: var(--err); font-size: 14px; }
 .check { display: flex; align-items: center; gap: 8px; font-size: 14px; }

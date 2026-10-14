@@ -247,6 +247,24 @@ describe('managing a profile', () => {
     expect(api.patchProfile).toHaveBeenCalledWith('r1', { canUseHostKeys: true });
   });
 
+  it('the Owner sets a monthly limit on what a profile spends with the host, shown beside what it has used', async () => {
+    api.patchProfile.mockResolvedValue({});
+    api.allProfiles.mockResolvedValue({ profiles: [OWNER, { ...ROBIN, canUseHostClaude: true, hostCapUsd: null, hostSpentUsd: 1.5 }] });
+    render(<ManageProfile profile={OWNER} onClose={() => {}} onChanged={() => {}} toast={toast} />);
+    const cap = await screen.findByLabelText(/Most Robin may spend with them each month/);
+    expect(screen.getByText(/Used this month: \$1\.50/)).toBeTruthy();
+    expect(screen.getByText(/With no limit they can spend without one/)).toBeTruthy();
+    fireEvent.change(cap, { target: { value: '5' } });
+    fireEvent.blur(cap);
+    await waitFor(() => expect(api.patchProfile).toHaveBeenCalledWith('r1', { hostCapUsd: 5 }));
+  });
+
+  it('shows no limit field for a profile that borrows nothing from the host', async () => {
+    render(<ManageProfile profile={OWNER} onClose={() => {}} onChanged={() => {}} toast={toast} />);
+    await screen.findByText('Robin');
+    expect(screen.queryByLabelText(/may spend with them/)).toBeNull();
+  });
+
   it('only the Owner has the Owner’s section; a profile that is not the Owner can delete itself', async () => {
     render(<ManageProfile profile={ROBIN} onClose={() => {}} onChanged={() => {}} toast={toast} />);
     expect(screen.queryByText('Other profiles')).toBeNull();

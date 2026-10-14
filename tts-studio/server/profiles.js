@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS profiles (
   can_use_host_claude  INTEGER NOT NULL DEFAULT 0,
   can_use_host_keys    INTEGER NOT NULL DEFAULT 0,
   require_pin_to_add   INTEGER NOT NULL DEFAULT 0,
+  host_cap_usd         REAL,
   created_at           INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sessions (
@@ -76,6 +77,8 @@ const newId = () => crypto.randomBytes(8).toString('hex');
 /** `getMax` is read on every use, so TTS_MAX_PROFILES can change with a restart of nothing but the .env. */
 export function createProfiles({ db, dataDir, getMax = () => 5, now = () => Date.now(), ipMax = IP_MAX_ATTEMPTS }) {
   db.exec(SCHEMA);
+  // What the Owner lets a profile spend a month with the host's Claude sign-in and keys: null is no limit.
+  if (!db.prepare('PRAGMA table_info(profiles)').all().some((c) => c.name === 'host_cap_usd')) db.exec('ALTER TABLE profiles ADD COLUMN host_cap_usd REAL');
 
   // ---------- the pepper ----------
   const pepperFile = path.join(dataDir, 'pin-pepper');
@@ -111,6 +114,7 @@ export function createProfiles({ db, dataDir, getMax = () => 5, now = () => Date
       canUseHostClaude: !!r.can_use_host_claude,
       canUseHostKeys: !!r.can_use_host_keys,
       requirePinToAdd: !!r.require_pin_to_add,
+      hostCapUsd: r.host_cap_usd ?? null,
       createdAt: r.created_at,
     };
   const raw = (id) => db.prepare('SELECT * FROM profiles WHERE id = ?').get(String(id ?? ''));
@@ -161,6 +165,14 @@ export function createProfiles({ db, dataDir, getMax = () => 5, now = () => Date
     if (!row.is_owner) {
       if (patch.canUseHostClaude !== undefined) sets.can_use_host_claude = patch.canUseHostClaude ? 1 : 0;
       if (patch.canUseHostKeys !== undefined) sets.can_use_host_keys = patch.canUseHostKeys ? 1 : 0;
+    }
+    if (patch.hostCapUsd !== undefined && !row.is_owner) {
+      if (patch.hostCapUsd === null || patch.hostCapUsd === '') sets.host_cap_usd = null;
+      else {
+        const n = Number(patch.hostCapUsd);
+        if (!Number.isFinite(n) || n < 0 || n > 10_000) throw new ProfileError('The limit is dollars a month, from 0 to 10,000, or empty for no limit.');
+        sets.host_cap_usd = Math.round(n * 100) / 100;
+      }
     }
     if (patch.requirePinToAdd !== undefined && row.is_owner) {
       if (patch.requirePinToAdd && !row.pin_hash) throw new ProfileError('Set a PIN on the Owner profile first.', 409);

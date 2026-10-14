@@ -74,7 +74,7 @@ export function createVersions({ store, getConfig }) {
    * Make the next version of lesson `id` from its project's files as they are now.
    * `source` says what made it: written, edited, revised or restored. Returns its number.
    */
-  function snapshot(id, { source, note = null, usage = null, costUsd = null, check = null, details = null }) {
+  function snapshot(id, { source, note = null, usage = null, costUsd = null, hostCostUsd = null, check = null, details = null }) {
     const row = store.getRaw(id);
     const root = row && projectRoot(row);
     if (!root || !fs.existsSync(root)) throw new Error('This lesson has no project folder to take a version of.');
@@ -93,6 +93,7 @@ export function createVersions({ store, getConfig }) {
       note,
       created_at: createdAt,
       cost_usd: costUsd,
+      host_usd: hostCostUsd,
       usage_json: usage ? JSON.stringify(usage) : null,
       check_ok: check ? (check.ok ? 1 : 0) : null,
       warnings: check?.warnings ?? null,

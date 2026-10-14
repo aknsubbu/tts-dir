@@ -224,9 +224,12 @@ export function createStore(dataDir) {
   // What a revision asked for and changed, on versions made before it existed too.
   const versionColumns = new Set(db.prepare('PRAGMA table_info(versions)').all().map((c) => c.name));
   if (!versionColumns.has('details_json')) db.exec('ALTER TABLE versions ADD COLUMN details_json TEXT');
+  // How much of a version's cost the host's own Claude sign-in or keys paid, which the Owner may limit per profile.
+  if (!versionColumns.has('host_usd')) db.exec('ALTER TABLE versions ADD COLUMN host_usd REAL');
+  if (!db.prepare('PRAGMA table_info(cost_ledger)').all().some((c) => c.name === 'host_usd')) db.exec('ALTER TABLE cost_ledger ADD COLUMN host_usd REAL');
   const versionStmts = {
-    insert: db.prepare(`INSERT INTO versions (generation_id, n, source, note, created_at, cost_usd, usage_json, check_ok, warnings, details_json)
-                        VALUES (@generation_id, @n, @source, @note, @created_at, @cost_usd, @usage_json, @check_ok, @warnings, @details_json)`),
+    insert: db.prepare(`INSERT INTO versions (generation_id, n, source, note, created_at, cost_usd, host_usd, usage_json, check_ok, warnings, details_json)
+                        VALUES (@generation_id, @n, @source, @note, @created_at, @cost_usd, @host_usd, @usage_json, @check_ok, @warnings, @details_json)`),
     list: db.prepare('SELECT * FROM versions WHERE generation_id = ? ORDER BY n DESC'),
     get: db.prepare('SELECT * FROM versions WHERE generation_id = ? AND n = ?'),
     next: db.prepare('SELECT COALESCE(MAX(n), 0) + 1 AS n FROM versions WHERE generation_id = ?'),
@@ -235,7 +238,7 @@ export function createStore(dataDir) {
   const VERSION_FIELDS = new Set(['built_at', 'quality', 'duration_sec', 'video_bytes', 'render_kept', 'note']);
   const versions = {
     next: (id) => versionStmts.next.get(id).n,
-    insert: (row) => versionStmts.insert.run({ note: null, cost_usd: null, usage_json: null, check_ok: null, warnings: null, details_json: null, ...row }),
+    insert: (row) => versionStmts.insert.run({ note: null, cost_usd: null, host_usd: null, usage_json: null, check_ok: null, warnings: null, details_json: null, ...row }),
     list: (id) => versionStmts.list.all(id),
     get: (id, n) => versionStmts.get.get(id, n),
     update(id, n, patch) {
@@ -326,13 +329,16 @@ export function createStore(dataDir) {
       .get(profileId, month.getTime());
     const gone = db.prepare('SELECT COALESCE(SUM(cost_usd), 0) AS usd FROM cost_ledger WHERE profile_id = ? AND created_at >= ?').get(profileId, month.getTime()).usd;
     claude.usd += gone;
+    const hostUsd =
+      db.prepare('SELECT COALESCE(SUM(v.host_usd), 0) AS usd FROM versions v JOIN generations g ON g.id = v.generation_id WHERE g.profile_id = ? AND v.created_at >= ?').get(profileId, month.getTime()).usd +
+      db.prepare('SELECT COALESCE(SUM(host_usd), 0) AS usd FROM cost_ledger WHERE profile_id = ? AND created_at >= ?').get(profileId, month.getTime()).usd;
     const voices = db
       .prepare(
         `SELECT voice_id AS voiceId, COALESCE(MAX(voice_name), voice_id) AS name, COUNT(*) AS n
          FROM generations WHERE profile_id = ? GROUP BY voice_id ORDER BY n DESC`,
       )
       .all(profileId);
-    return { ...done, active, awaiting, voices, costThisMonthUsd: Math.round(claude.usd * 100) / 100 };
+    return { ...done, active, awaiting, voices, costThisMonthUsd: Math.round(claude.usd * 100) / 100, hostSpentThisMonthUsd: Math.round(hostUsd * 100) / 100 };
   }
 
   function tags(profileId) {
@@ -385,7 +391,7 @@ export function createStore(dataDir) {
     remove: (id) => {
       const owner = ownerStmt.get(id)?.profile_id;
       if (owner !== undefined) {
-        db.prepare('INSERT INTO cost_ledger (profile_id, created_at, cost_usd) SELECT ?, created_at, cost_usd FROM versions WHERE generation_id = ? AND cost_usd > 0').run(owner, id);
+        db.prepare('INSERT INTO cost_ledger (profile_id, created_at, cost_usd, host_usd) SELECT ?, created_at, cost_usd, host_usd FROM versions WHERE generation_id = ? AND cost_usd > 0').run(owner, id);
       }
       versions.removeAll(id);
       const n = deleteStmt.run(id).changes;

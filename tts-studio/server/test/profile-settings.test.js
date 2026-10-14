@@ -266,3 +266,47 @@ test("starting a lesson is checked against the profile's own writer, keys and sp
   assert.equal((await owner.call('GET', '/api/settings')).data.costThisMonthUsd, 3);
   assert.equal((await roommate.call('GET', '/api/settings')).data.costThisMonthUsd, 0);
 });
+
+test("the Owner limits what a profile spends with the host's Claude sign-in, and it holds", async () => {
+  const start = (b) => b.call('POST', '/api/lessons', { topic: 'Eigenvalues', minutes: 1 });
+  const room = factory.for(roomId);
+  const spend = (usd, n) => {
+    if (!store.getRaw('rooms-lesson')) store.insert({ id: 'rooms-lesson', profile_id: roomId, kind: 'video', title: 'Room', source_name: null, text: 'x', text_hash: 'r', config_hash: 'r', char_count: 1, word_count: 1, voice_id: 'af_heart', voice_name: null, model_id: 'm', settings_json: '{}', status: 'done', tags: '', created_at: Date.now() });
+    store.versions.insert({ generation_id: 'rooms-lesson', n, source: 'written', created_at: Date.now(), cost_usd: usd, host_usd: usd });
+  };
+  await roommate.call('PATCH', '/api/settings', { costs: { monthCapUsd: null } }); // the profile's own cap is a separate thing
+  // Allowed Claude Code, with a $1 limit: nothing spent yet, so a lesson may start.
+  assert.equal((await roommate.call('PATCH', `/api/profiles/${roomId}`, { hostCapUsd: 1 })).status, 403, 'not theirs to set');
+  assert.equal((await owner.call('PATCH', `/api/profiles/${roomId}`, { canUseHostClaude: true, hostCapUsd: '1.234' })).data.profile.hostCapUsd, 1.23);
+  assert.equal((await owner.call('PATCH', `/api/profiles/${roomId}`, { hostCapUsd: -5 })).status, 400);
+  assert.equal((await owner.call('PATCH', `/api/profiles/${roomId}`, { hostCapUsd: 'lots' })).status, 400);
+  await roommate.call('PATCH', '/api/settings', { 'writer.page': { mode: 'one', all: { provider: 'claude-code', model: '' } } });
+  assert.equal((await start(roommate)).status, 201);
+  assert.equal(store.stats(roomId).hostSpentThisMonthUsd, 0);
+  // Spent past it: a lesson on the host's sign-in is refused, with what to do instead.
+  spend(1.5, 1);
+  assert.equal(store.stats(roomId).hostSpentThisMonthUsd, 1.5);
+  const refused = await start(roommate);
+  assert.equal(refused.status, 400);
+  assert.match(refused.data.error, /\$1\.23 a month, set by the Owner\) is used up/);
+  const page = (await roommate.call('GET', '/api/settings')).data;
+  assert.deepEqual(page.hostAllowance, { capUsd: 1.23, spentUsd: 1.5 });
+  assert.equal((await owner.call('GET', '/api/settings')).data.hostAllowance, undefined, 'the Owner has no limit');
+  const seen = (await owner.call('GET', '/api/profiles/all')).data.profiles.find((p) => p.id === roomId);
+  assert.deepEqual([seen.hostCapUsd, seen.hostSpentUsd], [1.23, 1.5]);
+  // A writer that is not the host's is not limited: a model on this Mac, or a key of their own.
+  await roommate.call('PATCH', '/api/settings', { 'writer.page': { all: { provider: 'ollama', model: 'qwen3' } } });
+  pass(room, 'ollama', 'qwen3');
+  assert.equal((await start(roommate)).status, 201);
+  await roommate.call('PATCH', '/api/settings', { 'writer.page': { all: { provider: 'claude-code', model: '' } } });
+  // Raising it, or removing it, lets them start again. The lesson's own cap is what is left of the allowance.
+  assert.equal((await owner.call('PATCH', `/api/profiles/${roomId}`, { hostCapUsd: 5 })).status, 200);
+  assert.equal((await start(roommate)).status, 201);
+  assert.equal((await room.hostAllowance(room.resolveWriter('page'), 1.5)).leftUsd, 3.5);
+  assert.equal((await owner.call('PATCH', `/api/profiles/${roomId}`, { hostCapUsd: null })).data.profile.hostCapUsd, null);
+  assert.equal(await room.hostAllowance(room.resolveWriter('page'), 99), null, 'no limit set');
+  // A deleted lesson's host spending stays counted.
+  store.remove('rooms-lesson');
+  assert.equal(store.stats(roomId).hostSpentThisMonthUsd, 1.5);
+  await owner.call('PATCH', `/api/profiles/${roomId}`, { canUseHostClaude: false });
+});

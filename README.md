@@ -75,7 +75,7 @@ Several people can share one install, each with their own library, settings, spe
 
 - **Profiles.** A name, an avatar (a colour and an initial or emoji) and an optional 4-digit PIN. A padlock marks a locked profile. `TTS_MAX_PROFILES` (default 5) is the most there can be.
 - **The Owner** is the first profile, and your existing library lands there. The Owner can ask for their PIN before anyone adds a profile, reset another profile's PIN (with their own PIN) and decide what each other profile may borrow from this computer.
-- **Borrowing from the host.** The Claude Code sign-in and any API keys in `.env` belong to whoever runs the computer. A new profile may use neither until the Owner ticks **May use this Mac's Claude sign-in** and **May use the host's API keys**. Until then it chooses another writer in **Settings → Lesson writer**, such as a model on this Mac with [Ollama](https://ollama.com), which is free. A profile's own key always comes first.
+- **Borrowing from the host.** The Claude Code sign-in and any API keys in `.env` belong to whoever runs the computer. A new profile may use neither until the Owner ticks **May use this Mac's Claude sign-in** and **May use the host's API keys**. Until then it chooses another writer in **Settings → Lesson writer**, such as a model on this Mac with [Ollama](https://ollama.com), which is free. A profile's own key always comes first. The Owner can also set a **monthly limit** on what each profile spends with the host's sign-in and keys; once it is used up, lessons on those are refused (with what to do instead) while a key of their own or a model on this Mac still works. Nothing limits the Owner's own use.
 - **Forgot a PIN?** The Owner can reset it. For the Owner's own, run `npm run profiles -- reset-pin <name>` in `tts-studio/` on the computer that hosts this. Whoever can run that can read the data folder anyway, which is why it needs no PIN.
 - **Lockout.** Five wrong PINs lock that profile for 30 seconds, then for twice as long each time, up to 15 minutes. One device also has a limit across all profiles.
 - **Claude.** A connector token (**Settings → Connect Claude**) makes Claude act as exactly one profile. See [Connect Claude](#connect-claude).
@@ -86,7 +86,7 @@ Several people can share one install, each with their own library, settings, spe
 - There is no HTTPS on a LAN. On a network you do not trust, anyone on it can read what you send, PIN included.
 - Anyone who can use the computer that runs it, or read its `tts-studio/data/` folder, can read everything in it, whatever the PINs say.
 - Four digits is 10,000 guesses. Lockout slows guessing; it does not make it hard.
-- A connector token works whether or not the profile has a PIN, so keep tokens private. Setting a profile's first PIN revokes its tokens.
+- A connector token works whether or not the profile has a PIN, so keep tokens private. It can do only what Claude's tools do (start, follow, change and approve lessons, read them, and change the settings Claude is allowed): it cannot delete, edit files, touch keys or providers, or manage people. It stops working after 90 days unused, when someone else resets the profile's PIN, when the profile gets its first PIN, and when you revoke it.
 - **Deleting a profile** deletes its lessons, settings, keys and tokens, and asks for its PIN (or the Owner's) and its name.
 
 **Back up** by copying `tts-studio/data/` (the database holds profiles and everyone's settings; `pin-pepper` and `secrets.json` are in there too, keep them private) and `video/projects/`. A Docker volume backup covers it. Projects stay in `video/projects/<topic>-<id>/`; who owns one is recorded in the database only.
@@ -111,7 +111,7 @@ claude mcp add --transport http narrated-proofs http://localhost:8787/mcp
 
 **Settings → Connect Claude** shows this with your port, plus the entry for the desktop app. The tools are listed in the [dashboard README](tts-studio/README.md#make-lessons-from-claude-the-mcp-connector).
 
-**With more than one profile** Claude has to be connected to one of them. In **Settings → Connect Claude** press **Make a token**: it is shown once, and the page then shows the same commands with `--header "Authorization: Bearer <token>"` (or `NARRATED_PROOFS_TOKEN` for the stdio connector) filled in. Everything Claude does then belongs to that profile, under that profile's Claude settings, and **Revoke** stops it at once. A token cannot manage profiles or tokens. The packaged `.mcpb` bundle cannot carry a token, so add `NARRATED_PROOFS_TOKEN` to the desktop app's config entry instead.
+**With more than one profile** Claude has to be connected to one of them. In **Settings → Connect Claude** press **Make a token**: it is shown once, and the page then shows the same commands with `--header "Authorization: Bearer <token>"` (or `NARRATED_PROOFS_TOKEN` for the stdio connector) filled in. Everything Claude does then belongs to that profile, under that profile's Claude settings, and **Revoke** stops it at once. A token cannot manage profiles or tokens. The packaged `.mcpb` bundle asks for the token when you install it (leave it empty if one person uses the dashboard with no PIN).
 
 ## Docker
 
@@ -208,7 +208,6 @@ No test calls a model; fake providers stand in. Tests that load the real voice o
 - **A sandbox outside macOS** (bubblewrap, or a render container) for Docker.
 - **GPU rendering in Docker** (Vulkan over Direct3D 12 on WSL 2, or an NVIDIA image).
 - **HTTPS for a LAN.** Profiles and PINs run over plain HTTP, so they are privacy between housemates, not security.
-- **An Owner-level cap on host-key spend.** A profile the Owner lets use the host's keys sets its own spending caps.
 - **Fair scheduling between profiles.** One render runs at a time for everyone; a card shows **Queued behind N**.
 - **Sharing a lesson between profiles**, and avatar pictures.
 - **Word-level sync outside English.** Only English voices report word timings.

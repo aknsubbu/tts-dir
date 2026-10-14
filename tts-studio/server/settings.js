@@ -645,6 +645,24 @@ export function createSettings({ db, getConfig, secrets, profiles = null }) {
       };
     }
 
+    /**
+     * The Owner's monthly limit on what this profile spends with the host's Claude sign-in and keys, applied to a
+     * writer that uses them. Returns null when nothing limits it (the Owner, no limit set, or a writer on its own
+     * key or on this Mac), else { capUsd, leftUsd }. `spentUsd` is what it has spent that way this month.
+     */
+    async function hostAllowance(writer, spentUsd) {
+      const me = profiles?.get(pid);
+      if (!me || me.isOwner || me.hostCapUsd == null) return null;
+      let usesHost = false;
+      for (const step of Object.values(writer.steps)) {
+        if (step.kind === 'claude-code') usesHost = true;
+        else if (step.kind !== 'ollama' && step.kind !== 'local' && (await lookupKey(step.provider).catch(() => ({}))).from === 'env') usesHost = true;
+      }
+      if (!usesHost) return null;
+      return { capUsd: me.hostCapUsd, leftUsd: Math.max(0, Math.round((me.hostCapUsd - (spentUsd || 0)) * 100) / 100) };
+    }
+    const hostAllowanceMessage = (a) => `Your allowance for what this computer’s Claude sign-in and keys cost ($${a.capUsd.toFixed(2)} a month, set by the Owner) is used up for this month. Choose a writer with a key of your own, or a model on this Mac, in Settings → Lesson writer, or ask the Owner to raise it.`;
+
     /** The first problem that stops this profile writing a lesson now, or null. */
     async function writerProblem() {
       try {
@@ -657,6 +675,8 @@ export function createSettings({ db, getConfig, secrets, profiles = null }) {
 
     return {
       perms,
+      hostAllowance,
+      hostAllowanceMessage,
       keyFor: lookupKey,
       providerIds,
       writerProblem,

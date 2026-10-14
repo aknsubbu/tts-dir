@@ -843,6 +843,8 @@ export function totalUsage(requests) {
     cacheWriteTokens: sum('cacheWriteTokens'),
     outputTokens: sum('outputTokens'),
     costUsd: Math.round(sum('costUsd') * 1000) / 1000,
+    // What part of it the computer's own sign-in or keys paid for: the Owner can limit that for other profiles.
+    hostCostUsd: Math.round(requests.reduce((n, r) => n + (r.hostFunded ? Number(r.costUsd) || 0 : 0), 0) * 1000) / 1000,
   };
 }
 

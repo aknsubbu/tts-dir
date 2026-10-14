@@ -61,6 +61,12 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
       if (left <= 0) throw new Error(`This month's lessons have reached the monthly cap of $${monthCapUsd.toFixed(2)}. Raise it in Settings → Costs, then press Retry.`);
       capUsd = capUsd == null ? left : Math.min(capUsd, left);
     }
+    // The Owner's limit on what this profile spends with the host's own sign-in and keys stops a lesson that would go past it.
+    const allowance = await mine.hostAllowance(writer, store.stats(profileId).hostSpentThisMonthUsd);
+    if (allowance) {
+      if (allowance.leftUsd <= 0) throw new Error(`${mine.hostAllowanceMessage(allowance)} Then press Retry.`);
+      capUsd = capUsd == null ? allowance.leftUsd : Math.min(capUsd, allowance.leftUsd);
+    }
     return { writer, capUsd };
   }
 
@@ -143,6 +149,7 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
         ...settings.lesson,
         phase: 'outline',
         outlineCostUsd: Math.round(((settings.lesson.outlineCostUsd || 0) + (result.costUsd || 0)) * 1000) / 1000,
+        outlineHostUsd: Math.round(((settings.lesson.outlineHostUsd || 0) + (result.usage?.hostCostUsd || 0)) * 1000) / 1000,
         chapters: o.chapters.map(({ id, title, minutes: m }) => ({ id, title, minutes: m })),
       };
       return store.update(id, {
@@ -157,7 +164,7 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
     if (usage) delete usage.requests;
     if (result.phase === 'script') {
       // The narration waits for the person; the scenes are written once it is approved.
-      settings.lesson = { ...settings.lesson, phase: 'script', scriptCostUsd: result.costUsd ?? 0, writtenBy: result.writtenBy || [] };
+      settings.lesson = { ...settings.lesson, phase: 'script', scriptCostUsd: result.costUsd ?? 0, scriptHostUsd: result.usage?.hostCostUsd ?? 0, writtenBy: result.writtenBy || [] };
       return store.update(id, {
         ...(settings.lesson.ownTitle ? {} : { title: String(result.title || row.title).slice(0, 120) }),
         text: script,
@@ -171,6 +178,8 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
     // A narration approved first, or an outline, cost something too.
     const before = (settings.lesson.scriptCostUsd || 0) + (settings.lesson.outlineCostUsd || 0);
     const costUsd = result.costUsd == null ? null : Math.round((result.costUsd + before) * 1000) / 1000;
+    // And how much of it the host's own sign-in or keys paid, for the Owner's limit on others.
+    const hostCostUsd = Math.round(((result.usage?.hostCostUsd || 0) + (settings.lesson.scriptHostUsd || 0) + (settings.lesson.outlineHostUsd || 0)) * 1000) / 1000;
     Object.assign(settings, {
       scenes: result.scenes,
       lesson: {
@@ -202,6 +211,7 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
         source: 'written',
         usage: result.usage || null,
         costUsd,
+        hostCostUsd,
         check: { ok: true, warnings: result.warnings?.length || 0 },
       });
     } catch (e) {
@@ -319,6 +329,7 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
         note: watch.request,
         usage: result.usage || null,
         costUsd: result.costUsd ?? null,
+        hostCostUsd: result.usage?.hostCostUsd ?? null,
         check: { ok: true, warnings: result.warnings?.length || 0 },
         details: {
           request: watch.request,

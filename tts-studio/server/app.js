@@ -106,7 +106,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
   });
 
   // Choosing who is watching comes before everything else but this health check.
-  const people = profileRoutes({ profiles, removeProfileData: async (profileId) => {
+  const people = profileRoutes({ profiles, hostSpent: (id) => store.stats(id).hostSpentThisMonthUsd, removeProfileData: async (profileId) => {
       await removeProfileLessons(profileId);
       await settings?.purge(profileId); // its settings, history and keys go with it
     },
@@ -334,6 +334,8 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
         if (override && !mine.provider(override.provider)) throw new SettingsError(`There is no provider called “${override.provider}”.`);
         await mine.checkWriter(mine.resolveWriter(origin, override));
         const { monthCapUsd } = mine.costs();
+        const allowance = await mine.hostAllowance(mine.resolveWriter(origin, override), store.stats(req.profile.id).hostSpentThisMonthUsd);
+        if (allowance && allowance.leftUsd <= 0) throw new SettingsError(mine.hostAllowanceMessage(allowance));
         if (monthCapUsd != null && store.stats(req.profile.id).costThisMonthUsd >= monthCapUsd) {
           throw new SettingsError(`This month's lessons have reached the monthly cap of $${monthCapUsd.toFixed(2)}. Raise it in Settings → Costs, or choose a free writer.`);
         }

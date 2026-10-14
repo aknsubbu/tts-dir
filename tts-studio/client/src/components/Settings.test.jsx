@@ -152,6 +152,14 @@ describe('Settings', () => {
     await waitFor(() => expect(api.revokeConnectorToken).toHaveBeenCalledWith('t1'));
   });
 
+  it('tells a profile its allowance for the host’s sign-in and keys', async () => {
+    api.settings.mockResolvedValue({ ...DATA(), hostAllowance: { capUsd: 5, spentUsd: 1.5 } });
+    await show('costs');
+    expect(await screen.findByText(/The Owner lets you spend up to/)).toBeTruthy();
+    expect(screen.getByText('$5.00')).toBeTruthy();
+    expect(screen.getByText('$1.50')).toBeTruthy();
+  });
+
   it('sets the spending caps', async () => {
     await show('costs');
     expect(screen.getByText('$4.20')).toBeTruthy();

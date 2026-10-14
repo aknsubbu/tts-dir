@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { api } from '../api.js';
+import { fmtUsd } from '../utils.js';
 
 /**
  * People who share this install: the "Who's watching?" screen (#who), the PIN prompt, the menu in
@@ -417,6 +418,24 @@ function OtherProfile({ p, you, reload, toast }) {
       <div className="row"><Avatar profile={p} /><strong>{p.name}</strong>{p.locked && <span className="badge"><Padlock /> PIN</span>}</div>
       <Toggle checked={p.canUseHostClaude} onChange={(v) => patch({ canUseHostClaude: v })}>May use this Mac’s Claude sign-in</Toggle>
       <Toggle checked={p.canUseHostKeys} onChange={(v) => patch({ canUseHostKeys: v })}>May use the host’s API keys (the ones in .env)</Toggle>
+      {(p.canUseHostClaude || p.canUseHostKeys) && (
+        <div className="field" key={p.hostCapUsd ?? 'none'}>
+          <label htmlFor={`cap-${p.id}`}>Most {p.name} may spend with them each month (dollars)</label>
+          <input
+            id={`cap-${p.id}`}
+            className="input pin-cap"
+            type="number"
+            min="0"
+            step="0.5"
+            placeholder="No limit"
+            defaultValue={p.hostCapUsd ?? ''}
+            onBlur={(e) => {
+              if (e.target.value !== String(p.hostCapUsd ?? '')) patch({ hostCapUsd: e.target.value === '' ? null : Number(e.target.value) });
+            }}
+          />
+          <span className="hint">Used this month: {fmtUsd(p.hostSpentUsd ?? 0)}.{p.hostCapUsd == null ? ' With no limit they can spend without one.' : ''}</span>
+        </div>
+      )}
       {p.locked && !resetOpen && <button className="link" onClick={() => setResetOpen(true)}>Reset {p.name}’s PIN…</button>}
       {resetOpen && (
         you.locked ? (

@@ -565,6 +565,11 @@ export default function Settings({ profile = null, section: asked, voices, onClo
             <section className="block">
               <h3>Spending</h3>
               <p><strong>{fmtUsd(data.costThisMonthUsd)}</strong> on lessons this month, from every version written.</p>
+              {data.hostAllowance && (
+                <p className="hint">
+                  The Owner lets you spend up to <strong>{fmtUsd(data.hostAllowance.capUsd)}</strong> a month with this computer’s Claude sign-in and keys. You have used <strong>{fmtUsd(data.hostAllowance.spentUsd)}</strong>. A writer with a key of your own, or a model on this Mac, is not counted.
+                </p>
+              )}
               <div className="row wrap">
                 <label className="field">
                   <span>Cap per lesson <Lock env={locks['costs.lessonCapUsd']} /></span>

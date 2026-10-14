@@ -91,19 +91,19 @@ const tile = ({ id, name, avatar, locked, isOwner }) => ({ id, name, avatar, loc
  *   POST   /connector/tokens      { label }  the token, shown once
  *   DELETE /connector/tokens/:id
  *   GET    /profiles/all          the Owner's view: every profile with what it may borrow from the host
- *   PATCH  /profiles/:id          { name?, avatar?, canUseHostClaude?, canUseHostKeys?, requirePinToAdd? }
+ *   PATCH  /profiles/:id          { name?, avatar?, canUseHostClaude?, canUseHostKeys?, hostCapUsd?, requirePinToAdd? }
  *   PUT    /profiles/:id/pin      { pin, currentPin? }
  *   DELETE /profiles/:id/pin      { currentPin? }
  *   DELETE /profiles/:id          { pin?, confirmName }
  */
-export function profileRoutes({ profiles, removeProfileData }) {
+export function profileRoutes({ profiles, removeProfileData, hostSpent = () => 0 }) {
   const open = express.Router(); // before the sign-in check
   const guarded = express.Router(); // after it
 
   const setCookie = (req, res, token) =>
     res.cookie(COOKIE, token, { httpOnly: true, sameSite: 'strict', secure: req.secure, path: '/', maxAge: SESSION_MAX_AGE_S * 1000 });
 
-  const full = (p) => p && { ...tile(p), canUseHostClaude: p.canUseHostClaude, canUseHostKeys: p.canUseHostKeys, requirePinToAdd: p.requirePinToAdd };
+  const full = (p) => p && { ...tile(p), canUseHostClaude: p.canUseHostClaude, canUseHostKeys: p.canUseHostKeys, requirePinToAdd: p.requirePinToAdd, hostCapUsd: p.hostCapUsd };
 
   open.get('/profiles', (req, res) => {
     const all = profiles.list();
@@ -172,7 +172,7 @@ export function profileRoutes({ profiles, removeProfileData }) {
 
   guarded.get('/profiles/all', (req, res) => {
     if (!req.profile.isOwner) throw httpError(403, 'Only the Owner sees that.');
-    res.json({ profiles: profiles.list().map(full) });
+    res.json({ profiles: profiles.list().map((p) => ({ ...full(p), hostSpentUsd: hostSpent(p.id) })) });
   });
 
   guarded.patch(
@@ -181,7 +181,7 @@ export function profileRoutes({ profiles, removeProfileData }) {
       const p = target(req);
       ownerOrSelf(req, p);
       const b = req.body || {};
-      const ownerOnly = ['canUseHostClaude', 'canUseHostKeys', 'requirePinToAdd'];
+      const ownerOnly = ['canUseHostClaude', 'canUseHostKeys', 'requirePinToAdd', 'hostCapUsd'];
       if (ownerOnly.some((k) => b[k] !== undefined) && !req.profile.isOwner) throw httpError(403, 'Only the Owner decides that.');
       res.json({ profile: full(profiles.update(p.id, b)) });
     }),

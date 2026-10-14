@@ -32,11 +32,12 @@ export async function askWriter({ writer, secrets, config, schema, prompt, nonEm
   }
   if (writer.kind === 'claude-code') {
     const out = await askClaude({ ...rest, prompt, schema, nonEmpty, config, model: writer.model });
-    return { ...out, usage: { ...out.usage, provider: 'claude-code', kind: 'claude-code', costKnown: true } };
+    // hostFunded: paid for by the computer's own sign-in or keys, which the Owner may put a limit on for others.
+    return { ...out, usage: { ...out.usage, provider: 'claude-code', kind: 'claude-code', costKnown: true, hostFunded: true } };
   }
   const adapter = ADAPTERS[writer.kind];
   if (!adapter) throw new ProviderError(`There is no way to ask a “${writer.kind}” provider.`);
-  const { key } = writer.kind === 'ollama' || writer.kind === 'local' ? { key: null } : await keyFor(writer.provider, { config, secrets, profileId: writer.profileId, allowEnv: writer.hostKeys === true });
+  const { key, from } = writer.kind === 'ollama' || writer.kind === 'local' ? { key: null, from: null } : await keyFor(writer.provider, { config, secrets, profileId: writer.profileId, allowEnv: writer.hostKeys === true });
 
   const once = async (text) => {
     const out = await adapter({ writer, key, config, schema, prompt: text, ...rest });
@@ -63,6 +64,6 @@ export async function askWriter({ writer, secrets, config, schema, prompt, nonEm
   return {
     answer: out.answer,
     costUsd: cost ?? 0,
-    usage: { ...usage, provider: writer.provider, kind: writer.kind, costUsd: cost ?? 0, costKnown: cost != null },
+    usage: { ...usage, provider: writer.provider, kind: writer.kind, costUsd: cost ?? 0, costKnown: cost != null, hostFunded: from === 'env' },
   };
 }
