@@ -21,6 +21,7 @@ const SCHEMA = {
 let fake, dir, secrets;
 const config = { claudeTimeoutMs: 20_000, keys: {} };
 const writer = (kind, model, extra = {}) => ({
+  profileId: 'p1', // keys are kept per profile: account p-p1-<provider>
   provider: kind,
   kind,
   label: { openai: 'OpenAI', groq: 'Groq', ollama: 'This Mac: Ollama', anthropic: 'Claude API', local: 'This Mac' }[kind],
@@ -38,7 +39,7 @@ before(async () => {
   fake = await fakeProviders({ answer: (seen) => (/ready/.test(seen.text) ? { word: 'ready' } : LESSON) });
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'np-writers-'));
   const keys = { openai: 'sk-test-openai-1234', groq: 'gsk_test_12345678', anthropic: 'sk-ant-test-1234' };
-  secrets = { get: async (id) => keys[id] || null, kind: 'file' };
+  secrets = { get: async (account) => keys[account.replace(/^p-p1-/, '')] || null, kind: 'file' };
 });
 after(async () => {
   await fake.close();

@@ -63,6 +63,11 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
   profiles ||= createProfiles({ db: store.db, dataDir: store.dataDir, getMax: () => getConfig().maxProfiles || 5 });
   api.use(attachProfile(profiles));
 
+  /** A waiting job shows how many are ahead of it: the render queue is shared by every profile. */
+  const withQueue = (g) => {
+    const n = g && runner.ahead?.(g.id);
+    return n ? { ...g, queuedBehind: n } : g;
+  };
   /** A lesson of the signed-in profile, or null: someone else's is the same as none, so it answers 404 like a missing one. */
   const findOwned = (req, id = req.params.id) => store.getRawOwned(id, req.profile.id);
 
@@ -100,7 +105,11 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
   });
 
   // Choosing who is watching comes before everything else but this health check.
-  const people = profileRoutes({ profiles, removeProfileData: (profileId) => removeProfileLessons(profileId) });
+  const people = profileRoutes({ profiles, removeProfileData: async (profileId) => {
+      await removeProfileLessons(profileId);
+      await settings?.purge(profileId); // its settings, history and keys go with it
+    },
+  });
   api.use(people.open);
   api.use(requireProfile);
   api.use(people.guarded);
@@ -150,7 +159,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
     const send = (id) => {
       due.delete(id);
       if (!stillMe()) return res.end();
-      const g = store.getOwned(id, req.profile.id);
+      const g = withQueue(store.getOwned(id, req.profile.id));
       res.write(`event: generation\ndata: ${JSON.stringify(g || { id, deleted: true })}\n\n`);
     };
     // Only changes to this profile's own lessons are sent down this connection.
@@ -170,8 +179,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
 
   api.get('/generations', (req, res) => {
     const { q, status, voiceId, favorite, tag, sort, kind } = req.query;
-    res.json(
-      store.list(req.profile.id, {
+    const page = store.list(req.profile.id, {
         q: q ? String(q) : '',
         status: status ? String(status) : '',
         voiceId: voiceId ? String(voiceId) : '',
@@ -181,14 +189,14 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
         sort: sort ? String(sort) : '',
         limit: Number(req.query.limit) || 30,
         offset: Number(req.query.offset) || 0,
-      }),
-    );
+    });
+    res.json({ ...page, items: page.items.map(withQueue) });
   });
 
   api.get('/generations/:id', (req, res) => {
     const g = store.getOwned(req.params.id, req.profile.id, { withText: true });
     if (!g) throw httpError(404, 'Not found');
-    res.json(g);
+    res.json(withQueue(g));
   });
 
   api.post('/generations', (req, res) => {
@@ -295,7 +303,8 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
     const b = req.body || {};
     // `profile` is the name older MCP clients send for this.
     const origin = (b.origin || b.profile) === 'claude' || actorOf(req) === 'claude' ? 'claude' : 'page';
-    const defaults = settings ? settings.lessonDefaults(origin) : { minutes: 2, quality: 'default', review: getConfig().lessonReview || 'render', voiceId: getConfig().defaultVoiceId };
+    const mine = settings ? settings.for(req.profile.id) : null;
+    const defaults = mine ? mine.lessonDefaults(origin) : { minutes: 2, quality: 'default', review: getConfig().lessonReview || 'render', voiceId: getConfig().defaultVoiceId };
     const topic = String(b.topic || '').replace(/\s+/g, ' ').trim().slice(0, 200);
     const goal = String(b.goal || '').trim().slice(0, 2000);
     const notes = String(b.notes || '').trim();
@@ -321,10 +330,10 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
     const override = b.writer?.provider ? { provider: String(b.writer.provider).slice(0, 40), model: String(b.writer.model || '').slice(0, 200) } : null;
     if (settings) {
       try {
-        if (override && !settings.provider(override.provider)) throw new SettingsError(`There is no provider called “${override.provider}”.`);
-        await settings.checkWriter(settings.resolveWriter(origin, override));
-        const { monthCapUsd } = settings.costs();
-        if (monthCapUsd != null && store.houseSpendThisMonth() >= monthCapUsd) {
+        if (override && !mine.provider(override.provider)) throw new SettingsError(`There is no provider called “${override.provider}”.`);
+        await mine.checkWriter(mine.resolveWriter(origin, override));
+        const { monthCapUsd } = mine.costs();
+        if (monthCapUsd != null && store.stats(req.profile.id).costThisMonthUsd >= monthCapUsd) {
           throw new SettingsError(`This month's lessons have reached the monthly cap of $${monthCapUsd.toFixed(2)}. Raise it in Settings → Costs, or choose a free writer.`);
         }
       } catch (e) {
@@ -855,7 +864,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
     res.type('text/plain; charset=utf-8').send(row.text);
   });
 
-  if (settings) api.use(settingsRoutes({ settings, secrets, getConfig, store }));
+  if (settings) api.use(settingsRoutes({ settings, secrets, getConfig, store, profiles }));
 
   api.use((req, res) => res.status(404).json({ error: 'Unknown API route' }));
   app.use('/api', api);

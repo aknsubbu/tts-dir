@@ -60,7 +60,8 @@ const IDLE_OPEN_MS = 90 * 24 * 3600_000;
 export const SESSION_MAX_AGE_S = IDLE_OPEN_MS / 1000;
 
 const sha = (v) => crypto.createHash('sha256').update(v).digest('hex');
-const newId = () => crypto.randomBytes(9).toString('base64url');
+// Lowercase hex, because a profile's id is part of the name its keys are kept under.
+const newId = () => crypto.randomBytes(8).toString('hex');
 
 /** `getMax` is read on every use, so TTS_MAX_PROFILES can change with a restart of nothing but the .env. */
 export function createProfiles({ db, dataDir, getMax = () => 5, now = () => Date.now(), ipMax = IP_MAX_ATTEMPTS }) {

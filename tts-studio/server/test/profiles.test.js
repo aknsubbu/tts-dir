@@ -409,7 +409,7 @@ const NOT_A_LESSON = new Set([
   'GET /health', 'GET /voices', 'GET /voices/:id/preview', 'GET /stats', 'GET /events', 'GET /tags', 'GET /generations', 'POST /generations',
   'GET /video/projects', 'POST /videos', 'POST /lessons',
   'GET /profiles', 'POST /profiles', 'GET /session', 'POST /session', 'DELETE /session', 'PATCH /profiles/:id', 'PUT /profiles/:id/pin', 'DELETE /profiles/:id/pin', 'DELETE /profiles/:id',
-  // Settings, providers and keys are the house's until Phase 3 gives each profile its own.
+  // Settings, providers and keys are each profile's own: see profile-settings.test.js.
   'GET /settings', 'PATCH /settings', 'POST /settings/undo', 'GET /settings/history', 'PUT /providers/:id', 'DELETE /providers/:id', 'PUT /providers/:id/key',
   'DELETE /providers/:id/key', 'POST /providers/:id/test', 'GET /providers/:id/models', 'POST /estimate', 'GET /connect',
 ]);
@@ -493,17 +493,13 @@ test('spending is counted per profile', async () => {
   store.versions.insert({ generation_id: A_LESSON, n: 2, source: 'revised', created_at: Date.now(), cost_usd: 1.25 });
   assert.equal((await alice.call('GET', '/api/stats')).data.costThisMonthUsd, 1.25);
   assert.equal((await bob.call('GET', '/api/stats')).data.costThisMonthUsd, 0);
-  // The monthly cap is the house's one number, so it is held against everyone's spend together.
-  store.versions.insert({ generation_id: B_LESSON, n: 1, source: 'written', created_at: Date.now(), cost_usd: 0.5 });
-  assert.equal((await bob.call('GET', '/api/stats')).data.costThisMonthUsd, 0.5);
-  assert.equal(store.houseSpendThisMonth(), 1.75);
   // Deleting a lesson does not give its cost back.
   store.insert(lessonRow(aId, 'costly', 'Costly', {}, 'ledgers'));
   store.versions.insert({ generation_id: 'costly', n: 1, source: 'written', created_at: Date.now(), cost_usd: 2 });
-  assert.equal(store.houseSpendThisMonth(), 3.75);
-  store.remove('costly');
-  assert.equal(store.houseSpendThisMonth(), 3.75);
   assert.equal((await alice.call('GET', '/api/stats')).data.costThisMonthUsd, 3.25);
+  store.remove('costly');
+  assert.equal((await alice.call('GET', '/api/stats')).data.costThisMonthUsd, 3.25);
+  assert.equal((await bob.call('GET', '/api/stats')).data.costThisMonthUsd, 0);
 });
 
 test('a live-updates stream ends when its session does', async () => {
@@ -563,4 +559,25 @@ test('the .db file keeps no PIN and no session token in clear', () => {
   const peek = new Database(path.join(dir, 'data', 'studio.db'), { readonly: true });
   assert.ok(peek.prepare('SELECT COUNT(*) AS n FROM sessions').get().n >= 0);
   peek.close();
+});
+
+test('a waiting job says how many are ahead of it, whoever they belong to', async () => {
+  const { createRunner } = await import('../runner.js');
+  const slow = { start: async () => {}, stop() {}, info: () => ({ status: 'ready' }), catalog: () => ({ voices: [], languages: [] }), synthesize: () => new Promise(() => {}) };
+  const runner = createRunner({ store, engine: slow });
+  const seen = [];
+  store.events.on('change', (id) => seen.push(id));
+  for (const [id, owner] of [['q1', aId], ['q2', aId], ['q3', 'other']]) store.insert(lessonRow(owner, id, id, { kind: 'audio', status: 'queued', source_name: null }));
+  runner.enqueue('q1'); // starts
+  runner.enqueue('q2');
+  runner.enqueue('q3');
+  assert.equal(runner.ahead('q1'), null, 'running, not waiting');
+  assert.equal(runner.ahead('q2'), 1);
+  assert.equal(runner.ahead('q3'), 2);
+  runner.cancel('q2');
+  assert.equal(runner.ahead('q3'), 1);
+  assert.ok(seen.includes('q3'), 'the job whose place moved is announced');
+  runner.cancel('q1');
+  runner.cancel('q3');
+  for (const id of ['q1', 'q2', 'q3']) store.remove(id);
 });

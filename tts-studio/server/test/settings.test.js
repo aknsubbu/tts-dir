@@ -6,10 +6,11 @@ import path from 'node:path';
 import { createStore } from '../db.js';
 import { createSecrets, describe as describeKey, keyFor } from '../secrets.js';
 import { createSettings, DEFAULTS } from '../settings.js';
+import { createProfiles } from '../profiles.js';
 import { createApp } from '../app.js';
 import { estimateLesson } from '../estimate.js';
 
-let dir, store, secrets, settings, config, server, base;
+let dir, store, secrets, factory, settings, profiles, owner, config, server, base;
 
 const baseConfig = () => ({
   port: 0,
@@ -34,9 +35,12 @@ before(async () => {
   store = createStore(dir);
   config = baseConfig();
   secrets = createSecrets({ dataDir: dir, useKeychain: false });
-  settings = createSettings({ db: store.db, getConfig: () => config, secrets });
+  profiles = createProfiles({ db: store.db, dataDir: dir });
+  owner = profiles.owner().id;
+  factory = createSettings({ db: store.db, getConfig: () => config, secrets, profiles });
+  settings = factory.for(owner); // the Owner's, which is whose page these tests drive
   const engine = { info: () => ({ status: 'ready' }), catalog: () => ({ voices: [], languages: [] }), start: async () => {} };
-  const app = createApp({ getConfig: () => config, store, runner: { enqueue() {}, cancel: () => false }, engine, lessons: null, settings, secrets });
+  const app = createApp({ getConfig: () => config, store, runner: { enqueue() {}, cancel: () => false }, engine, lessons: null, settings: factory, secrets, profiles });
   await new Promise((resolve) => {
     server = app.listen(0, '127.0.0.1', resolve);
   });
@@ -162,14 +166,19 @@ test('"This Mac" providers stay on this Mac; others are added under Other', asyn
   assert.equal(settings.provider(id), null);
 });
 
-test('a key is stored privately, never shown again, and the environment wins', async () => {
+test("a key is stored privately, never shown again, and a profile's own comes before the host's", async () => {
   const shown = await settings.setKey('openai', 'sk-test-abcdefgh7c1e');
   assert.deepEqual(shown, { set: true, hint: '…7c1e' });
   const file = path.join(dir, 'secrets.json');
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
-  assert.equal((await keyFor('openai', { config, secrets })).from, 'file');
+  assert.equal((await keyFor('openai', { config, secrets, profileId: owner })).from, 'file');
+  // A profile's own key comes first; the host's environment key only when none is set and it is allowed.
   config.keys = { openai: 'sk-from-env-0000' };
-  assert.deepEqual(await keyFor('openai', { config, secrets }), { key: 'sk-from-env-0000', from: 'env' });
+  assert.equal((await keyFor('openai', { config, secrets, profileId: owner, allowEnv: true })).from, 'file');
+  await settings.removeKey('openai');
+  assert.deepEqual(await keyFor('openai', { config, secrets, profileId: owner, allowEnv: true }), { key: 'sk-from-env-0000', from: 'env' });
+  assert.deepEqual(await keyFor('openai', { config, secrets, profileId: owner }), { key: null, from: null });
+  await settings.setKey('openai', 'sk-test-abcdefgh7c1e');
   await assert.rejects(settings.setKey('openai', 'has "quotes" in it'), /does not look like an API key/);
   assert.deepEqual(describeKey(null), { set: false, hint: null });
   assert.match(settings.history()[0].summary, /OpenAI: key added \(…7c1e\)/);
@@ -217,7 +226,7 @@ test('the settings API never sends a key, and gives Claude its limits', async ()
   const { data } = await j('GET', '/api/settings');
   assert.ok(!JSON.stringify(data).includes('gsk_secretvalue'), 'the key never comes back');
   const groq = data.providers.find((p) => p.id === 'groq');
-  assert.deepEqual(groq.key, { set: true, hint: '…9xyz', from: 'file', env: 'GROQ_API_KEY' });
+  assert.deepEqual(groq.key, { set: true, hint: '…9xyz', from: 'file', env: 'GROQ_API_KEY', hostKey: false, hostKeyAllowed: true });
   assert.equal(groq.configured, true);
   assert.deepEqual(Object.keys(data.values).sort(), Object.keys(DEFAULTS).filter((k) => k !== 'providers').sort());
 
@@ -242,7 +251,11 @@ test('the Test records what it found, per model', async () => {
   const express = (await import('express')).default;
   const app = express();
   app.use(express.json());
-  app.use('/api', settingsRoutes({ settings, secrets, getConfig: () => config, store, probe: fakeProbe }));
+  app.use((req, res, next) => {
+    req.profile = profiles.owner();
+    next();
+  });
+  app.use('/api', settingsRoutes({ settings: factory, secrets, getConfig: () => config, store, probe: fakeProbe }));
   const srv = await new Promise((resolve) => {
     const s = app.listen(0, '127.0.0.1', () => resolve(s));
   });

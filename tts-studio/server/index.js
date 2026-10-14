@@ -12,6 +12,7 @@ import { createAuthorJobs } from '../author/jobs.js';
 import { createAuthor } from '../author/pipeline.js';
 import { createSecrets } from './secrets.js';
 import { createSettings } from './settings.js';
+import { createProfiles } from './profiles.js';
 import { mcpHandler } from '../mcp/http.js';
 
 const cfg = loadConfig();
@@ -21,12 +22,14 @@ const engine = createEngine({ getConfig: loadConfig });
 const versions = createVersions({ store, getConfig: loadConfig });
 // Provider keys: the macOS Keychain, else a private file in the data folder.
 const secrets = createSecrets({ dataDir: cfg.dataDir, useKeychain: cfg.useKeychain });
-const settings = createSettings({ db: store.db, getConfig: loadConfig, secrets });
+const profiles = createProfiles({ db: store.db, dataDir: cfg.dataDir, getMax: () => loadConfig().maxProfiles });
+const settings = createSettings({ db: store.db, getConfig: loadConfig, secrets, profiles });
+await settings.migrateKeys(); // keys from before profiles go to the Owner
 const runner = createRunner({ store, engine, video: createVideoBuilder({ getConfig: loadConfig }), versions });
 // The lesson writer runs in this process, its jobs alongside the server's.
 const jobs = createAuthorJobs({ getConfig: loadConfig, author: createAuthor({ getConfig: loadConfig, secrets }) });
 const lessons = createLessons({ store, runner, getConfig: loadConfig, jobs, versions, settings });
-const app = createApp({ getConfig: loadConfig, store, runner, engine, lessons, versions, settings, secrets, mcp: mcpHandler(), distDir: path.join(ROOT, 'dist') });
+const app = createApp({ getConfig: loadConfig, store, runner, engine, lessons, versions, settings, secrets, profiles, mcp: mcpHandler(), distDir: path.join(ROOT, 'dist') });
 
 /** This machine's IPv4 addresses on the networks it is joined to. */
 function lanAddresses() {
