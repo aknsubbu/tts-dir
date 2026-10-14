@@ -66,6 +66,7 @@ Then type into **Ask for a change** or edit the script and scenes in the **Edit*
 
 - **Update:** `git pull && ./install.sh`. The library upgrades itself on start; copy `tts-studio/data/` first if you want a way back.
 - **Lessons are folders** in `video/projects/<topic>-<id>/`. Edit `script.txt` or `scenes.py` and run `python3 video/check.py <project>` or `python3 video/build.py <project>`, or use the Edit tab.
+- **Use it from another device:** `TTS_LAN=1 npm run app` also serves it on your network, at the address printed on start. Private addresses only, and there is no login, so use a network you trust.
 - **Settings** (the gear) choose the writer, defaults and spending caps. Optional environment settings go in `tts-studio/.env`; see [.env.example](tts-studio/.env.example).
 
 ## Other lesson writers

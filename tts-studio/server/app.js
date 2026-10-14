@@ -51,7 +51,7 @@ function deriveTitle(text) {
 export function createApp({ getConfig, store, runner, engine, lessons, versions = null, settings = null, secrets = null, mcp = null, distDir }) {
   const app = express();
   app.disable('x-powered-by');
-  app.use(localOnly());
+  app.use(localOnly({ lan: () => getConfig().lan }));
   // A lesson may carry photos and PDFs of notes, so that one route takes a larger body.
   const smallJson = express.json({ limit: '8mb' });
   const lessonJson = express.json({ limit: '48mb' });
