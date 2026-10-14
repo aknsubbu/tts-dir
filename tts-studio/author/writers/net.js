@@ -1,4 +1,6 @@
+import dnsCallback from 'node:dns';
 import dns from 'node:dns/promises';
+import { Agent, fetch as undiciFetch } from 'undici';
 import net from 'node:net';
 import { ProviderError } from './common.js';
 
@@ -43,11 +45,30 @@ export async function checkHost(host, { lookup = (h) => dns.lookup(h, { all: tru
   if (found.some((a) => isMetadataAddress(a.address))) throw new ProviderError('That address is not one a provider can be reached at.', 'unreachable');
 }
 
-/** fetch for provider requests: checks where the name leads, and refuses to be sent on somewhere else. */
-export async function guardedFetch(input, init = {}, options = {}) {
-  const url = new URL(typeof input === 'string' ? input : input.url ?? String(input));
-  await checkHost(url.hostname, options);
-  const res = await fetch(input, { ...init, redirect: 'manual' });
-  if (res.status >= 300 && res.status < 400) throw new ProviderError(`${url.hostname} answered with a redirect, which a provider address is not allowed to follow.`, 'unreachable');
-  return res;
+const refused = () => new ProviderError('That address is not one a provider can be reached at.', 'unreachable');
+
+/**
+ * fetch for provider requests. The address a name leads to is checked when the connection is made, by the same
+ * lookup that picks the address connected to, so a name cannot answer one thing to a check and another to the
+ * connection (DNS rebinding). Redirects are not followed. `resolve` can be replaced in tests.
+ */
+export function createGuardedFetch({ resolve = (host, opts, cb) => dnsCallback.lookup(host, opts, cb) } = {}) {
+  const lookup = (hostname, options, cb) => {
+    resolve(hostname, { ...options, all: true }, (err, addresses) => {
+      if (err) return cb(err);
+      if (addresses.some((a) => isMetadataAddress(a.address))) return cb(refused());
+      return options?.all ? cb(null, addresses) : cb(null, addresses[0].address, addresses[0].family);
+    });
+  };
+  const dispatcher = new Agent({ connect: { lookup } });
+  return async (input, init = {}) => {
+    const url = new URL(typeof input === 'string' ? input : input.url ?? String(input));
+    // An address written out has no lookup to hook, and a well-known metadata name is refused outright.
+    if (isMetadataName(url.hostname) || isMetadataAddress(url.hostname)) throw refused();
+    const res = await undiciFetch(input, { ...init, dispatcher, redirect: 'manual' });
+    if (res.status >= 300 && res.status < 400) throw new ProviderError(`${url.hostname} answered with a redirect, which a provider address is not allowed to follow.`, 'unreachable');
+    return res;
+  };
 }
+
+export const guardedFetch = createGuardedFetch();
