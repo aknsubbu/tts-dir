@@ -156,7 +156,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
     res.write('retry: 3000\n\n');
     const due = new Map(); // id -> timer
     // A stream lasts long: it ends when its session does (sign-out, a PIN reset, a deleted profile).
-    const stillMe = () => profiles.whoIs(req.sessionToken).profile?.id === req.profile.id;
+    const stillMe = () => req.credential?.() === req.profile.id;
     const send = (id) => {
       due.delete(id);
       if (!stillMe()) return res.end();

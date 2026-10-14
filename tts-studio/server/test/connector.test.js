@@ -109,7 +109,7 @@ test('a token is Claude: it gets Claude’s limits whatever it claims, and canno
   assert.equal(profiles.list().length, 2);
 });
 
-test('a token that is wrong is refused, even where there is no gate', async () => {
+test('a token that is wrong is refused, with several profiles', async () => {
   const claude = browser();
   assert.equal((await claude.call('GET', '/api/generations', undefined, bearer('npc_nonsense'))).status, 401);
   assert.equal((await claude.call('GET', '/api/generations', undefined, { Authorization: 'Bearer ' })).status, 401);
@@ -133,19 +133,54 @@ test('there is a limit on tokens', async () => {
   assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM connector_tokens WHERE profile_id = ?').get(p.id).n, 0, 'deleting a profile deletes its tokens');
 });
 
-test('the Owner resetting someone’s PIN revokes their tokens; changing your own does not', async () => {
-  assert.equal((await owner.call('PUT', `/api/profiles/${ownerId}/pin`, { pin: '7777' })).status, 200);
-  assert.equal((await robin.call('PUT', `/api/profiles/${robinId}/pin`, { pin: '1234' })).status, 200);
-  assert.equal((await robin.call('PUT', `/api/profiles/${robinId}/pin`, { pin: '4321', currentPin: '1234' })).status, 200);
+test('a PIN that is new, or reset by someone else, revokes Claude’s tokens; changing your own keeps them', async () => {
   const claude = browser();
-  assert.equal((await claude.call('GET', '/api/stats', undefined, bearer(robinToken))).status, 200, 'your own change keeps your connector');
-  assert.equal((await owner.call('PUT', `/api/profiles/${robinId}/pin`, { pin: '5555', ownerPin: '7777' })).status, 200);
-  assert.equal((await claude.call('GET', '/api/stats', undefined, bearer(robinToken))).status, 401, 'a reset by someone else does not');
-  assert.equal((await claude.call('GET', '/api/stats', undefined, bearer(ownerToken))).status, 200);
-  robinToken = (await (async () => { // Robin signs in again with the new PIN and makes a fresh token
-    await robin.call('POST', '/api/session', { profileId: robinId, pin: '5555' });
-    return robin.call('POST', '/api/connector/tokens', { label: 'again' });
-  })()).data.token;
+  const status = async (token) => (await claude.call('GET', '/api/stats', undefined, bearer(token))).status;
+  // A profile with no PIN can be signed in to by anyone, who could make a token: so a first PIN ends them all.
+  assert.equal(await status(ownerToken), 200);
+  const first = await owner.call('PUT', `/api/profiles/${ownerId}/pin`, { pin: '7777' });
+  assert.equal(first.status, 200);
+  assert.equal(first.data.tokensRevoked, 1);
+  assert.equal(await status(ownerToken), 401);
+  ownerToken = (await owner.call('POST', '/api/connector/tokens', { label: 'after the PIN' })).data.token;
+  assert.equal((await robin.call('PUT', `/api/profiles/${robinId}/pin`, { pin: '1234' })).data.tokensRevoked, 1);
+  assert.equal(await status(robinToken), 401);
+  robinToken = (await robin.call('POST', '/api/connector/tokens', { label: 'after the PIN' })).data.token;
+  // Changing a PIN you already had, with the current one, proves who you are: the connector stays.
+  const changed = await robin.call('PUT', `/api/profiles/${robinId}/pin`, { pin: '4321', currentPin: '1234' });
+  assert.equal(changed.data.tokensRevoked, 0);
+  assert.equal(await status(robinToken), 200);
+  // Someone else resetting it is the sign it was lost or known to others.
+  const reset = await owner.call('PUT', `/api/profiles/${robinId}/pin`, { pin: '5555', ownerPin: '7777' });
+  assert.equal(reset.data.tokensRevoked, 1);
+  assert.equal(await status(robinToken), 401);
+  assert.equal(await status(ownerToken), 200);
+  await robin.call('POST', '/api/session', { profileId: robinId, pin: '5555' });
+  robinToken = (await robin.call('POST', '/api/connector/tokens', { label: 'again' })).data.token;
+});
+
+test('an open event stream ends when its token is revoked', async () => {
+  const made = (await owner.call('POST', '/api/connector/tokens', { label: 'streaming' })).data;
+  const res = await fetch(`${base}/api/events`, { headers: bearer(made.token) });
+  assert.equal(res.status, 200);
+  let seen = '';
+  let ended = false;
+  (async () => {
+    try {
+      for await (const chunk of res.body) seen += new TextDecoder().decode(chunk);
+    } catch {
+      /* reset */
+    }
+    ended = true;
+  })();
+  store.update('owners-lesson', { title: 'Owner renamed' });
+  await new Promise((r) => setTimeout(r, 450));
+  assert.match(seen, /owners-lesson/, 'while the token works, its profile’s changes arrive');
+  assert.equal(ended, false);
+  await owner.call('DELETE', `/api/connector/tokens/${made.id}`);
+  store.update('owners-lesson', { title: 'Owner renamed again' });
+  await new Promise((r) => setTimeout(r, 450));
+  assert.equal(ended, true);
 });
 
 test('a token works through the MCP connector, over HTTP and in memory: Claude sees only its profile', async () => {
@@ -195,6 +230,19 @@ test('with one profile and no PIN, /mcp works with no token, as before', async (
   await client.connect(a);
   const r = await client.callTool({ name: 'search_lessons', arguments: {} });
   assert.match(r.content[0].text, /solo-lesson/);
+  // A credential that does not work is refused here too, though there is no gate to enforce: wrong, blank, malformed, revoked.
+  const url = `http://127.0.0.1:${srv.address().port}/api/stats`;
+  const code = async (authorization) => (await fetch(url, { headers: authorization === undefined ? {} : { Authorization: authorization } })).status;
+  assert.equal(await code(undefined), 200);
+  assert.equal(await code('Bearer npc_nonsense'), 401);
+  assert.equal(await code('Bearer '), 401);
+  assert.equal(await code('Bearer'), 401);
+  assert.equal(await code('Bearer a b'), 401);
+  assert.equal(await code('Basic abc'), 200, 'other schemes are not ours');
+  const made = p.createToken(p.owner().id, 'solo');
+  assert.equal(await code(`Bearer ${made.token}`), 200);
+  p.revokeToken(p.owner().id, made.id);
+  assert.equal(await code(`Bearer ${made.token}`), 401, 'revoked means refused, not "the only profile"');
   srv.close();
   s.close();
   fs.rmSync(solo, { recursive: true, force: true });

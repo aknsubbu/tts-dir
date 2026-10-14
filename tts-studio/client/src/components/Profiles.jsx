@@ -474,8 +474,8 @@ export function ManageProfile({ profile, onClose, onChanged, toast }) {
   const pinAction = (fn, done) => async () => {
     setPinError('');
     try {
-      await fn();
-      toast?.({ kind: 'success', text: done });
+      const r = await fn();
+      toast?.({ kind: 'success', text: r?.tokensRevoked ? `${done} Claude’s connector tokens for this profile were revoked: make new ones in Settings → Connect Claude.` : done, ms: r?.tokensRevoked ? 10000 : undefined });
       setCurrent('');
       setNext('');
       reload();

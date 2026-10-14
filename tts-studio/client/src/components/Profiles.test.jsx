@@ -213,6 +213,16 @@ describe('managing a profile', () => {
     expect(api.setPin).toHaveBeenCalledWith('r1', { pin: '1234' });
   });
 
+  it('says when setting a PIN ended Claude’s connector tokens', async () => {
+    api.setPin.mockResolvedValue({ tokensRevoked: 2 });
+    const t = vi.fn();
+    render(<ManageProfile profile={ROBIN} onClose={() => {}} onChanged={() => {}} toast={t} />);
+    await userEvent.type(screen.getByLabelText('PIN'), '1234');
+    await userEvent.click(screen.getByRole('button', { name: 'Set PIN' }));
+    await waitFor(() => expect(t).toHaveBeenCalled());
+    expect(t.mock.calls[0][0].text).toMatch(/connector tokens .* were revoked/);
+  });
+
   it('changing or removing a PIN needs the current one', async () => {
     api.setPin.mockResolvedValue({});
     api.removePin.mockResolvedValue({});

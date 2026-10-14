@@ -17,14 +17,19 @@ export function tokenOf(req) {
 export const attachProfile = (profiles) => (req, res, next) => {
   // A connector token (Claude, through MCP) acts as exactly one profile. One that does not work is
   // refused, not ignored: a revoked token must not fall back to the install's lone profile.
-  const bearer = /^Bearer\s+(\S+)$/i.exec(String(req.headers.authorization || ''));
-  if (bearer) {
-    req.profile = profiles.tokenProfile(bearer[1]);
+  // Anything that says it is a bearer credential must be one that works: a blank or malformed one is no one.
+  const header = String(req.headers.authorization || '');
+  if (/^\s*Bearer\b/i.test(header)) {
+    const token = /^\s*Bearer\s+(\S+)\s*$/i.exec(header)?.[1];
+    req.profile = token ? profiles.tokenProfile(token) : null;
     req.viaConnector = !!req.profile;
     req.implicitProfile = false;
+    // A long-lived stream asks this again: is the credential this request came with still good, and for the same profile?
+    req.credential = () => (token ? profiles.tokenProfile(token)?.id : undefined);
     return next();
   }
   req.sessionToken = tokenOf(req);
+  req.credential = () => profiles.whoIs(req.sessionToken).profile?.id;
   const { profile, implicit } = profiles.whoIs(req.sessionToken);
   req.profile = profile;
   req.implicitProfile = implicit;
@@ -180,10 +185,14 @@ export function profileRoutes({ profiles, removeProfileData }) {
       throw httpError(403, 'Only the Owner can reset another profile\'s PIN.');
     }
   };
-  const afterPinChange = (req, p) => {
+  /**
+   * Other sessions end with a PIN change. Claude's tokens go too when the PIN is new (anyone at the gate could have
+   * made a token while the profile had none) or when someone else reset it; your own change, proved with the
+   * current PIN, keeps them. Returns how many were revoked.
+   */
+  const afterPinChange = (req, p, { adding = false } = {}) => {
     profiles.closeSessionsOf(p.id, req.profile.id === p.id ? req.sessionToken : null);
-    // Someone else resetting a PIN is the sign that it was lost or known to others: Claude's access goes too.
-    if (req.profile.id !== p.id) profiles.revokeTokensOf(p.id);
+    return req.profile.id !== p.id || (adding && !p.locked) ? profiles.revokeTokensOf(p.id) : 0;
   };
 
   guarded.put(
@@ -192,9 +201,9 @@ export function profileRoutes({ profiles, removeProfileData }) {
       const p = target(req);
       authorisePinChange(req, p);
       profiles.setPin(p.id, String((req.body || {}).pin ?? ''));
-      afterPinChange(req, p);
+      const tokensRevoked = afterPinChange(req, p, { adding: true });
       if (req.implicitProfile) setCookie(req, res, profiles.openSession(p.id)); // the PIN is new: stay in
-      res.json({ profile: full(profiles.get(p.id)) });
+      res.json({ profile: full(profiles.get(p.id)), tokensRevoked });
     }),
   );
 
@@ -204,8 +213,8 @@ export function profileRoutes({ profiles, removeProfileData }) {
       const p = target(req);
       authorisePinChange(req, p);
       profiles.clearPin(p.id);
-      afterPinChange(req, p);
-      res.json({ profile: full(profiles.get(p.id)) });
+      const tokensRevoked = afterPinChange(req, p);
+      res.json({ profile: full(profiles.get(p.id)), tokensRevoked });
     }),
   );
 
