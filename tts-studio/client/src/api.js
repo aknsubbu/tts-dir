@@ -86,4 +86,8 @@ export const api = {
   providerModels: (id) => req(`/providers/${encodeURIComponent(id)}/models`),
   estimate: (body) => req('/estimate', { method: 'POST', body }),
   connect: () => req('/connect'),
+  // What lets Claude act as this profile alone. The token itself comes back once, when it is made.
+  connectorTokens: () => req('/connector/tokens'),
+  makeConnectorToken: (label) => req('/connector/tokens', { method: 'POST', body: { label } }),
+  revokeConnectorToken: (id) => req(`/connector/tokens/${id}`, { method: 'DELETE' }),
 };

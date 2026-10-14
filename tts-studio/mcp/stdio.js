@@ -2,6 +2,7 @@
 // The MCP connector over stdio, for the Claude desktop app and Claude Code:
 //   claude mcp add narrated-proofs -- node /path/to/tts-studio/mcp/stdio.js
 // It talks to the running dashboard (NARRATED_PROOFS_URL, default http://127.0.0.1:8787).
+// NARRATED_PROOFS_TOKEN makes it act as one profile (needed when several people share the dashboard).
 // With TTS_MCP_AUTOSTART=1 it starts the dashboard when it finds it not running.
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -27,5 +28,5 @@ async function startDashboard() {
   return false;
 }
 
-const server = createMcpServer({ baseUrl, onDown: startDashboard });
+const server = createMcpServer({ baseUrl, token: process.env.NARRATED_PROOFS_TOKEN || null, onDown: startDashboard });
 await server.connect(new StdioServerTransport());

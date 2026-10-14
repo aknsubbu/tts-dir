@@ -545,6 +545,7 @@ del { background: var(--err-soft); color: var(--err); border-radius: 3px; }
 }
 
 /* ---------- Profiles: who is watching ---------- */
+.tokens { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .banner.notice { background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); }
 .warn-text { color: var(--warn); }
 .avatar { display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; color: #fff; font-weight: 700; flex: none; user-select: none; }

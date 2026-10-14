@@ -39,6 +39,16 @@ CREATE TABLE IF NOT EXISTS sessions (
   last_used   INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_profile ON sessions(profile_id);
+-- What lets Claude (through the MCP connector) act as one profile. Only a hash is kept.
+CREATE TABLE IF NOT EXISTS connector_tokens (
+  id          TEXT PRIMARY KEY,
+  profile_id  TEXT NOT NULL,
+  token_hash  TEXT NOT NULL UNIQUE,
+  label       TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  last_used   INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_tokens_profile ON connector_tokens(profile_id);
 CREATE TABLE IF NOT EXISTS pin_attempts (
   profile_id    TEXT PRIMARY KEY,
   failures      INTEGER NOT NULL DEFAULT 0,
@@ -259,6 +269,33 @@ export function createProfiles({ db, dataDir, getMax = () => 5, now = () => Date
   const closeSessionsOf = (profileId, exceptToken = null) =>
     db.prepare('DELETE FROM sessions WHERE profile_id = ? AND token_hash != ?').run(profileId, exceptToken ? sha(String(exceptToken)) : '');
 
+  // ---------- connector tokens ----------
+  const MAX_TOKENS = 10;
+  /** A new token for a profile. The token itself is returned once, here, and never kept. */
+  function createToken(profileId, label) {
+    if (!raw(profileId)) throw new ProfileError('No such profile.', 404);
+    const clean = String(label ?? '').replace(/\s+/g, ' ').trim().slice(0, 40) || 'Claude';
+    if (db.prepare('SELECT COUNT(*) AS n FROM connector_tokens WHERE profile_id = ?').get(profileId).n >= MAX_TOKENS) {
+      throw new ProfileError(`A profile can have ${MAX_TOKENS} connector tokens. Revoke one first.`, 409);
+    }
+    const token = `npc_${crypto.randomBytes(32).toString('base64url')}`;
+    const id = newId();
+    db.prepare('INSERT INTO connector_tokens (id, profile_id, token_hash, label, created_at) VALUES (?, ?, ?, ?, ?)').run(id, profileId, sha(token), clean, now());
+    return { id, label: clean, token };
+  }
+  const listTokens = (profileId) =>
+    db.prepare('SELECT id, label, created_at, last_used FROM connector_tokens WHERE profile_id = ? ORDER BY created_at').all(profileId).map((t) => ({ id: t.id, label: t.label, createdAt: t.created_at, lastUsed: t.last_used }));
+  const revokeToken = (profileId, id) => db.prepare('DELETE FROM connector_tokens WHERE profile_id = ? AND id = ?').run(profileId, String(id)).changes;
+  const revokeTokensOf = (profileId) => db.prepare('DELETE FROM connector_tokens WHERE profile_id = ?').run(profileId).changes;
+  /** The profile a connector token acts as, or null for one that is unknown or revoked. */
+  function tokenProfile(token) {
+    const hash = sha(String(token ?? ''));
+    const t = db.prepare('SELECT * FROM connector_tokens WHERE token_hash = ?').get(hash);
+    if (!t) return null;
+    if (!t.last_used || now() - t.last_used > 60_000) db.prepare('UPDATE connector_tokens SET last_used = ? WHERE id = ?').run(now(), t.id);
+    return get(t.profile_id);
+  }
+
   // ---------- removing ----------
   /** The database side of deleting a profile. The caller removes its lessons and files first. */
   function remove(id) {
@@ -266,6 +303,7 @@ export function createProfiles({ db, dataDir, getMax = () => 5, now = () => Date
     if (!row) throw new ProfileError('No such profile.', 404);
     if (row.is_owner) throw new ProfileError('The Owner profile cannot be deleted.', 403);
     db.prepare('DELETE FROM sessions WHERE profile_id = ?').run(id);
+    revokeTokensOf(id);
     db.prepare('DELETE FROM pin_attempts WHERE profile_id = ?').run(id);
     db.prepare('DELETE FROM profiles WHERE id = ?').run(id);
   }
@@ -298,6 +336,7 @@ export function createProfiles({ db, dataDir, getMax = () => 5, now = () => Date
   return {
     list, get, owner, create, update, remove, ensureOwner,
     verifyPin, setPin, clearPin, lockedFor,
+    createToken, listTokens, revokeToken, revokeTokensOf, tokenProfile,
     openSession, sessionProfile, closeSession, closeSessionsOf, whoIs,
     max: () => getMax(),
     needsGate: () => {

@@ -15,10 +15,25 @@ export function tokenOf(req) {
 
 /** Sets req.profile from the session cookie (or the lone profile of an install with nothing to choose). */
 export const attachProfile = (profiles) => (req, res, next) => {
+  // A connector token (Claude, through MCP) acts as exactly one profile. One that does not work is
+  // refused, not ignored: a revoked token must not fall back to the install's lone profile.
+  const bearer = /^Bearer\s+(\S+)$/i.exec(String(req.headers.authorization || ''));
+  if (bearer) {
+    req.profile = profiles.tokenProfile(bearer[1]);
+    req.viaConnector = !!req.profile;
+    req.implicitProfile = false;
+    return next();
+  }
   req.sessionToken = tokenOf(req);
   const { profile, implicit } = profiles.whoIs(req.sessionToken);
   req.profile = profile;
   req.implicitProfile = implicit;
+  next();
+};
+
+/** A connector token may use the library and settings as Claude, but never manage people or mint tokens. */
+export const denyConnector = (req, res, next) => {
+  if (req.viaConnector) return res.status(403).json({ error: 'A connector token cannot manage profiles or tokens. That is done in the dashboard.' });
   next();
 };
 
@@ -48,6 +63,9 @@ const tile = ({ id, name, avatar, locked, isOwner }) => ({ id, name, avatar, loc
  *   POST   /session               { profileId, pin? }
  *   DELETE /session
  *   POST   /profiles              { name, avatar?, pin?, ownerPin? }   public, like Add profile on the gate
+ *   GET    /connector/tokens      this profile's connector tokens (never the tokens themselves)
+ *   POST   /connector/tokens      { label }  the token, shown once
+ *   DELETE /connector/tokens/:id
  *   GET    /profiles/all          the Owner's view: every profile with what it may borrow from the host
  *   PATCH  /profiles/:id          { name?, avatar?, canUseHostClaude?, canUseHostKeys?, requirePinToAdd? }
  *   PUT    /profiles/:id/pin      { pin, currentPin? }
@@ -116,6 +134,18 @@ export function profileRoutes({ profiles, removeProfileData }) {
     if (req.profile.id !== p.id && !req.profile.isOwner) throw httpError(403, 'Only the Owner can change another profile.');
   };
 
+  guarded.get('/connector/tokens', (req, res) => res.json({ tokens: profiles.listTokens(req.profile.id) }));
+  guarded.post(
+    '/connector/tokens',
+    wrap(async (req, res) => {
+      res.status(201).json(profiles.createToken(req.profile.id, (req.body || {}).label));
+    }),
+  );
+  guarded.delete('/connector/tokens/:id', (req, res) => {
+    if (!profiles.revokeToken(req.profile.id, req.params.id)) throw httpError(404, 'No such token.');
+    res.json({ ok: true });
+  });
+
   guarded.get('/profiles/all', (req, res) => {
     if (!req.profile.isOwner) throw httpError(403, 'Only the Owner sees that.');
     res.json({ profiles: profiles.list().map(full) });
@@ -150,7 +180,11 @@ export function profileRoutes({ profiles, removeProfileData }) {
       throw httpError(403, 'Only the Owner can reset another profile\'s PIN.');
     }
   };
-  const afterPinChange = (req, p) => profiles.closeSessionsOf(p.id, req.profile.id === p.id ? req.sessionToken : null);
+  const afterPinChange = (req, p) => {
+    profiles.closeSessionsOf(p.id, req.profile.id === p.id ? req.sessionToken : null);
+    // Someone else resetting a PIN is the sign that it was lost or known to others: Claude's access goes too.
+    if (req.profile.id !== p.id) profiles.revokeTokensOf(p.id);
+  };
 
   guarded.put(
     '/profiles/:id/pin',

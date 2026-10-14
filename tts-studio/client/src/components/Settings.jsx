@@ -358,6 +358,9 @@ export default function Settings({ profile = null, section: asked, voices, onClo
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(null);
   const [connect, setConnect] = useState(null);
+  const [tokens, setTokens] = useState(null);
+  const [tokenLabel, setTokenLabel] = useState('Claude');
+  const [fresh, setFresh] = useState(null); // a token just made: shown once, then gone
   const [newProvider, setNewProvider] = useState({ label: '', baseUrl: '' });
 
   useEffect(() => {
@@ -365,7 +368,28 @@ export default function Settings({ profile = null, section: asked, voices, onClo
   }, []);
   useEffect(() => {
     if (asked === 'connect' && !connect) api.connect().then(setConnect).catch(() => {});
-  }, [asked, connect]);
+    if (asked === 'connect' && !tokens) api.connectorTokens().then((r) => setTokens(r.tokens)).catch(() => {});
+  }, [asked, connect, tokens]);
+  const makeToken = async (e) => {
+    e.preventDefault();
+    try {
+      const made = await api.makeConnectorToken(tokenLabel);
+      setFresh(made);
+      setTokens((await api.connectorTokens()).tokens);
+    } catch (err) {
+      toast?.({ kind: 'error', text: err.message });
+    }
+  };
+  const revokeToken = async (t) => {
+    try {
+      await api.revokeConnectorToken(t.id);
+      if (fresh?.id === t.id) setFresh(null);
+      setTokens((await api.connectorTokens()).tokens);
+      toast?.({ kind: 'success', text: `Revoked “${t.label}”. Claude can no longer use it.` });
+    } catch (err) {
+      toast?.({ kind: 'error', text: err.message });
+    }
+  };
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === 'Escape' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) onClose();
@@ -585,6 +609,35 @@ export default function Settings({ profile = null, section: asked, voices, onClo
             <p className="hint">Claude can start a lesson from a conversation, follow its stages, search your library and fetch the video. Lessons it starts use the settings under Claude (MCP).</p>
             {!connect ? <p className="hint">Loading…</p> : (
               <>
+                <h4>{profile ? `Connect Claude as ${profile.name}` : 'Connect Claude to you'}</h4>
+                <p className="hint">A token lets Claude act as this profile and no one else: it sees only this library, and uses this profile’s Claude settings. It is needed when more than one person uses this dashboard, and it works whether or not the profile has a PIN, so keep it private. Revoke it here and it stops working at once.</p>
+                {tokens && tokens.length > 0 && (
+                  <ul className="tokens">
+                    {tokens.map((t) => (
+                      <li key={t.id} className="row">
+                        <strong>{t.label}</strong>
+                        <span className="hint">made {timeAgo(t.createdAt)}, {t.lastUsed ? `last used ${timeAgo(t.lastUsed)}` : 'not used yet'}</span>
+                        <span className="grow" />
+                        <button className="link danger" onClick={() => revokeToken(t)} aria-label={`Revoke ${t.label}`}>Revoke</button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <form className="row" onSubmit={makeToken}>
+                  <input className="input" aria-label="What this token is for" maxLength={40} value={tokenLabel} onChange={(e) => setTokenLabel(e.target.value)} />
+                  <button className="btn">Make a token</button>
+                </form>
+                {fresh && (
+                  <div className="banner notice" role="status">
+                    <p><strong>Copy this now. It is shown once and cannot be found again.</strong></p>
+                    <Copyable label="Claude Code over HTTP:" text={connect.http.claudeCodeToken.replace('<token>', fresh.token)} />
+                    <Copyable label="Or started by Claude Code itself:" text={connect.stdio.claudeCodeToken.replace('<token>', fresh.token)} />
+                    <Copyable label={`Claude desktop app, in ${connect.desktop.configFile}:`} text={JSON.stringify(connect.desktop.entryToken, null, 2).replace('<token>', fresh.token)} />
+                    <button className="link" onClick={() => setFresh(null)}>I have copied it</button>
+                  </div>
+                )}
+                <h4>Without a token</h4>
+                <p className="hint">If only one person uses this dashboard and it has no PIN, these work as they are:</p>
                 <h4>Claude Code</h4>
                 <Copyable label="Over HTTP, while this dashboard is running:" text={connect.http.claudeCode} />
                 <Copyable label="Or started by Claude Code itself:" text={connect.stdio.claudeCode} />

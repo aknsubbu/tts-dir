@@ -13,7 +13,8 @@ export function mcpHandler() {
       return;
     }
     const port = req.socket.localPort;
-    const server = createMcpServer({ baseUrl: `http://127.0.0.1:${port}`, linkBase: `http://localhost:${port}` });
+    const bearer = /^Bearer\s+(\S+)$/i.exec(String(req.headers.authorization || ''));
+    const server = createMcpServer({ token: bearer?.[1] || null, baseUrl: `http://127.0.0.1:${port}`, linkBase: `http://localhost:${port}` });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => {
       transport.close().catch(() => {});

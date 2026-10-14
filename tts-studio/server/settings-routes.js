@@ -9,7 +9,8 @@ import { ROOT } from './config.js';
 
 /** Changes sent with this header come from Claude, through the MCP connector, and get Claude's limits. */
 export const ACTOR_HEADER = 'x-narrated-proofs-actor';
-export const actorOf = (req) => (String(req.get(ACTOR_HEADER) || '').toLowerCase() === 'claude' ? 'claude' : 'you');
+// Anything that came with a connector token is Claude's, whatever it says about itself.
+export const actorOf = (req) => (req.viaConnector || String(req.get(ACTOR_HEADER) || '').toLowerCase() === 'claude' ? 'claude' : 'you');
 
 const asHttp = (e) => {
   if (e instanceof SettingsError || e instanceof SecretError) return Object.assign(new Error(e.message), { status: e.status || 400 });
@@ -191,8 +192,10 @@ export function settingsRoutes({ settings, secrets, getConfig, store, profiles =
     const node = process.execPath;
     const env = port === 8787 ? {} : { NARRATED_PROOFS_URL: `http://127.0.0.1:${port}` };
     res.json({
-      http: { url, claudeCode: `claude mcp add --transport http narrated-proofs ${url}` },
+      // With a token (Settings → Connect Claude makes one) the connector acts as this profile alone.
+      http: { url, claudeCode: `claude mcp add --transport http narrated-proofs ${url}`, claudeCodeToken: `claude mcp add --transport http narrated-proofs ${url} --header "Authorization: Bearer <token>"` },
       stdio: {
+        claudeCodeToken: `claude mcp add narrated-proofs${Object.entries({ ...env, NARRATED_PROOFS_TOKEN: '<token>' }).map(([k, v]) => ` -e ${k}=${v}`).join('')} -- "${node}" "${stdio}"`,
         command: node,
         args: [stdio],
         claudeCode: `claude mcp add narrated-proofs${Object.entries(env).map(([k, v]) => ` -e ${k}=${v}`).join('')} -- "${node}" "${stdio}"`,
@@ -200,6 +203,7 @@ export function settingsRoutes({ settings, secrets, getConfig, store, profiles =
       desktop: {
         configFile: '~/Library/Application Support/Claude/claude_desktop_config.json',
         entry: { mcpServers: { 'narrated-proofs': { command: node, args: [stdio], ...(Object.keys(env).length ? { env } : {}) } } },
+        entryToken: { mcpServers: { 'narrated-proofs': { command: node, args: [stdio], env: { ...env, NARRATED_PROOFS_TOKEN: '<token>' } } } },
         pack: 'npm run mcp:pack',
       },
     });
