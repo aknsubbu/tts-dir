@@ -70,7 +70,7 @@ test('writes a project from a brief, asking Claude with no tools', async () => {
   assert.match(flag('--system-prompt'), /class ChainRule\(VoiceoverScene, Scene\)/, 'the worked example is filled in');
   assert.match(asked.stdin, /<topic>\nSlope of a line\n<\/topic>/);
   assert.ok(asked.stdin.includes('rise over run\n$1 {{notes}} stay as typed'), 'notes reach Claude exactly as typed');
-  assert.match(asked.stdin, /140 to 180 words/);
+  assert.match(asked.stdin, /130 to 170 words/);
   assert.equal(asked.nested, false, 'the nesting marker of a surrounding Claude Code session is not passed on');
   assert.ok(!asked.cwd.includes('tts-studio/author'), 'runs outside the project folder');
   // What was asked and answered is kept beside the project.
@@ -292,7 +292,7 @@ test('prompt templates fill completely', () => {
   assert.doesNotMatch(guide(), /\{\{/);
   assert.doesNotMatch(lessonPrompt({ ...BRIEF, notes: '', goal: '' }), /\{\{/);
   assert.match(lessonPrompt({ ...BRIEF, notes: '' }), /<my_notes>\n\(none given\)/);
-  assert.match(lessonPrompt({ ...BRIEF, minutes: 5 }), /about 5 minutes of video\. That is 700 to 910 words/);
+  assert.match(lessonPrompt({ ...BRIEF, minutes: 5 }), /about 5 minutes of video\. That is 640 to 830 words/);
   assert.throws(() => fill('Hello {{name}} and {{other}}', { name: 'x' }), /wants \{\{other\}\}/);
   assert.equal(fill('{{a}}', { a: '$& {{a}}' }), '$& {{a}}', 'values are inserted as they are');
 });

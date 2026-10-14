@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'prompts');
-export const WORDS_PER_MINUTE = 165; // Kokoro at speed 1, pauses included
+export const WORDS_PER_MINUTE = 150; // Kokoro at speed 1, pauses included
 const read = (name) => fs.readFileSync(path.join(DIR, name), 'utf8').trim();
 
 /** Replace every {{name}} in a template. A name with no value is a bug in the caller, so it throws. */

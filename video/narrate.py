@@ -20,7 +20,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ENGINE_DIR = HERE.parent / "tts-studio" / "engine"
-CACHE_VERSION = 1  # bump when a change here or in the engine alters the audio or the timings
+CACHE_VERSION = 2  # bump when a change here or in the engine alters the audio or the timings
 
 _BLOCK = re.compile(r"^\[([A-Za-z0-9_-]+)\]\s*$")
 _MARK = re.compile(r"""<mark\s+name\s*=\s*["']([A-Za-z0-9_-]+)["']\s*/>""")
@@ -219,14 +219,14 @@ def narrate(root, synthesize, force=False, log=print):
 def kokoro_synthesizer():
     """A synthesize() for narrate() backed by the real engine, loaded on first use."""
     sys.path.insert(0, str(ENGINE_DIR))
-    from kokoro_engine import Engine
+    from kokoro_engine import BLOCK_TAIL, Engine
 
     engine = None
 
     def synthesize(text, out, voice, speed):
         nonlocal engine
         engine = engine or Engine()
-        return engine.synthesize(text, out, voice=voice, speed=speed, fmt="WAV")  # never MP3: encoder padding shifts timing
+        return engine.synthesize(text, out, voice=voice, speed=speed, fmt="WAV", tail=BLOCK_TAIL)  # never MP3: encoder padding shifts timing
 
     return synthesize
 

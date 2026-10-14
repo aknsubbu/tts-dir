@@ -115,7 +115,7 @@ Check one chapter with `python3 check.py projects/backprop-1/chapters/02-chain`.
 
 ### Writing a script
 
-Each `[block-id]` line starts a block; the text under it is spoken. `#` lines are comments, and a blank line is a longer pause.
+Each `[block-id]` line starts a block; the text under it is spoken. `#` lines are comments. The voice rests after each sentence (a little longer after `?` and `…`), longer at a blank line, and for half a second at the end of a block, so sections do not run together.
 
 ```
 [intro]
