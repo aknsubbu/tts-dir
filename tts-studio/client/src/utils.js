@@ -166,6 +166,7 @@ export const SETTINGS_SECTIONS = [
   ['costs', 'Costs'],
   ['connect', 'Connect Claude'],
   ['storage', 'Storage'],
+  ['house', 'House'], // the Owner's: how many people share this install
 ];
 
 /** The Settings page's section, from "#settings/<section>", or null when Settings is not open. */
@@ -176,7 +177,7 @@ export function parseSettingsRoute(hash) {
 }
 
 /** What the address shows, kept in step with the back and forward buttons. */
-function useHash(parse) {
+export function useHash(parse) {
   const [route, setRoute] = useState(() => parse(window.location.hash));
   useEffect(() => {
     const onHash = () => setRoute(parse(window.location.hash));
@@ -204,3 +205,7 @@ export function stillAt(blocks, index, t) {
   }
   return null;
 }
+
+/** The pages about people: "#who" is the "Who's watching?" screen, "#profile" manages the signed-in profile. */
+export const parsePeopleRoute = (hash) => (hash === '#who' ? 'who' : hash === '#profile' ? 'profile' : null);
+export const usePeopleRoute = () => useHash(parsePeopleRoute);

@@ -48,6 +48,7 @@ const tile = ({ id, name, avatar, locked, isOwner }) => ({ id, name, avatar, loc
  *   POST   /session               { profileId, pin? }
  *   DELETE /session
  *   POST   /profiles              { name, avatar?, pin?, ownerPin? }   public, like Add profile on the gate
+ *   GET    /profiles/all          the Owner's view: every profile with what it may borrow from the host
  *   PATCH  /profiles/:id          { name?, avatar?, canUseHostClaude?, canUseHostKeys?, requirePinToAdd? }
  *   PUT    /profiles/:id/pin      { pin, currentPin? }
  *   DELETE /profiles/:id/pin      { currentPin? }
@@ -114,6 +115,11 @@ export function profileRoutes({ profiles, removeProfileData }) {
   const ownerOrSelf = (req, p) => {
     if (req.profile.id !== p.id && !req.profile.isOwner) throw httpError(403, 'Only the Owner can change another profile.');
   };
+
+  guarded.get('/profiles/all', (req, res) => {
+    if (!req.profile.isOwner) throw httpError(403, 'Only the Owner sees that.');
+    res.json({ profiles: profiles.list().map(full) });
+  });
 
   guarded.patch(
     '/profiles/:id',

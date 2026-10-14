@@ -10,7 +10,7 @@ export function StatusBadge({ g }) {
   if (needsYou(g)) return <span className="badge awaiting">{g.stage || 'Needs you'}</span>;
   const label =
     g.status === 'queued'
-      ? 'Queued'
+      ? g.queuedBehind ? `Queued behind ${g.queuedBehind}` : 'Queued'
       : g.status === 'processing'
         ? g.stage // a lesson Claude is still writing says what it is doing
           ? g.stage
@@ -149,7 +149,7 @@ function Card({ g, selected, onOpen, onFavorite, onDelete, onCancel, onRetry }) 
 }
 
 export default function Library({
-  mode, list, filters, setFilters, stats, tags, selectedId,
+  profile, mode, list, filters, setFilters, stats, tags, selectedId,
   onOpen, onFavorite, onDelete, onCancel, onRetry, onMore,
 }) {
   const set = (patch) => setFilters({ ...filters, ...patch });
@@ -256,8 +256,8 @@ export default function Library({
                 </>
               ) : (
                 <>
-                  <h2>No lessons yet</h2>
-                  <p>Name a topic on the left and drop in your notes, photos of handwritten pages or PDFs. The finished video lands here.</p>
+                  <h2>{profile ? `Welcome, ${profile.name}` : 'No lessons yet'}</h2>
+                  <p>{profile ? 'This library is yours alone: no one else on this computer sees your lessons, settings or keys. ' : ''}Name a topic on the left and drop in your notes, photos of handwritten pages or PDFs. The finished video lands here.</p>
                 </>
               )}
             </>

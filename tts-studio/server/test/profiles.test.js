@@ -408,7 +408,7 @@ const NOT_A_LESSON = new Set([
   'GET /', // the page itself, when the client is not built
   'GET /health', 'GET /voices', 'GET /voices/:id/preview', 'GET /stats', 'GET /events', 'GET /tags', 'GET /generations', 'POST /generations',
   'GET /video/projects', 'POST /videos', 'POST /lessons',
-  'GET /profiles', 'POST /profiles', 'GET /session', 'POST /session', 'DELETE /session', 'PATCH /profiles/:id', 'PUT /profiles/:id/pin', 'DELETE /profiles/:id/pin', 'DELETE /profiles/:id',
+  'GET /profiles', 'GET /profiles/all', 'POST /profiles', 'GET /session', 'POST /session', 'DELETE /session', 'PATCH /profiles/:id', 'PUT /profiles/:id/pin', 'DELETE /profiles/:id/pin', 'DELETE /profiles/:id',
   // Settings, providers and keys are each profile's own: see profile-settings.test.js.
   'GET /settings', 'PATCH /settings', 'POST /settings/undo', 'GET /settings/history', 'PUT /providers/:id', 'DELETE /providers/:id', 'PUT /providers/:id/key',
   'DELETE /providers/:id/key', 'POST /providers/:id/test', 'GET /providers/:id/models', 'POST /estimate', 'GET /connect',

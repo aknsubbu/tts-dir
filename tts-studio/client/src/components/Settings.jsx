@@ -29,7 +29,7 @@ function Lock({ env }) {
 }
 
 /** A provider: its key or address, its Test, and what the Test found. */
-function ProviderCard({ p, act, busy }) {
+function ProviderCard({ p, act, busy, host }) {
   const kind = PROVIDER_KINDS[p.kind];
   const [key, setKey] = useState('');
   const [address, setAddress] = useState(p.baseUrl || '');
@@ -47,17 +47,22 @@ function ProviderCard({ p, act, busy }) {
         <span className={`status ${p.configured ? 'ok' : ''}`}>{p.configured ? 'Set up' : 'Not set up'}</span>
       </div>
       <p className="hint">{kind?.note}</p>
+      {p.kind === 'claude-code' && host && !host.claude && (
+        <p className="hint warn-text">The Owner has not allowed your profile to use the Claude Code sign-in on this computer. Choose another writer, such as Ollama, or ask the Owner.</p>
+      )}
 
       {p.needsKey && (
         <div className="row wrap">
           {p.key?.from === 'env' ? (
-            <span className="hint">Key from {p.key.env}, ending {p.key.hint}.</span>
+            <span className="hint">The host’s key ({p.key.env}), ending {p.key.hint}. The Owner shares it with you; a key of your own would be used first.</span>
           ) : p.key?.set ? (
             <>
               <span className="hint">Key {p.key.hint}, kept in {p.key.from === 'keychain' ? 'the Keychain' : 'a private file'}.</span>
               <button className="link" onClick={() => act('removeKey', p.id)}>Remove key</button>
             </>
           ) : (
+            <>
+            {p.key?.hostKey && !p.key.hostKeyAllowed && <span className="hint">This computer has a key for {p.label} in its environment, which the Owner has not shared with you. Add your own.</span>}
             <form
               className="row grow"
               onSubmit={(e) => {
@@ -68,6 +73,7 @@ function ProviderCard({ p, act, busy }) {
               <input className="input" type="password" autoComplete="off" aria-label={`${p.label} key`} placeholder={p.needsKey === 'optional' ? 'Key, if it needs one' : 'Paste the key'} value={key} onChange={(e) => setKey(e.target.value)} />
               <button className="btn" disabled={!key.trim()}>Save key</button>
             </form>
+            </>
           )}
         </div>
       )}
@@ -347,7 +353,7 @@ function Rates({ data, onSave }) {
  * what Claude may change from a conversation, costs, how to connect Claude, and where things are.
  * Every change applies to the next request and is kept with who made it, so it can be undone.
  */
-export default function Settings({ section, voices, onClose, onChanged, toast }) {
+export default function Settings({ profile = null, section: asked, voices, onClose, onChanged, toast }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(null);
@@ -358,8 +364,8 @@ export default function Settings({ section, voices, onClose, onChanged, toast })
     api.settings().then(setData, (e) => setError(e.message));
   }, []);
   useEffect(() => {
-    if (section === 'connect' && !connect) api.connect().then(setConnect).catch(() => {});
-  }, [section, connect]);
+    if (asked === 'connect' && !connect) api.connect().then(setConnect).catch(() => {});
+  }, [asked, connect]);
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === 'Escape' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) onClose();
@@ -420,6 +426,8 @@ export default function Settings({ section, voices, onClose, onChanged, toast })
       </div>
     );
   }
+  // The House section is the Owner's: anyone else who opens its address is shown the first one.
+  const section = asked === 'house' && !data.house ? 'writer' : asked;
   const v = data.values;
   const locks = data.locks || {};
   const pageLocks = Object.fromEntries(Object.entries(locks).map(([k, e]) => [k.replace(/^lesson\.defaults\./, 'page.'), e]));
@@ -430,13 +438,13 @@ export default function Settings({ section, voices, onClose, onChanged, toast })
         <header className="ws-head">
           <div className="ws-row">
             <button className="link ws-back" onClick={onClose}>← Library</button>
-            <h2 className="settings-title">Settings</h2>
+            <h2 className="settings-title">{profile ? 'Your settings' : 'Settings'}</h2>
             <span className="grow" />
             {anyUndoable && <button className="btn" onClick={() => undo()}>Undo last change</button>}
           </div>
         </header>
         <nav className="ws-tabs" role="tablist" aria-label="Settings sections">
-          {SETTINGS_SECTIONS.map(([id, label]) => (
+          {SETTINGS_SECTIONS.filter(([id]) => id !== 'house' || data.house).map(([id, label]) => (
             <a key={id} role="tab" aria-selected={section === id} className={section === id ? 'on' : ''} href={`#settings/${id}`}>{label}</a>
           ))}
         </nav>
@@ -456,7 +464,7 @@ export default function Settings({ section, voices, onClose, onChanged, toast })
               <h3>Providers</h3>
               <p className="hint">Set up any you want to use. Keys are kept in {data.keysKeptIn === 'the macOS Keychain' ? "your Mac's Keychain" : 'a file only you can read'} and never shown again.</p>
               <ul className="providers">
-                {data.providers.map((p) => <ProviderCard key={p.id} p={p} act={act} busy={busy} />)}
+                {data.providers.map((p) => <ProviderCard key={p.id} p={p} act={act} busy={busy} host={data.host} />)}
               </ul>
               <form
                 className="row wrap add-provider"
@@ -586,6 +594,18 @@ export default function Settings({ section, voices, onClose, onChanged, toast })
                 <p className="hint">Then ask: “make a 3-minute lesson on what we just worked through”. The dashboard must be running; with <code>TTS_MCP_AUTOSTART=1</code> in the connector’s environment it starts on its own.</p>
               </>
             )}
+          </section>
+        )}
+
+        {section === 'house' && data.house && (
+          <section className="block">
+            <h3>This install</h3>
+            <dl className="details">
+              <dt>Profiles</dt><dd>{data.house.profileCount} of {data.house.maxProfiles} <span className="hint">(set TTS_MAX_PROFILES in .env to change)</span></dd>
+              <dt>On your network</dt><dd>{data.house.lan ? 'Yes. Others on your network can open this page and choose a profile.' : 'No. Only this computer can open it (TTS_LAN=1 changes that).'}</dd>
+            </dl>
+            <p className="hint">Profiles keep housemates’ lessons, settings and keys apart. A PIN is privacy between people sharing a computer, not strong security: a home network speaks plain HTTP, and anyone who can use this computer can read the data folder.</p>
+            <p><a className="btn" href="#profile">Manage profiles</a></p>
           </section>
         )}
 
