@@ -90,6 +90,17 @@ Several people can share one install, each with their own library, settings, spe
 - **Deleting a profile** deletes its lessons, settings, keys and tokens, and asks for its PIN (or the Owner's) and its name.
 - **Scenes are code.** On a Mac they run in a sandbox. On Linux and in Docker they run as the server does, and could read every profile's library and keys. So there, while more than one profile exists, only the Owner can save, check or build a scenes file by hand (other profiles ask Claude for changes instead). Lessons the writer makes from anyone's notes still run, so share a Linux or Docker install only with people you trust.
 
+### Known limits
+
+Sharing is built for people who live together and mostly trust each other. What it does not do:
+
+- **It is not security against someone set on getting in.** A PIN is four digits over plain HTTP, and anyone who can use the computer that runs it, or read `tts-studio/data/`, can read everything in it.
+- **Without the Mac sandbox, scenes run unconfined.** On Linux and in Docker, lessons the writer makes from anyone's notes run as the server does. Other profiles cannot save, check or build scenes code by hand there, but the lessons Claude writes for them still run. Only share such an install with people you trust.
+- **A stolen connector token** can still start lessons and change the settings Claude may change, at that profile's expense, until it is revoked. It cannot delete, edit files, touch keys or providers, or manage people.
+- **Host limits are per profile.** The Owner sets what each profile may spend a month with the host's sign-in and keys, but there is no single combined cap across all profiles. A profile on its own key is not limited by the Owner at all.
+- **No fair scheduling.** One render runs at a time for everyone. A busy profile can make others wait, and cards show **Queued behind N**.
+- **The packaged desktop extension is untested in the real app.** `npm run mcp:pack` writes a manifest that follows the extension format, with an optional token field, but it has not been installed in the Claude desktop app yet. If it does not take the token, add `NARRATED_PROOFS_TOKEN` to the config entry shown under **Settings → Connect Claude**.
+
 **Back up** by copying `tts-studio/data/` (the database holds profiles and everyone's settings; `pin-pepper` and `secrets.json` are in there too, keep them private) and `video/projects/`. A Docker volume backup covers it. Projects stay in `video/projects/<topic>-<id>/`; who owns one is recorded in the database only.
 
 ## Other lesson writers
@@ -209,6 +220,6 @@ No test calls a model; fake providers stand in. Tests that load the real voice o
 - **A sandbox outside macOS** (bubblewrap, or a render container) for Docker.
 - **GPU rendering in Docker** (Vulkan over Direct3D 12 on WSL 2, or an NVIDIA image).
 - **HTTPS for a LAN.** Profiles and PINs run over plain HTTP, so they are privacy between housemates, not security.
-- **Fair scheduling between profiles.** One render runs at a time for everyone; a card shows **Queued behind N**.
+- **A combined cap on host spending across all profiles**, and **fair scheduling between profiles.** One render runs at a time for everyone; a card shows **Queued behind N**.
 - **Sharing a lesson between profiles**, and avatar pictures.
 - **Word-level sync outside English.** Only English voices report word timings.
