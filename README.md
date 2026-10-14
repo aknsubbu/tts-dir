@@ -66,8 +66,30 @@ Then type into **Ask for a change** or edit the script and scenes in the **Edit*
 
 - **Update:** `git pull && ./install.sh`. The library upgrades itself on start; copy `tts-studio/data/` first if you want a way back.
 - **Lessons are folders** in `video/projects/<topic>-<id>/`. Edit `script.txt` or `scenes.py` and run `python3 video/check.py <project>` or `python3 video/build.py <project>`, or use the Edit tab.
-- **Use it from another device:** `TTS_LAN=1 npm run app` also serves it on your network, at the address printed on start. Private addresses only, and there is no login, so use a network you trust.
+- **Use it from another device:** `TTS_LAN=1 npm run app` also serves it on your network, at the address printed on start. Private addresses only. A home network speaks plain HTTP, so use one you trust, and read [Sharing with housemates](#sharing-with-housemates) first.
 - **Settings** (the gear) choose the writer, defaults and spending caps. Optional environment settings go in `tts-studio/.env`; see [.env.example](tts-studio/.env.example).
+
+## Sharing with housemates
+
+Several people can share one install, each with their own library, settings, spending caps and API keys. Open the dashboard and press **Add profile**, or use the avatar in the header. With more than one profile, or a PIN, the dashboard opens on **Who's watching?**. With one profile and no PIN nothing changes: there is no gate.
+
+- **Profiles.** A name, an avatar (a colour and an initial or emoji) and an optional 4-digit PIN. A padlock marks a locked profile. `TTS_MAX_PROFILES` (default 5) is the most there can be.
+- **The Owner** is the first profile, and your existing library lands there. The Owner can ask for their PIN before anyone adds a profile, reset another profile's PIN (with their own PIN) and decide what each other profile may borrow from this computer.
+- **Borrowing from the host.** The Claude Code sign-in and any API keys in `.env` belong to whoever runs the computer. A new profile may use neither until the Owner ticks **May use this Mac's Claude sign-in** and **May use the host's API keys**. Until then it chooses another writer in **Settings → Lesson writer**, such as a model on this Mac with [Ollama](https://ollama.com), which is free. A profile's own key always comes first.
+- **Forgot a PIN?** The Owner can reset it. For the Owner's own, run `npm run profiles -- reset-pin <name>` in `tts-studio/` on the computer that hosts this. Whoever can run that can read the data folder anyway, which is why it needs no PIN.
+- **Lockout.** Five wrong PINs lock that profile for 30 seconds, then for twice as long each time, up to 15 minutes. One device also has a limit across all profiles.
+- **Claude.** A connector token (**Settings → Connect Claude**) makes Claude act as exactly one profile. See [Connect Claude](#connect-claude).
+- **The render queue is shared.** One video renders at a time for everyone, so a card can say **Queued behind 2**.
+
+**What a PIN is and is not.** It keeps housemates out of each other's lessons. It is not security against someone set on getting in:
+
+- There is no HTTPS on a LAN. On a network you do not trust, anyone on it can read what you send, PIN included.
+- Anyone who can use the computer that runs it, or read its `tts-studio/data/` folder, can read everything in it, whatever the PINs say.
+- Four digits is 10,000 guesses. Lockout slows guessing; it does not make it hard.
+- A connector token works whether or not the profile has a PIN, so keep tokens private. Setting a profile's first PIN revokes its tokens.
+- **Deleting a profile** deletes its lessons, settings, keys and tokens, and asks for its PIN (or the Owner's) and its name.
+
+**Back up** by copying `tts-studio/data/` (the database holds profiles and everyone's settings; `pin-pepper` and `secrets.json` are in there too, keep them private) and `video/projects/`. A Docker volume backup covers it. Projects stay in `video/projects/<topic>-<id>/`; who owns one is recorded in the database only.
 
 ## Other lesson writers
 
@@ -81,13 +103,15 @@ ManimGL is niche and most models learned the other Manim, so non-Claude writers 
 
 ## Connect Claude
 
-With the dashboard running:
+With the dashboard running (and, if one person uses it with no PIN, nothing more):
 
 ```bash
 claude mcp add --transport http narrated-proofs http://localhost:8787/mcp
 ```
 
 **Settings → Connect Claude** shows this with your port, plus the entry for the desktop app. The tools are listed in the [dashboard README](tts-studio/README.md#make-lessons-from-claude-the-mcp-connector).
+
+**With more than one profile** Claude has to be connected to one of them. In **Settings → Connect Claude** press **Make a token**: it is shown once, and the page then shows the same commands with `--header "Authorization: Bearer <token>"` (or `NARRATED_PROOFS_TOKEN` for the stdio connector) filled in. Everything Claude does then belongs to that profile, under that profile's Claude settings, and **Revoke** stops it at once. A token cannot manage profiles or tokens. The packaged `.mcpb` bundle cannot carry a token, so add `NARRATED_PROOFS_TOKEN` to the desktop app's config entry instead.
 
 ## Docker
 
@@ -110,7 +134,7 @@ The first build takes 15 to 30 minutes. Open <http://localhost:8787> when the lo
 | Another port | `PORT=8788 docker compose up` |
 | Remove everything | `docker compose down -v`, then `docker image rm narrated-proofs` |
 
-Lessons are in `video/projects/` as on a Mac. The library, the render cache and Claude's sign-in are Docker volumes; back up the library with `docker compose cp app:/app/tts-studio/data ./data-backup`.
+Lessons are in `video/projects/` as on a Mac. The library, the render cache and Claude's sign-in are Docker volumes; back up the library with `docker compose cp app:/app/tts-studio/data ./data-backup`. That copy holds every profile, PIN hash and key. The compose file publishes the port on `127.0.0.1` only; to share with housemates, publish it on your network address instead and set `TTS_LAN=1` (see [Sharing with housemates](#sharing-with-housemates)).
 
 Differences from a Mac:
 
@@ -128,19 +152,19 @@ Differences from a Mac:
 | A local model | Nobody |
 | Other | The address you gave |
 
-Speech, rendering and the library stay on your machine. The server listens on `127.0.0.1` only and refuses requests from other sites. It has no login, so don't put it behind a tunnel or proxy. Keys live in the macOS Keychain and never reach scenes or `claude -p`. On a Mac, generated scene code runs in a sandbox: no network, no writing outside the lesson's `build/` folder, no reading your keys or home folder, no programs except Python, ffmpeg and TeX. Claude, through the connector, can start lessons and change the settings you allow, but never add a provider, touch a key or raise a spending cap.
+Speech, rendering and the library stay on your machine. The server listens on `127.0.0.1` only and refuses requests from other sites. With `TTS_LAN=1` it also answers on private network addresses; profiles and PINs keep housemates apart but are not strong security (see [Sharing with housemates](#sharing-with-housemates)), so don't put it behind a tunnel or proxy or on a network you don't trust. Keys live in the macOS Keychain and never reach scenes or `claude -p`. On a Mac, generated scene code runs in a sandbox: no network, no writing outside the lesson's `build/` folder, no reading your keys or home folder, no programs except Python, ffmpeg and TeX. Claude, through the connector, can start lessons and change the settings you allow, but never add a provider, touch a key or raise a spending cap.
 
 ## Where your files go
 
 | Path | Contents | In git |
 | --- | --- | --- |
-| `tts-studio/data/` | Library: database, settings, MP3s, videos | no |
+| `tts-studio/data/` | Library: database (lessons, profiles, settings), MP3s, videos, `pin-pepper`, `secrets.json` | no |
 | `video/projects/<name>/` | One folder per lesson: script, scenes, `build/`, `versions/`, `notes/` | no, except `demo` |
 | `.venv/` | The Python environment | no |
 | `tts-studio/.env` | Optional settings; they win over the Settings page | no |
 | `~/.cache/huggingface/` | Kokoro's model | outside the repo |
 | `~/Library/Caches/narrated-proofs-scenes/` | Render caches | outside the repo |
-| Keychain, "Narrated Proofs" | Saved provider keys | outside the repo |
+| Keychain, "Narrated Proofs" | Saved provider keys, one set per profile | outside the repo |
 
 To back up your work, copy `tts-studio/data/` and `video/projects/`.
 
@@ -183,4 +207,8 @@ No test calls a model; fake providers stand in. Tests that load the real voice o
 - **Write it in the conversation.** Let Claude Code submit a script and scenes itself.
 - **A sandbox outside macOS** (bubblewrap, or a render container) for Docker.
 - **GPU rendering in Docker** (Vulkan over Direct3D 12 on WSL 2, or an NVIDIA image).
+- **HTTPS for a LAN.** Profiles and PINs run over plain HTTP, so they are privacy between housemates, not security.
+- **An Owner-level cap on host-key spend.** A profile the Owner lets use the host's keys sets its own spending caps.
+- **Fair scheduling between profiles.** One render runs at a time for everyone; a card shows **Queued behind N**.
+- **Sharing a lesson between profiles**, and avatar pictures.
 - **Word-level sync outside English.** Only English voices report word timings.
