@@ -163,6 +163,46 @@ export default function Workspace({ id, tab: asked, autoplay, summary, voices = 
   };
 
   const tabLink = (t) => routeHash(id, t);
+  const watching = tab === 'watch';
+
+  const titleInput = (
+    <input
+      className="input title-input ws-title"
+      value={title}
+      aria-label="Title"
+      onChange={(e) => setTitle(e.target.value)}
+      onBlur={commitTitle}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur();
+        if (e.key === 'Escape') {
+          setTitle(g.title);
+          e.currentTarget.blur();
+        }
+      }}
+    />
+  );
+  const versionChip = g?.version > 0 && (
+    <span className="chip" title={current ? `Made ${fmtDate(current.createdAt)}` : ''}>
+      v{g.version}
+      {current ? ` · ${SOURCE[current.source] || current.source}` : ''}
+      {g.builtVersion && g.builtVersion !== g.version ? ` · playing v${g.builtVersion}` : ''}
+    </span>
+  );
+  const fileActions = g && (
+    <>
+      <details className="menu">
+        <summary className="btn">Download</summary>
+        <div className="menu-list">
+          {g.videoUrl && <a href={`${g.videoUrl}?download=1`} download>Video (MP4)</a>}
+          {g.videoUrl && <a href={`/api/generations/${g.id}/captions.srt?download=1`} download>Captions (SRT)</a>}
+          {g.videoUrl && <a href={`/api/generations/${g.id}/captions.vtt?download=1`} download>Captions (VTT)</a>}
+          {g.videoUrl && lesson?.chaptered && <a href={`/api/generations/${g.id}/chapters.vtt`} download={`${s.project}.chapters.vtt`}>Chapters (VTT)</a>}
+          <a href={`/api/generations/${g.id}/script?download=1`} download>Narration (text)</a>
+        </div>
+      </details>
+      <button className="btn danger" onClick={() => onDelete(g)}>Delete</button>
+    </>
+  );
 
   return (
     <div className="workspace" role="dialog" aria-modal="true" aria-label="Lesson">
@@ -177,31 +217,11 @@ export default function Workspace({ id, tab: asked, autoplay, summary, voices = 
           <header className="ws-head">
             <div className="ws-row">
             <button className="link ws-back" onClick={onClose}>← Library</button>
-            <input
-              className="input title-input ws-title"
-              value={title}
-              aria-label="Title"
-              onChange={(e) => setTitle(e.target.value)}
-              onBlur={commitTitle}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') e.currentTarget.blur();
-                if (e.key === 'Escape') {
-                  setTitle(g.title);
-                  e.currentTarget.blur();
-                }
-              }}
-            />
-            </div>
-            <div className="ws-row">
-            {g.version > 0 && (
-              <span className="chip" title={current ? `Made ${fmtDate(current.createdAt)}` : ''}>
-                v{g.version}
-                {current ? ` · ${SOURCE[current.source] || current.source}` : ''}
-                {g.builtVersion && g.builtVersion !== g.version ? ` · playing v${g.builtVersion}` : ''}
-              </span>
-            )}
-            <StatusBadge g={g} />
-            <span className="grow" />
+            {!watching && titleInput}
+            {watching && <span className="grow" />}
+            {!watching && versionChip}
+            {!watching && <StatusBadge g={g} />}
+            {!watching && <span className="grow" />}
             {needsYou(g) && (
               <div className="row approve">
                 <select className="input" aria-label="Quality" value={quality} onChange={(e) => setQuality(e.target.value)}>
@@ -216,17 +236,7 @@ export default function Workspace({ id, tab: asked, autoplay, summary, voices = 
             )}
             {(isActive(g) || needsYou(g)) && <button className="btn" onClick={() => onCancel(g)}>{needsYou(g) ? 'Don’t render' : 'Cancel'}</button>}
             {(g.status === 'error' || g.status === 'cancelled') && <button className="btn primary" onClick={() => onRetry(g)}>Retry</button>}
-            <details className="menu">
-              <summary className="btn">Download</summary>
-              <div className="menu-list">
-                {g.videoUrl && <a href={`${g.videoUrl}?download=1`} download>Video (MP4)</a>}
-                {g.videoUrl && <a href={`/api/generations/${g.id}/captions.srt?download=1`} download>Captions (SRT)</a>}
-                {g.videoUrl && <a href={`/api/generations/${g.id}/captions.vtt?download=1`} download>Captions (VTT)</a>}
-                {g.videoUrl && lesson?.chaptered && <a href={`/api/generations/${g.id}/chapters.vtt`} download={`${s.project}.chapters.vtt`}>Chapters (VTT)</a>}
-                <a href={`/api/generations/${g.id}/script?download=1`} download>Narration (text)</a>
-              </div>
-            </details>
-            <button className="btn danger" onClick={() => onDelete(g)}>Delete</button>
+            {!watching && fileActions}
             </div>
           </header>
 
@@ -240,48 +250,70 @@ export default function Workspace({ id, tab: asked, autoplay, summary, voices = 
           </nav>
           </div>
 
-          <div className="ws-body">
+          <div className={`ws-body ${watching ? 'wide' : ''}`}>
             {tab === 'watch' && (
-              <div className="ws-watch">
-                {g.videoUrl ? (
-                  <div className="watch-row">
+              <div className={`yt ${g.videoUrl ? '' : 'no-video'}`}>
+                <div className="yt-main">
+                  {g.videoUrl ? (
                     <VideoPlayer g={g} autoplay={autoplay} videoRef={videoRef} />
-                    <Transcript id={g.id} builtVersion={g.builtVersion} videoRef={videoRef} />
-                  </div>
-                ) : (
-                  <div className={`status-box ${g.status}`}>
-                    <p>
-                      {outlining
-                        ? `The outline is ready: ${lesson.chapters?.length || 'its'} chapters. Look it over, change it if you like, then approve it and each chapter is written.`
-                        : narration
-                          ? 'The narration is written. Read it below, change it in the Edit tab if you like, then approve it and the scenes are written for it.'
-                          : needsYou(g) ? 'Nothing is rendered yet. Look over the storyboard, then approve it to render.' : 'The video appears here once it is built.'}
-                    </p>
-                    {needsYou(g) && !narration && <a className="btn primary" href={tabLink(outlining ? 'outline' : 'storyboard')}>{outlining ? 'Open the outline' : 'Open the storyboard'}</a>}
-                    {narration && <pre className="script narration-review">{g.text}</pre>}
-                  </div>
-                )}
-                {(isActive(g) || g.error) && (
-                  <div className={`status-box ${g.status}`}>
-                    <div className="row">
-                      <StatusBadge g={g} />
-                      {g.videoUrl && isActive(g) && <span className="hint">Playing v{g.builtVersion} until the new one is built.</span>}
+                  ) : (
+                    <div className={`status-box ${g.status}`}>
+                      <p>
+                        {outlining
+                          ? `The outline is ready: ${lesson.chapters?.length || 'its'} chapters. Look it over, change it if you like, then approve it and each chapter is written.`
+                          : narration
+                            ? 'The narration is written. Read it below, change it in the Edit tab if you like, then approve it and the scenes are written for it.'
+                            : needsYou(g) ? 'Nothing is rendered yet. Look over the storyboard, then approve it to render.' : 'The video appears here once it is built.'}
+                      </p>
+                      {needsYou(g) && !narration && <a className="btn primary" href={tabLink(outlining ? 'outline' : 'storyboard')}>{outlining ? 'Open the outline' : 'Open the storyboard'}</a>}
+                      {narration && <pre className="script narration-review">{g.text}</pre>}
                     </div>
-                    {isActive(g) && <Progress g={g} />}
-                    {g.error && g.status !== 'done' && <p className="card-error">{g.error}</p>}
+                  )}
+                  <div className="yt-info">
+                    {titleInput}
+                    <div className="yt-meta">
+                      {versionChip}
+                      <StatusBadge g={g} />
+                      <span className="hint">
+                        {[g.videoUrl && fmtDuration(g.durationSec), `${fmtNumber(g.wordCount)} words`, g.voiceName || g.voiceId, fmtDate(g.createdAt)].filter(Boolean).join(' · ')}
+                      </span>
+                      <span className="grow" />
+                      {fileActions}
+                    </div>
                   </div>
+                  {(isActive(g) || g.error) && (
+                    <div className={`status-box ${g.status}`}>
+                      <div className="row">
+                        <StatusBadge g={g} />
+                        {g.videoUrl && isActive(g) && <span className="hint">Playing v{g.builtVersion} until the new one is built.</span>}
+                      </div>
+                      {isActive(g) && <Progress g={g} />}
+                      {g.error && g.status !== 'done' && <p className="card-error">{g.error}</p>}
+                    </div>
+                  )}
+                  <details className="yt-desc">
+                    <summary>
+                      <span>{lesson?.topic || 'Details'}</span>
+                      <span className="hint">{lesson ? `${fmtUsd(lesson.costUsd)} · ` : ''}Show more</span>
+                    </summary>
+                    <Effort lesson={lesson} />
+                    <section className="block">
+                      <h4>Details</h4>
+                      <dl className="details">
+                        <dt>Voice</dt><dd>{g.voiceName || g.voiceId}</dd>
+                        <dt>Narration</dt><dd>{fmtNumber(g.wordCount)} words</dd>
+                        {g.videoUrl && <><dt>Video</dt><dd>{fmtDuration(g.durationSec)} · {fmtBytes(g.audioBytes)} · {s?.quality} quality</dd></>}
+                        {s && <><dt>Files</dt><dd><code>video/projects/{s.project}/</code></dd></>}
+                        <dt>Created</dt><dd>{fmtDate(g.createdAt)}</dd>
+                      </dl>
+                    </section>
+                  </details>
+                </div>
+                {g.videoUrl && (
+                  <aside className="yt-side">
+                    <Transcript id={g.id} builtVersion={g.builtVersion} videoRef={videoRef} />
+                  </aside>
                 )}
-                <Effort lesson={lesson} />
-                <section className="block">
-                  <h4>Details</h4>
-                  <dl className="details">
-                    <dt>Voice</dt><dd>{g.voiceName || g.voiceId}</dd>
-                    <dt>Narration</dt><dd>{fmtNumber(g.wordCount)} words</dd>
-                    {g.videoUrl && <><dt>Video</dt><dd>{fmtDuration(g.durationSec)} · {fmtBytes(g.audioBytes)} · {s?.quality} quality</dd></>}
-                    {s && <><dt>Files</dt><dd><code>video/projects/{s.project}/</code></dd></>}
-                    <dt>Created</dt><dd>{fmtDate(g.createdAt)}</dd>
-                  </dl>
-                </section>
               </div>
             )}
             {outlining && ['storyboard', 'edit', 'history'].includes(tab) && (
