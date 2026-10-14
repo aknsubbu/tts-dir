@@ -448,22 +448,22 @@ export function createSettings({ db, getConfig, secrets }) {
     return own[`${p.id}:${model}`] || own[rateKey(p.kind, model)] || RATES[rateKey(p.kind, model)] || null;
   }
 
-  /** The plan a profile ('page' or 'claude') uses, with a lesson's own choice applied. */
-  function planOf(profile = 'page', override = null) {
+  /** The plan an origin ('page' or 'claude') uses, with a lesson's own choice applied. */
+  function planOf(origin = 'page', override = null) {
     if (override?.provider) {
       return { mode: 'one', all: { provider: override.provider, model: override.model || '', effort: '' }, steps: {}, handBack: { after: 0 } };
     }
     const claude = get('writer.claude');
-    return profile === 'claude' && !claude.same ? claude.plan : get('writer.page');
+    return origin === 'claude' && !claude.same ? claude.plan : get('writer.page');
   }
 
   /**
    * Everything the lesson writer needs for each step: provider, address, model, effort, what
    * the model can do and its rate. Never a key: the writer looks keys up itself.
    */
-  function resolveWriter(profile = 'page', override = null) {
+  function resolveWriter(origin = 'page', override = null) {
     const config = getConfig();
-    const plan = planOf(profile, override);
+    const plan = planOf(origin, override);
     const steps = {};
     for (const step of ['read', 'write', 'fix', 'polish', 'outline']) {
       const s = plan.mode === 'one' ? plan.all : plan.steps[step === 'polish' ? 'fix' : step] || plan.all;
@@ -504,7 +504,7 @@ export function createSettings({ db, getConfig, secrets }) {
     return [...by.entries()].map(([where, steps]) => ({ where, steps, local: where.startsWith('nobody') }));
   }
 
-  function lessonDefaults(profile = 'page') {
+  function lessonDefaults(origin = 'page') {
     const config = getConfig();
     const given = config.given || {};
     const page = get('lesson.defaults');
@@ -514,7 +514,7 @@ export function createSettings({ db, getConfig, secrets }) {
       visualReview: given.TTS_AUTHOR_VISUAL_REVIEW ? config.authorVisualReview : page.visualReview,
       voiceId: given.TTS_VOICE || !page.voiceId ? config.defaultVoiceId : page.voiceId,
     };
-    return profile === 'claude' ? { ...out, ...get('claude.defaults') } : out;
+    return origin === 'claude' ? { ...out, ...get('claude.defaults') } : out;
   }
 
   function costs() {
@@ -573,9 +573,9 @@ export function createSettings({ db, getConfig, secrets }) {
   /** Everything the Settings page shows. Keys appear only as "set, ends in …7c1e". */
   async function view() {
     const providers = await providerViews();
-    const summary = (profile) => {
+    const summary = (origin) => {
       try {
-        const w = resolveWriter(profile);
+        const w = resolveWriter(origin);
         return { steps: w.steps, handBack: w.handBack, notesGo: whereNotesGo(w) };
       } catch (e) {
         return { error: e.message };

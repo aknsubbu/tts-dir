@@ -51,7 +51,7 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
    */
   async function writerFor(lesson = {}) {
     if (!settings) return {};
-    const writer = settings.resolveWriter(lesson.profile || 'page', lesson.writer || null);
+    const writer = settings.resolveWriter(lesson.origin || lesson.profile || 'page', lesson.writer || null);
     await settings.checkWriter(writer);
     const { lessonCapUsd, monthCapUsd } = settings.costs();
     let capUsd = lessonCapUsd;

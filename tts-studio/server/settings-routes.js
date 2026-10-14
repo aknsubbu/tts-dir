@@ -36,7 +36,7 @@ const wrap = (fn) => async (req, res, next) => {
  *   DELETE /providers/:id/key
  *   POST   /providers/:id/test          { model }
  *   GET    /providers/:id/models
- *   POST   /estimate                    { minutes, notesChars, images, pdfPages, profile, writer }
+ *   POST   /estimate                    { minutes, notesChars, images, pdfPages, origin, writer }
  *   GET    /connect                     how to connect Claude, with this machine's paths
  */
 export function settingsRoutes({ settings, secrets, getConfig, store, probe = probeProvider }) {
@@ -162,9 +162,9 @@ export function settingsRoutes({ settings, secrets, getConfig, store, probe = pr
     '/estimate',
     wrap(async (req, res) => {
       const b = req.body || {};
-      const profile = b.profile === 'claude' ? 'claude' : 'page';
-      const writer = settings.resolveWriter(profile, b.writer?.provider ? { provider: String(b.writer.provider), model: String(b.writer.model || '') } : null);
-      const minutes = LESSON_MINUTES.includes(Number(b.minutes)) ? Number(b.minutes) : settings.lessonDefaults(profile).minutes;
+      const origin = (b.origin || b.profile) === 'claude' ? 'claude' : 'page';
+      const writer = settings.resolveWriter(origin, b.writer?.provider ? { provider: String(b.writer.provider), model: String(b.writer.model || '') } : null);
+      const minutes = LESSON_MINUTES.includes(Number(b.minutes)) ? Number(b.minutes) : settings.lessonDefaults(origin).minutes;
       let ready = null;
       try {
         await settings.checkWriter(writer);

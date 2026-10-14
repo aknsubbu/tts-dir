@@ -107,7 +107,7 @@ test('make a lesson from notes and a photo, follow it, and get the video', async
   assert.match(made.structuredContent.link, /\/#lesson\//);
 
   const g = (await (await fetch(`${base}/api/generations/${id}`)).json());
-  assert.equal(g.settings.lesson.profile, 'claude', "a lesson Claude starts uses Claude's settings");
+  assert.equal(g.settings.lesson.origin, 'claude', "a lesson Claude starts uses Claude's settings");
   assert.deepEqual(g.settings.lesson.attachments.map((a) => a.kind), ['image']);
 
   let last = made.structuredContent;

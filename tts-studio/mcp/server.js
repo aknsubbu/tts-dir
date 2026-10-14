@@ -165,7 +165,7 @@ export function createMcpServer({ baseUrl = DEFAULT_URL, linkBase = baseUrl.repl
       const files = readNoteFiles(a.files || [], { cwd });
       const notes = [a.notes, files.notes].filter(Boolean).join('\n\n');
       const body = {
-        profile: 'claude',
+        origin: 'claude',
         topic: a.topic,
         goal: a.goal,
         notes,
@@ -181,7 +181,7 @@ export function createMcpServer({ baseUrl = DEFAULT_URL, linkBase = baseUrl.repl
         ...(a.writer ? { writer: a.writer } : {}),
       };
       const estimate = await api('POST', '/api/estimate', {
-        profile: 'claude',
+        origin: 'claude',
         minutes: a.minutes,
         notesChars: notes.length,
         images: files.attachments.filter((f) => !/\.(pdf|docx?|rtf|odt)$/i.test(f.name)).length,

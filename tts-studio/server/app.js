@@ -258,13 +258,14 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
   // like any other video. The row exists from the start so the library shows each stage.
   // A lesson: Claude (or the writer chosen in Settings) writes the script and the scenes from a
   // topic and notes, then it is built like any other video. The row exists from the start so the
-  // library shows each stage. Lessons Claude starts through MCP use profile "claude": its own
+  // library shows each stage. Lessons Claude starts through MCP have origin "claude": its own
   // writer and defaults, when Settings gives it some.
   api.post('/lessons', async (req, res) => {
     if (!lessons) throw httpError(503, 'Lessons are not set up on this server.');
     const b = req.body || {};
-    const profile = b.profile === 'claude' || actorOf(req) === 'claude' ? 'claude' : 'page';
-    const defaults = settings ? settings.lessonDefaults(profile) : { minutes: 2, quality: 'default', review: getConfig().lessonReview || 'render', voiceId: getConfig().defaultVoiceId };
+    // `profile` is the name older MCP clients send for this.
+    const origin = (b.origin || b.profile) === 'claude' || actorOf(req) === 'claude' ? 'claude' : 'page';
+    const defaults = settings ? settings.lessonDefaults(origin) : { minutes: 2, quality: 'default', review: getConfig().lessonReview || 'render', voiceId: getConfig().defaultVoiceId };
     const topic = String(b.topic || '').replace(/\s+/g, ' ').trim().slice(0, 200);
     const goal = String(b.goal || '').trim().slice(0, 2000);
     const notes = String(b.notes || '').trim();
@@ -291,7 +292,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
     if (settings) {
       try {
         if (override && !settings.provider(override.provider)) throw new SettingsError(`There is no provider called “${override.provider}”.`);
-        await settings.checkWriter(settings.resolveWriter(profile, override));
+        await settings.checkWriter(settings.resolveWriter(origin, override));
         const { monthCapUsd } = settings.costs();
         if (monthCapUsd != null && store.stats().costThisMonthUsd >= monthCapUsd) {
           throw new SettingsError(`This month's lessons have reached the monthly cap of $${monthCapUsd.toFixed(2)}. Raise it in Settings → Costs, or choose a free writer.`);
@@ -337,7 +338,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
         lesson: {
           topic, goal, minutes, review, ownTitle: !!ownTitle,
           attachments: attached.files.map(({ name, file, kind, pages, asText }) => ({ name, file, kind, ...(pages ? { pages } : {}), ...(asText ? { asText } : {}) })),
-          ...(profile === 'claude' ? { profile } : {}),
+          ...(origin === 'claude' ? { origin } : {}),
           ...(override ? { writer: override } : {}),
           ...(chaptered ? { chaptered, outlineReview } : {}),
         },
