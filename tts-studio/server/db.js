@@ -302,7 +302,20 @@ export function createStore(dataDir) {
     return { total, items: rows.map((r) => toApi(r)) };
   }
 
-  function stats(profileId) {
+  /**
+   * What a lesson has cost that no version holds yet: an outline or a narration waiting to be approved, and an
+   * attempt that failed. It is spent all the same, so the caps count it, and a deleted lesson leaves it in the ledger.
+   */
+  function unbilled(settingsJson, version) {
+    const l = JSON.parse(settingsJson || '{}').lesson || {};
+    const waiting = version ? 0 : 1; // once a version holds the earlier phases' cost, they are not counted twice
+    return {
+      usd: (Number(l.failedUsd) || 0) + waiting * ((Number(l.scriptCostUsd) || 0) + (Number(l.outlineCostUsd) || 0)),
+      host: (Number(l.failedHostUsd) || 0) + waiting * ((Number(l.scriptHostUsd) || 0) + (Number(l.outlineHostUsd) || 0)),
+    };
+  }
+
+  function stats(profileId, { excludeId = null } = {}) {
     need(profileId);
     const done = db
       .prepare(
@@ -329,9 +342,19 @@ export function createStore(dataDir) {
       .get(profileId, month.getTime());
     const gone = db.prepare('SELECT COALESCE(SUM(cost_usd), 0) AS usd FROM cost_ledger WHERE profile_id = ? AND created_at >= ?').get(profileId, month.getTime()).usd;
     claude.usd += gone;
+    let pendingUsd = 0;
+    let pendingHost = 0;
+    for (const r of db.prepare("SELECT id, version, settings_json FROM generations WHERE profile_id = ? AND settings_json LIKE '%\"lesson\"%'").all(profileId)) {
+      if (r.id === excludeId) continue; // a lesson being retried is held to its own cap with its earlier attempts included
+      const u = unbilled(r.settings_json, r.version);
+      pendingUsd += u.usd;
+      pendingHost += u.host;
+    }
+    claude.usd += pendingUsd;
     const hostUsd =
       db.prepare('SELECT COALESCE(SUM(v.host_usd), 0) AS usd FROM versions v JOIN generations g ON g.id = v.generation_id WHERE g.profile_id = ? AND v.created_at >= ?').get(profileId, month.getTime()).usd +
-      db.prepare('SELECT COALESCE(SUM(host_usd), 0) AS usd FROM cost_ledger WHERE profile_id = ? AND created_at >= ?').get(profileId, month.getTime()).usd;
+      db.prepare('SELECT COALESCE(SUM(host_usd), 0) AS usd FROM cost_ledger WHERE profile_id = ? AND created_at >= ?').get(profileId, month.getTime()).usd +
+      pendingHost;
     const voices = db
       .prepare(
         `SELECT voice_id AS voiceId, COALESCE(MAX(voice_name), voice_id) AS name, COUNT(*) AS n
@@ -392,6 +415,11 @@ export function createStore(dataDir) {
       const owner = ownerStmt.get(id)?.profile_id;
       if (owner !== undefined) {
         db.prepare('INSERT INTO cost_ledger (profile_id, created_at, cost_usd, host_usd) SELECT ?, created_at, cost_usd, host_usd FROM versions WHERE generation_id = ? AND cost_usd > 0').run(owner, id);
+      }
+      const gone = getStmt.get(id);
+      if (gone) {
+        const u = unbilled(gone.settings_json, gone.version);
+        if (u.usd > 0) db.prepare('INSERT INTO cost_ledger (profile_id, created_at, cost_usd, host_usd) VALUES (?, ?, ?, ?)').run(gone.profile_id, Date.now(), u.usd, u.host);
       }
       versions.removeAll(id);
       const n = deleteStmt.run(id).changes;

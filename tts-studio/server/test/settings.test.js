@@ -276,3 +276,11 @@ test('connecting Claude shows commands with real paths', async () => {
   assert.ok(data.stdio.args[0].endsWith(path.join('mcp', 'stdio.js')));
   assert.equal(data.desktop.entry.mcpServers['narrated-proofs'].command, process.execPath);
 });
+
+test('a provider cannot be pointed at a cloud machine’s credentials address', async () => {
+  for (const baseUrl of ['http://169.254.169.254/latest', 'http://169.254.1.1:80', 'http://[fd00:ec2::254]/', 'http://metadata.google.internal/computeMetadata/v1']) {
+    await assert.rejects(settings.saveProvider('new', { baseUrl }), /not one a provider can be reached at/, baseUrl);
+  }
+  const id = await settings.saveProvider('new', { baseUrl: 'https://openrouter.ai/api/v1' });
+  await settings.removeProvider(id);
+});

@@ -662,6 +662,11 @@ export default function Settings({ profile = null, section: asked, voices, onClo
               <dt>Profiles</dt><dd>{data.house.profileCount} of {data.house.maxProfiles} <span className="hint">(set TTS_MAX_PROFILES in .env to change)</span></dd>
               <dt>On your network</dt><dd>{data.house.lan ? 'Yes. Others on your network can open this page and choose a profile.' : 'No. Only this computer can open it (TTS_LAN=1 changes that).'}</dd>
             </dl>
+            {!data.house.sandboxed && data.house.profileCount > 1 && (
+              <p className="banner notice" role="note">
+                <strong>No sandbox on this computer.</strong> Scenes run as the server does, so they could read every profile’s library and keys. Other profiles cannot save, check or build code here, but lessons Claude writes from anyone’s notes still run. Only share this install with people you trust, or use a Mac.
+              </p>
+            )}
             <p className="hint">Profiles keep housemates’ lessons, settings and keys apart. A PIN is privacy between people sharing a computer, not strong security: a home network speaks plain HTTP, and anyone who can use this computer can read the data folder.</p>
             <p><a className="btn" href="#profile">Manage profiles</a></p>
           </section>

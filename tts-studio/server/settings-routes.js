@@ -50,7 +50,7 @@ export function settingsRoutes({ settings, secrets, getConfig, store, profiles =
     const c = config();
     return {
       ...(await mine(req).view()),
-      ...(req.profile.isOwner ? { house: { maxProfiles: c.maxProfiles ?? null, lan: !!c.lan, profileCount: profiles?.list().length ?? null } } : {}),
+      ...(req.profile.isOwner ? { house: { maxProfiles: c.maxProfiles ?? null, lan: !!c.lan, sandboxed: !!c.sandboxed, profileCount: profiles?.list().length ?? null } } : {}),
       writerProblem: await mine(req).writerProblem(),
       ...(profiles && !req.profile.isOwner && profiles.get(req.profile.id)?.hostCapUsd != null ? { hostAllowance: { capUsd: profiles.get(req.profile.id).hostCapUsd, spentUsd: store.stats(req.profile.id).hostSpentThisMonthUsd } } : {}),
       costThisMonthUsd: store.stats(req.profile.id).costThisMonthUsd,

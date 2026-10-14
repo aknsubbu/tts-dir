@@ -9,6 +9,7 @@ import { createApp } from '../app.js';
 import { createProfiles } from '../profiles.js';
 import { createSecrets, keyAccount, keyFor } from '../secrets.js';
 import { createSettings } from '../settings.js';
+import { createVersions } from '../versions.js';
 import { askWriter } from '../../author/writers/index.js';
 import { normalizeWriter } from '../../author/writers/plan.js';
 
@@ -51,7 +52,7 @@ before(async () => {
   profiles = createProfiles({ db: store.db, dataDir: dir, ipMax: 10_000 });
   ownerId = profiles.owner().id;
   factory = createSettings({ db: store.db, getConfig: () => config, secrets, profiles });
-  const app = createApp({ getConfig: () => config, store, runner: { enqueue() {}, cancel: () => false }, engine, lessons, settings: factory, secrets, profiles });
+  const app = createApp({ getConfig: () => config, store, runner: { enqueue() {}, cancel: () => false }, engine, lessons, settings: factory, secrets, profiles, versions: createVersions({ store, getConfig: () => config }) });
   await new Promise((r) => {
     server = app.listen(0, '127.0.0.1', r);
   });
@@ -186,7 +187,7 @@ test("the host's Claude Code is refused for every step, even one that is not che
 
 test('the House section is the Owner\'s alone', async () => {
   const mine = (await owner.call('GET', '/api/settings')).data;
-  assert.deepEqual(mine.house, { maxProfiles: 5, lan: false, profileCount: 2 });
+  assert.deepEqual(mine.house, { maxProfiles: 5, lan: false, sandboxed: false, profileCount: 2 });
   assert.equal((await roommate.call('GET', '/api/settings')).data.house, undefined);
 });
 
@@ -309,4 +310,23 @@ test("the Owner limits what a profile spends with the host's Claude sign-in, and
   store.remove('rooms-lesson');
   assert.equal(store.stats(roomId).hostSpentThisMonthUsd, 1.5);
   await owner.call('PATCH', `/api/profiles/${roomId}`, { canUseHostClaude: false });
+});
+
+test('without a sandbox, only the Owner runs code they wrote while others share the install', async () => {
+  store.insert({ id: 'code-lesson', profile_id: roomId, kind: 'video', title: 'Code', source_name: null, text: 'x', text_hash: 'c', config_hash: 'c', char_count: 1, word_count: 1, voice_id: 'af_heart', voice_name: null, model_id: 'm', settings_json: JSON.stringify({ project: 'code-lesson', lesson: { topic: 't' } }), status: 'done', tags: '', created_at: Date.now() });
+  for (const [method, url, body] of [['PUT', 'source', { scenes: 'import os' }], ['POST', 'check', {}], ['POST', 'build', {}], ['POST', 'restore', { version: 1 }]]) {
+    config.sandboxed = false;
+    const refused = await roommate.call(method, `/api/generations/code-lesson/${url}`, body);
+    assert.equal(refused.status, 403, `${method} ${url}`);
+    assert.match(refused.data.error, /no sandbox, so only the Owner/);
+    // Another profile's lesson is still a plain 404: the check about code is not a way to learn it exists.
+    assert.equal((await owner.call(method, `/api/generations/code-lesson/${url}`, body)).status, 404, 'not the Owner’s lesson');
+    config.sandboxed = true;
+    assert.notEqual((await roommate.call(method, `/api/generations/code-lesson/${url}`, body)).status, 403, 'with a sandbox it is allowed');
+  }
+  config.sandboxed = false;
+  assert.equal((await roommate.call('GET', '/api/generations/code-lesson/source')).status !== 403, true, 'reading is fine');
+  assert.equal((await owner.call('GET', '/api/settings')).data.house.sandboxed, false);
+  store.remove('code-lesson');
+  config.sandboxed = undefined;
 });

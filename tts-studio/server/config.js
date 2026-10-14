@@ -56,6 +56,8 @@ export function loadConfig() {
     //    TTS_HOST=0.0.0.0 because a container's loopback is its own, and docker-compose.yml then
     //    publishes the port on the host's 127.0.0.1 alone, so the rule still holds outside it. */
     maxProfiles: Math.min(20, Math.max(1, Math.floor(Number(pick('TTS_MAX_PROFILES', 5))) || 5)), // people who can share this install
+    // Whether a scene's code is confined: the macOS sandbox (video/sandbox.py). Elsewhere it runs as this server does.
+    sandboxed: process.platform === 'darwin' && fs.existsSync('/usr/bin/sandbox-exec') && !['0', 'off', 'false'].includes(String(pick('VIDEO_SANDBOX', '1')).toLowerCase()),
     lan: pick('TTS_LAN', '0') === '1', // listen on the network too; see server/local.js
     host: pick('TTS_LAN', '0') === '1' ? '0.0.0.0' : String(pick('TTS_HOST', '127.0.0.1')).trim(),
     dataDir: path.resolve(pick('TTS_DATA_DIR', path.join(ROOT, 'data'))),

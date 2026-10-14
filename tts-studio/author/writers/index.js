@@ -31,7 +31,13 @@ export async function askWriter({ writer, secrets, config, schema, prompt, nonEm
     throw new ProviderError('This profile may not use the Claude Code sign-in on the computer that hosts this. The Owner can allow it, or choose another writer.');
   }
   if (writer.kind === 'claude-code') {
-    const out = await askClaude({ ...rest, prompt, schema, nonEmpty, config, model: writer.model });
+    let out;
+    try {
+      out = await askClaude({ ...rest, prompt, schema, nonEmpty, config, model: writer.model });
+    } catch (e) {
+      if (e.usage) e.usage.hostFunded = true; // a request that failed still cost something
+      throw e;
+    }
     // hostFunded: paid for by the computer's own sign-in or keys, which the Owner may put a limit on for others.
     return { ...out, usage: { ...out.usage, provider: 'claude-code', kind: 'claude-code', costKnown: true, hostFunded: true } };
   }
@@ -51,19 +57,32 @@ export async function askWriter({ writer, secrets, config, schema, prompt, nonEm
   };
   let out;
   let spent = null;
+  const hostFunded = from === 'env';
+  // A request that fails after the provider answered still cost tokens, and still came out of the same pocket.
+  const settle = (e) => {
+    if (e.usage) {
+      const used = add(spent, e.usage);
+      e.usage = { ...used, provider: writer.provider, kind: writer.kind, costUsd: costOf(used, writer.rate) ?? 0, costKnown: costOf(used, writer.rate) != null, hostFunded };
+    }
+    return e;
+  };
   try {
     out = await once(prompt);
   } catch (e) {
-    if (e.kind !== 'format') throw e;
+    if (e.kind !== 'format') throw settle(e);
     // One retry, told what was wrong. The tokens of the unusable answer still count.
     spent = e.usage;
-    out = await once(`${prompt}\n\nAn earlier answer to this could not be used: ${e.message} Answer again, with only the JSON object.`);
+    try {
+      out = await once(`${prompt}\n\nAn earlier answer to this could not be used: ${e.message} Answer again, with only the JSON object.`);
+    } catch (e2) {
+      throw settle(e2);
+    }
   }
   const usage = add(spent, out.usage);
   const cost = costOf(usage, writer.rate);
   return {
     answer: out.answer,
     costUsd: cost ?? 0,
-    usage: { ...usage, provider: writer.provider, kind: writer.kind, costUsd: cost ?? 0, costKnown: cost != null, hostFunded: from === 'env' },
+    usage: { ...usage, provider: writer.provider, kind: writer.kind, costUsd: cost ?? 0, costKnown: cost != null, hostFunded },
   };
 }

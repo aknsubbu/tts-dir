@@ -103,6 +103,8 @@ export function checkBaseUrl(kind, value) {
   }
   if (!['http:', 'https:'].includes(url.protocol)) throw new SettingsError('A provider address starts with http:// or https://.');
   if (url.username || url.password) throw new SettingsError('Put the key in the key field, not in the address.');
+  // The address a cloud machine asks for its own credentials at. Another profile's provider must not be a way to it.
+  if (/^169\.254\.|^\[?fd00:ec2:|^metadata\.google\.internal$/i.test(url.hostname)) throw new SettingsError('That address is not one a provider can be reached at.');
   if (PROVIDER_KINDS[kind] && !PROVIDER_KINDS[kind].company && !LOCAL_HOSTS.has(url.hostname)) {
     throw new SettingsError(`“${PROVIDER_KINDS[kind].label}” runs on this Mac, so its address is localhost or 127.0.0.1 (host.docker.internal from Docker). For another machine, add it under Other.`);
   }
@@ -646,9 +648,11 @@ export function createSettings({ db, getConfig, secrets, profiles = null }) {
     }
 
     /**
-     * The Owner's monthly limit on what this profile spends with the host's Claude sign-in and keys, applied to a
-     * writer that uses them. Returns null when nothing limits it (the Owner, no limit set, or a writer on its own
-     * key or on this Mac), else { capUsd, leftUsd }. `spentUsd` is what it has spent that way this month.
+     * The Owner's monthly limit on what this profile spends with the host's Claude sign-in and keys. Null for the
+     * Owner or when no limit is set, else { capUsd, leftUsd, usesHost }: `usesHost` says whether the writer would
+     * use them now. The limit applies to a lesson whichever writer it started with, because a key can be removed
+     * after the check and the host's would be used instead; `usesHost` only decides whether to refuse at the start.
+     * A key that cannot be looked up counts as the host's: when in doubt, it is limited.
      */
     async function hostAllowance(writer, spentUsd) {
       const me = profiles?.get(pid);
@@ -656,10 +660,9 @@ export function createSettings({ db, getConfig, secrets, profiles = null }) {
       let usesHost = false;
       for (const step of Object.values(writer.steps)) {
         if (step.kind === 'claude-code') usesHost = true;
-        else if (step.kind !== 'ollama' && step.kind !== 'local' && (await lookupKey(step.provider).catch(() => ({}))).from === 'env') usesHost = true;
+        else if (step.kind !== 'ollama' && step.kind !== 'local' && (await lookupKey(step.provider).catch(() => ({ from: 'env' }))).from === 'env') usesHost = true;
       }
-      if (!usesHost) return null;
-      return { capUsd: me.hostCapUsd, leftUsd: Math.max(0, Math.round((me.hostCapUsd - (spentUsd || 0)) * 100) / 100) };
+      return { capUsd: me.hostCapUsd, leftUsd: Math.max(0, Math.round((me.hostCapUsd - (spentUsd || 0)) * 100) / 100), usesHost };
     }
     const hostAllowanceMessage = (a) => `Your allowance for what this computer’s Claude sign-in and keys cost ($${a.capUsd.toFixed(2)} a month, set by the Owner) is used up for this month. Choose a writer with a key of your own, or a model on this Mac, in Settings → Lesson writer, or ask the Owner to raise it.`;
 

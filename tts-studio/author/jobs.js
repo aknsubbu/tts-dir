@@ -93,6 +93,7 @@ export function createAuthorJobs({ getConfig, author = createAuthor({ getConfig 
         project,
         writer: b.writer,
         capUsd: b.capUsd,
+        hostCapUsd: b.hostCapUsd,
         phase: b.phase,
         chapter: b.chapter,
         redo: b.redo ? String(b.redo).slice(0, 2000) : undefined,
