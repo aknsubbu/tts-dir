@@ -18,7 +18,7 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
   const watching = new Map(); // generation id -> { jobId, timer }
   // What the Owner's allowance for the host's sign-in and keys is held back for lessons that are running, so lessons
   // started together cannot each be given all of it. Set in the same step as it is read, released when the lesson stops.
-  const reservations = new Map(); // generation id -> { profileId, usd }
+  const reservations = new Map(); // generation id -> { profileId, hostUsd, monthUsd }
 
   function unwatch(id) {
     watching.delete(id);
@@ -86,28 +86,38 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
     const writer = mine.resolveWriter(lesson.origin || lesson.profile || 'page', lesson.writer || null);
     await mine.checkWriter(writer);
     const { lessonCapUsd, monthCapUsd } = mine.costs();
+    // The one thing that waits (a key lookup) comes first. From here to the reservation nothing awaits, so lessons
+    // started together are decided one after another and cannot each be given the whole of what is left.
+    const allowance = await mine.hostAllowance(writer, 0);
+    // Without this lesson's own failed attempts: the job counts those itself.
+    const spentNow = store.stats(profileId, { excludeId: lessonId });
+    const others = [...reservations].filter(([rid, hold]) => rid !== lessonId && hold.profileId === profileId).map(([, hold]) => hold);
+    const held = (field) => others.reduce((n, hold) => n + (hold[field] || 0), 0);
     let capUsd = lessonCapUsd;
+    let monthLeft = null;
     if (monthCapUsd != null) {
-      // Without this lesson's own earlier attempts: its cap already counts them.
-      const left = Math.round((monthCapUsd - store.stats(profileId, { excludeId: lessonId }).costThisMonthUsd) * 100) / 100;
-      if (left <= 0) throw new Error(`This month's lessons have reached the monthly cap of $${monthCapUsd.toFixed(2)}. Raise it in Settings → Costs, then press Retry.`);
-      capUsd = capUsd == null ? left : Math.min(capUsd, left);
+      const left = Math.round((monthCapUsd - spentNow.costThisMonthUsd) * 100) / 100;
+      monthLeft = Math.round((left - held('monthUsd')) * 100) / 100;
+      if (monthLeft <= 0) {
+        throw new Error(left > 0
+          ? 'Your other lessons may spend what is left of this month’s cap. Press Retry when they have finished.'
+          : `This month's lessons have reached the monthly cap of $${monthCapUsd.toFixed(2)}. Raise it in Settings → Costs, then press Retry.`);
+      }
+      capUsd = capUsd == null ? monthLeft : Math.min(capUsd, monthLeft);
     }
     // The Owner's limit on what this profile spends with the host's own sign-in and keys. The job is held to what is
     // left of it (less what its other running lessons may still spend), whichever writer it starts with.
-    const allowance = await mine.hostAllowance(writer, store.stats(profileId, { excludeId: lessonId }).hostSpentThisMonthUsd);
     let hostCapUsd = null;
     if (allowance) {
-      let held = 0;
-      for (const [rid, hold] of reservations) if (rid !== lessonId && hold.profileId === profileId) held += hold.usd;
-      hostCapUsd = Math.max(0, Math.round((allowance.leftUsd - held) * 100) / 100);
+      const left = Math.max(0, Math.round((allowance.capUsd - spentNow.hostSpentThisMonthUsd) * 100) / 100);
+      hostCapUsd = Math.max(0, Math.round((left - held('hostUsd')) * 100) / 100);
       if (allowance.usesHost && hostCapUsd <= 0) {
-        throw new Error(allowance.leftUsd > 0
+        throw new Error(left > 0
           ? 'Your other lessons are using the allowance the Owner set for this computer’s Claude sign-in and keys. Press Retry when they have finished.'
-          : `${mine.hostAllowanceMessage(allowance)} Then press Retry.`);
+          : `${mine.hostAllowanceMessage({ ...allowance, leftUsd: left })} Then press Retry.`);
       }
-      if (lessonId) reservations.set(lessonId, { profileId, usd: hostCapUsd });
     }
+    if (lessonId && (hostCapUsd != null || monthLeft != null)) reservations.set(lessonId, { profileId, hostUsd: hostCapUsd || 0, monthUsd: capUsd ?? 0 });
     return { writer, capUsd, hostCapUsd };
   }
 
@@ -278,6 +288,7 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
     try {
       job = jobs.submit({ project, kind: 'check', ...(chapter ? { chapter } : {}) });
     } catch (e) {
+      reservations.delete(id); // it never started, so it holds nothing
       store.update(id, prior);
       throw Object.assign(new Error(e.message), { status: e.status || 400 });
     }
@@ -346,6 +357,7 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
       const plan = await writerFor(settings.lesson, row.profile_id, id);
       job = jobs.submit({ project: settings.project, kind: 'revise', request, scope, attachments, history, ...(chapter ? { chapter } : {}), ...plan });
     } catch (e) {
+      reservations.delete(id); // it never started, so it holds nothing
       store.update(id, prior);
       throw Object.assign(new Error(e.message), { status: e.status || 400 });
     }
@@ -430,5 +442,18 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
     watching.clear();
   }
 
-  return { start, checkEdit, revise, cancel, stop, isWritten, isActive: (id) => watching.has(id) };
+  /**
+   * Lessons the server was stopped under left what they had spent in their logs. Keep it on them, so a restart
+   * does not give the money back to the caps and the Owner's limit. Safe to run again.
+   */
+  function settleInterrupted() {
+    const rows = store.db.prepare("SELECT id FROM generations WHERE status = 'error' AND error LIKE 'Interrupted by a server restart%'").all();
+    for (const { id } of rows) {
+      const patch = noteSpent(id);
+      if (patch.settings_json) store.update(id, patch);
+    }
+    return rows.length;
+  }
+
+  return { start, checkEdit, revise, cancel, stop, settleInterrupted, isWritten, isActive: (id) => watching.has(id) };
 }

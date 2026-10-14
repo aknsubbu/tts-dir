@@ -135,6 +135,9 @@ test('a lesson stops at the Owner’s allowance for the host’s own sign-in and
   assert.deepEqual([spent.hostUsd, spent.usd], [0.5, 1.5], 'only the host-paid request counts toward the allowance, though the lesson spent three times as much');
   // With the allowance at nothing, the first host-paid request is refused with the Owner's wording.
   await assert.rejects(author(ask({ write: [answer()] })).write({ project: 'p-host0', ...BRIEF, writer: plan({}), hostCapUsd: 0 }), (e) => e.code === 'cap' && /allowance the Owner set/.test(e.message));
+  // The earlier attempt's host spending counts once, in the job: a retry whose allowance (without that attempt) equals it is refused at once.
+  const none = ask({ write: [], fix: [answer()] });
+  await assert.rejects(author(none).write({ project: 'p-host', writer: mixed, capUsd: 50, hostCapUsd: spent.hostUsd }), (e) => e.code === 'cap' && /allowance the Owner set/.test(e.message));
   // A retry holds what the earlier attempt spent with the host: the result's share includes it.
   const retry = await author(ask({ write: [], fix: [answer(), answer()] })).write({ project: 'p-host', writer: mixed, capUsd: 50, hostCapUsd: 5 });
   assert.equal(retry.usage.hostCostUsd, Math.round((spent.hostUsd + retry.usage.requests.filter((r) => r.hostFunded).reduce((n, r) => n + r.costUsd, 0)) * 1000) / 1000);

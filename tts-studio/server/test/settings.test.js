@@ -278,9 +278,10 @@ test('connecting Claude shows commands with real paths', async () => {
 });
 
 test('a provider cannot be pointed at a cloud machine’s credentials address', async () => {
-  for (const baseUrl of ['http://169.254.169.254/latest', 'http://169.254.1.1:80', 'http://[fd00:ec2::254]/', 'http://metadata.google.internal/computeMetadata/v1']) {
+  for (const baseUrl of ['http://169.254.169.254/latest', 'http://169.254.1.1:80', 'http://[fd00:ec2::254]/', 'http://metadata.google.internal/computeMetadata/v1', 'http://[::ffff:169.254.169.254]/', 'http://Metadata.Google.Internal./x', 'http://[fe80::1]/', 'http://2852039166/', 'http://0xA9FEA9FE/', 'http://0251.0376.0251.0376/']) {
     await assert.rejects(settings.saveProvider('new', { baseUrl }), /not one a provider can be reached at/, baseUrl);
   }
-  const id = await settings.saveProvider('new', { baseUrl: 'https://openrouter.ai/api/v1' });
+  const id = await settings.saveProvider('new', { baseUrl: 'HTTPS://OpenRouter.AI:443/api/v1/' });
+  assert.equal(settings.provider(id).baseUrl, 'https://openrouter.ai/api/v1', 'what is kept is what was checked, as the URL parser reads it');
   await settings.removeProvider(id);
 });

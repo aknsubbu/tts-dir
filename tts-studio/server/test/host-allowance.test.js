@@ -10,7 +10,7 @@ import { createSecrets } from '../secrets.js';
 import { createSettings } from '../settings.js';
 
 /** The Owner's limit on what a profile spends with the host's own sign-in and keys, below the HTTP layer. */
-let dir, store, profiles, factory, lessons, submitted, roomId, ownerId, config, jobSeq;
+let dir, store, profiles, factory, lessons, submitted, roomId, ownerId, config, jobSeq, failNext;
 
 const row = (id, profileId, settings = {}, extra = {}) => ({
   id, profile_id: profileId, kind: 'video', title: id, source_name: `video/projects/${id}`, text: 'x', text_hash: id, config_hash: id, char_count: 1, word_count: 1,
@@ -30,7 +30,7 @@ before(() => {
   factory = createSettings({ db: store.db, getConfig: () => config, secrets, profiles });
   submitted = [];
   jobSeq = 0;
-  const jobs = { submit: (j) => { submitted.push(j); jobSeq += 1; return { id: `job-${jobSeq}` }; }, cancel() {}, get: () => ({ status: 'working' }) };
+  const jobs = { submit: (j) => { if (failNext) { failNext = false; throw new Error('the writer is busy'); } submitted.push(j); jobSeq += 1; return { id: `job-${jobSeq}` }; }, cancel() {}, get: () => ({ status: 'working' }) };
   lessons = createLessons({ store, runner: { enqueue() {} }, getConfig: () => config, jobs, settings: factory, pollMs: 60_000 });
 });
 after(() => {
@@ -106,10 +106,14 @@ test('what a lesson spent that no version holds yet is counted: a waiting narrat
   const waiting = store.stats(roomId);
   assert.equal(Math.round((waiting.costThisMonthUsd - before.costThisMonthUsd) * 100) / 100, 1);
   assert.equal(Math.round((waiting.hostSpentThisMonthUsd - before.hostSpentThisMonthUsd) * 100) / 100, 0.75);
-  assert.equal(month('p1').costThisMonthUsd, before.costThisMonthUsd, 'a lesson being retried is held to its own cap, not counted twice');
+  assert.equal(month('p1').costThisMonthUsd, waiting.costThisMonthUsd, 'with no failed attempt there is nothing to leave out');
   // An attempt that failed and was never finished.
   store.update('p1', { settings_json: JSON.stringify({ project: 'p1', lesson: { ...settings, failedUsd: 2, failedHostUsd: 1 } }) });
   assert.equal(Math.round((store.stats(roomId).costThisMonthUsd - before.costThisMonthUsd) * 100) / 100, 3);
+  // A retry leaves out the failed attempts (the job counts those itself) and nothing else.
+  const retrying = store.stats(roomId, { excludeId: 'p1' });
+  assert.equal(Math.round((retrying.costThisMonthUsd - before.costThisMonthUsd) * 100) / 100, 1, 'the waiting narration and outline still count');
+  assert.equal(Math.round((retrying.hostSpentThisMonthUsd - before.hostSpentThisMonthUsd) * 100) / 100, 0.75);
   // Once a version holds it, the lesson's own figures are not counted again.
   store.update('p1', { settings_json: JSON.stringify({ project: 'p1', lesson: { ...settings, failedUsd: 0, failedHostUsd: 0 } }), version: 1 });
   assert.equal(store.stats(roomId).costThisMonthUsd, before.costThisMonthUsd);
@@ -134,4 +138,49 @@ test('a failed or cancelled lesson keeps what the attempt spent, read from its l
   const after = store.stats(roomId);
   assert.equal(Math.round((after.costThisMonthUsd - before.costThisMonthUsd) * 100) / 100, 1.25);
   assert.equal(Math.round((after.hostSpentThisMonthUsd - before.hostSpentThisMonthUsd) * 100) / 100, 0.75);
+});
+
+test('the monthly cap is shared out the same way: lessons started together cannot each spend what is left', async () => {
+  const room = factory.for(roomId);
+  const spent0 = store.stats(roomId).costThisMonthUsd; // what earlier tests left on this profile
+  profiles.update(roomId, { hostCapUsd: Math.round((store.stats(roomId).hostSpentThisMonthUsd + 2) * 100) / 100 }); // two dollars of the host's allowance left
+  await room.patch({ costs: { monthCapUsd: Math.round((spent0 + 3) * 100) / 100 } });
+  for (const id of ['m1', 'm2', 'm3']) store.insert(row(id, roomId));
+  const first = await start('m1');
+  assert.equal(first.status, 'processing', first.error);
+  assert.equal(submitted.at(-1).capUsd, 3);
+  const second = await start('m2');
+  assert.equal(second.status, 'error');
+  assert.match(second.error, /Your other lessons may spend what is left of this month’s cap/);
+  lessons.cancel('m1');
+  assert.equal((await start('m3')).status, 'processing');
+  lessons.cancel('m3');
+  await room.patch({ costs: { monthCapUsd: null } });
+});
+
+test('a revision that cannot start holds nothing back', async () => {
+  profiles.update(roomId, { hostCapUsd: Math.round((store.stats(roomId).hostSpentThisMonthUsd + 2) * 100) / 100 });
+  store.insert(row('r1', roomId, {}, { status: 'done' }));
+  store.insert(row('r2', roomId));
+  const root = path.join(config.videoDir, 'projects', 'r1');
+  fs.mkdirSync(root, { recursive: true });
+  failNext = true;
+  await assert.rejects(lessons.revise('r1', { request: 'change it', scope: { kind: 'lesson' } }), /the writer is busy/);
+  assert.equal((await start('r2')).status, 'processing', 'the allowance was not left held by the revision that never ran');
+  assert.equal(submitted.at(-1).hostCapUsd, 2);
+  lessons.cancel('r2');
+});
+
+test('what a lesson had spent when the server stopped is kept, once, however often it starts again', async () => {
+  store.insert(row('i1', roomId, {}, { status: 'error' }));
+  store.update('i1', { error: 'Interrupted by a server restart. Press Retry.' });
+  const log = path.join(config.videoDir, 'projects', 'i1', 'build', 'author');
+  fs.mkdirSync(log, { recursive: true });
+  fs.writeFileSync(path.join(log, 'spent.json'), JSON.stringify({ usd: 0.8, hostUsd: 0.6 }));
+  const before = store.stats(roomId);
+  assert.ok(lessons.settleInterrupted() >= 1);
+  lessons.settleInterrupted();
+  const after = store.stats(roomId);
+  assert.equal(Math.round((after.costThisMonthUsd - before.costThisMonthUsd) * 100) / 100, 0.8);
+  assert.equal(Math.round((after.hostSpentThisMonthUsd - before.hostSpentThisMonthUsd) * 100) / 100, 0.6);
 });

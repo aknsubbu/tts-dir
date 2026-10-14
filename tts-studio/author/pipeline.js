@@ -278,8 +278,8 @@ export function createAuthor({ getConfig, ask = askWriter, check = runCheck, aut
     const spent = () => spentBefore + requests.reduce((n, r) => n + (Number(r.costUsd) || 0), 0);
     const hostSpent = () => hostBefore + requests.reduce((n, r) => n + (r.hostFunded ? Number(r.costUsd) || 0 : 0), 0);
     const overCap = () => {
-      // Earlier attempts' host spending is already held against the allowance when the job starts: only this attempt's counts here.
-      if (hostCapUsd != null && hostSpent() - hostBefore >= hostCapUsd) {
+      // hostCapUsd is what was left of the allowance without this lesson's own earlier attempts, which hostSpent() includes.
+      if (hostCapUsd != null && hostSpent() >= hostCapUsd) {
         throw new AuthorError(
           'This lesson reached the allowance the Owner set for what this computer’s Claude sign-in and keys may cost you this month. Choose a writer with a key of your own, or a model on this Mac, in Settings → Lesson writer, or ask the Owner to raise it, and press Retry: it continues from where it stopped.',
           'cap',

@@ -309,9 +309,12 @@ export function createStore(dataDir) {
   function unbilled(settingsJson, version) {
     const l = JSON.parse(settingsJson || '{}').lesson || {};
     const waiting = version ? 0 : 1; // once a version holds the earlier phases' cost, they are not counted twice
+    const [failedUsd, failedHost] = [Number(l.failedUsd) || 0, Number(l.failedHostUsd) || 0];
     return {
-      usd: (Number(l.failedUsd) || 0) + waiting * ((Number(l.scriptCostUsd) || 0) + (Number(l.outlineCostUsd) || 0)),
-      host: (Number(l.failedHostUsd) || 0) + waiting * ((Number(l.scriptHostUsd) || 0) + (Number(l.outlineHostUsd) || 0)),
+      usd: failedUsd + waiting * ((Number(l.scriptCostUsd) || 0) + (Number(l.outlineCostUsd) || 0)),
+      host: failedHost + waiting * ((Number(l.scriptHostUsd) || 0) + (Number(l.outlineHostUsd) || 0)),
+      failedUsd,
+      failedHost,
     };
   }
 
@@ -345,10 +348,12 @@ export function createStore(dataDir) {
     let pendingUsd = 0;
     let pendingHost = 0;
     for (const r of db.prepare("SELECT id, version, settings_json FROM generations WHERE profile_id = ? AND settings_json LIKE '%\"lesson\"%'").all(profileId)) {
-      if (r.id === excludeId) continue; // a lesson being retried is held to its own cap with its earlier attempts included
       const u = unbilled(r.settings_json, r.version);
-      pendingUsd += u.usd;
-      pendingHost += u.host;
+      // A lesson being retried is held to its own caps with its failed attempts' spending counted by the job itself,
+      // so those alone are left out here: everything else it has spent still counts, once.
+      const mine = r.id === excludeId;
+      pendingUsd += u.usd - (mine ? u.failedUsd : 0);
+      pendingHost += u.host - (mine ? u.failedHost : 0);
     }
     claude.usd += pendingUsd;
     const hostUsd =

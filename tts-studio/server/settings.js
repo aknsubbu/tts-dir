@@ -1,6 +1,7 @@
 import { BUILT_IN_PROVIDERS, DEFAULT_MODEL, DEFAULT_PLAN, destination, EFFORTS, KIND_CAPS, PROVIDER_KINDS, STEP_EFFORT_ENV, WRITER_STEPS } from '../shared/providers.js';
 import { LESSON_MINUTES, VIDEO_QUALITIES } from '../shared/limits.js';
 import { RATES, RATES_DATE, rateKey } from '../shared/rates.js';
+import { isMetadataAddress, isMetadataName } from '../author/writers/net.js';
 import { describe, ENV_KEYS, keyAccount, keyFor } from './secrets.js';
 
 /**
@@ -104,11 +105,11 @@ export function checkBaseUrl(kind, value) {
   if (!['http:', 'https:'].includes(url.protocol)) throw new SettingsError('A provider address starts with http:// or https://.');
   if (url.username || url.password) throw new SettingsError('Put the key in the key field, not in the address.');
   // The address a cloud machine asks for its own credentials at. Another profile's provider must not be a way to it.
-  if (/^169\.254\.|^\[?fd00:ec2:|^metadata\.google\.internal$/i.test(url.hostname)) throw new SettingsError('That address is not one a provider can be reached at.');
+  if (isMetadataAddress(url.hostname) || isMetadataName(url.hostname)) throw new SettingsError('That address is not one a provider can be reached at.');
   if (PROVIDER_KINDS[kind] && !PROVIDER_KINDS[kind].company && !LOCAL_HOSTS.has(url.hostname)) {
     throw new SettingsError(`“${PROVIDER_KINDS[kind].label}” runs on this Mac, so its address is localhost or 127.0.0.1 (host.docker.internal from Docker). For another machine, add it under Other.`);
   }
-  return raw;
+  return url.href.replace(/\/+$/, ''); // as the URL parser reads it, so what is stored is what was checked
 }
 
 export function createSettings({ db, getConfig, secrets, profiles = null }) {
