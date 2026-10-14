@@ -1,3 +1,4 @@
+import os from 'node:os';
 import path from 'node:path';
 import { loadConfig, ROOT } from './config.js';
 import { createStore } from './db.js';
@@ -27,8 +28,16 @@ const jobs = createAuthorJobs({ getConfig: loadConfig, author: createAuthor({ ge
 const lessons = createLessons({ store, runner, getConfig: loadConfig, jobs, versions, settings });
 const app = createApp({ getConfig: loadConfig, store, runner, engine, lessons, versions, settings, secrets, mcp: mcpHandler(), distDir: path.join(ROOT, 'dist') });
 
+/** This machine's IPv4 addresses on the networks it is joined to. */
+function lanAddresses() {
+  return Object.values(os.networkInterfaces()).flat().filter((i) => i && i.family === 'IPv4' && !i.internal).map((i) => i.address);
+}
+
 const server = app.listen(cfg.port, cfg.host, () => {
   console.log(`\n  Narrated Proofs  http://localhost:${cfg.port}`);
+  if (cfg.lan) {
+    for (const a of lanAddresses()) console.log(`  On your network  http://${a}:${cfg.port}   (no login: trusted networks only)`);
+  }
   console.log(`  Dev UI (vite)    http://localhost:5173   (when running npm run dev)`);
   console.log(`  Library data     ${cfg.dataDir}`);
   console.log(`  Lesson writer    who writes: Settings → Lesson writer`);

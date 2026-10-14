@@ -214,6 +214,7 @@ All optional. Put them in `.env` here or one folder up, or in the environment. C
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PORT` | `8787` | Port for `npm start` |
+| `TTS_LAN` | `0` | `1` serves the dashboard on your network too (phone, other computer), at the address printed on start. There is no login, so use a network you trust |
 | `TTS_HOST` | `127.0.0.1` | Address to listen on. Docker sets `0.0.0.0` and publishes the port on `127.0.0.1` only |
 | `TTS_DATA_DIR` | `./data` | Library location |
 | `TTS_VOICE` | `af_heart` | Voice preselected on first run |
