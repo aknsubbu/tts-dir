@@ -9,7 +9,7 @@ import { createApp } from '../app.js';
 import { createProfiles, ProfileError } from '../profiles.js';
 import { createVersions } from '../versions.js';
 
-let dir, videoDir, store, app, server, base;
+let dir, videoDir, store, app, server, base, profiles;
 const engine = {
   start: async () => {},
   stop() {},
@@ -59,7 +59,9 @@ before(() => {
   store = createStore(path.join(dir, 'data'));
   const config = { videoDir, defaultVoiceId: 'af_zed', keepRenders: 3, maxProfiles: 3 };
   const versions = createVersions({ store, getConfig: () => config });
-  app = createApp({ getConfig: () => config, store, runner: { enqueue() {}, cancel: () => false }, engine, versions });
+  // Every test shares one address, so the per-device cap is raised here; its own test uses the default.
+  profiles = createProfiles({ db: store.db, dataDir: store.dataDir, getMax: () => config.maxProfiles, ipMax: 10_000 });
+  app = createApp({ getConfig: () => config, store, runner: { enqueue() {}, cancel: () => false }, engine, versions, profiles });
   return new Promise((r) => {
     server = app.listen(0, '127.0.0.1', () => {
       base = `http://127.0.0.1:${server.address().port}`;
@@ -243,8 +245,10 @@ test('a locked profile needs its PIN, which lockout protects, and a wrong one sa
   assert.equal(last.data.retryAfterSec, 30);
   assert.ok(Number(last.headers.get('retry-after')) > 0);
   assert.equal((await fresh.call('POST', '/api/session', { profileId: bId, pin: '3141' })).status, 429);
-  // Reset for the tests that follow: the Owner clears it (the lock goes with the PIN).
-  assert.equal((await alice.call('DELETE', `/api/profiles/${bId}/pin`)).status, 200);
+  // Even the Owner cannot get past a PIN they do not know (see the next tests); on the host,
+  // `npm run profiles -- reset-pin` can, and the lock goes with the PIN.
+  profiles.clearPin(bId);
+  profiles.closeSessionsOf(bId);
   assert.equal((await fresh.call('POST', '/api/session', { profileId: bId })).status, 200);
   // Changing a PIN signs the profile out everywhere else, so Bob comes back in.
   assert.equal((await bob.call('POST', '/api/session', { profileId: bId })).status, 200);
@@ -267,11 +271,30 @@ test('changing or removing a PIN needs the current one; only the Owner resets so
   assert.equal((await alice.call('PATCH', `/api/profiles/${aId}`, { requirePinToAdd: true })).status, 409);
 });
 
+test('an Owner with no PIN cannot reset or delete a locked profile: a session on them proves nothing', async () => {
+  const victim = (await alice.call('POST', '/api/profiles', { name: 'Victim', pin: '8642' })).data.profile;
+  const stranger = browser(); // anyone at the gate can sign in as a PIN-less Owner
+  assert.equal((await stranger.call('POST', '/api/session', { profileId: aId })).status, 200);
+  assert.equal((await stranger.call('PUT', `/api/profiles/${victim.id}/pin`, { pin: '0000' })).status, 409);
+  assert.equal((await stranger.call('DELETE', `/api/profiles/${victim.id}/pin`)).status, 409);
+  assert.equal((await stranger.call('DELETE', `/api/profiles/${victim.id}`, { confirmName: 'Victim' })).status, 401);
+  assert.equal((await stranger.call('DELETE', `/api/profiles/${victim.id}`, { confirmName: 'Victim', pin: '0000' })).status, 401);
+  assert.equal((await browser().call('POST', '/api/session', { profileId: victim.id, pin: '0000' })).status, 401);
+  assert.equal(profiles.get(victim.id).locked, true);
+  // The PIN's owner can do it.
+  assert.equal((await stranger.call('DELETE', `/api/profiles/${victim.id}`, { confirmName: 'victim', pin: '8642' })).status, 200);
+});
+
 test('a changed PIN signs out the profile\'s other sessions', async () => {
   const other = browser();
   assert.equal((await other.call('POST', '/api/session', { profileId: bId })).status, 200);
   assert.equal((await other.call('GET', '/api/generations')).status, 200);
-  assert.equal((await alice.call('PUT', `/api/profiles/${bId}/pin`, { pin: '2468' })).status, 200); // the Owner resets it
+  // Bob has a PIN again, so the Owner must prove who they are to reset it, with a PIN of their own.
+  assert.equal((await bob.call('PUT', `/api/profiles/${bId}/pin`, { pin: '1111' })).status, 200);
+  assert.equal((await alice.call('PUT', `/api/profiles/${aId}/pin`, { pin: '7777' })).status, 200);
+  assert.equal((await alice.call('PUT', `/api/profiles/${bId}/pin`, { pin: '2468' })).status, 401); // no Owner PIN given
+  assert.equal((await alice.call('PUT', `/api/profiles/${bId}/pin`, { pin: '2468', ownerPin: '0000' })).status, 401);
+  assert.equal((await alice.call('PUT', `/api/profiles/${bId}/pin`, { pin: '2468', ownerPin: '7777' })).status, 200);
   assert.equal((await other.call('GET', '/api/generations')).status, 401);
   assert.equal((await bob.call('GET', '/api/generations')).status, 401);
   assert.equal((await bob.call('POST', '/api/session', { profileId: bId, pin: '2468' })).status, 200);
@@ -279,13 +302,13 @@ test('a changed PIN signs out the profile\'s other sessions', async () => {
 });
 
 test('the Owner can require their PIN before anyone adds a profile', async () => {
-  assert.equal((await alice.call('PUT', `/api/profiles/${aId}/pin`, { pin: '7777' })).status, 200);
   assert.equal((await alice.call('PATCH', `/api/profiles/${aId}`, { requirePinToAdd: true })).status, 200);
   const stranger = browser();
   assert.equal((await stranger.call('POST', '/api/profiles', { name: 'Guest' })).status, 401);
   assert.equal((await stranger.call('POST', '/api/profiles', { name: 'Guest', ownerPin: '7777' })).status, 201);
   assert.equal((await bob.call('POST', '/api/profiles', { name: 'Guest 2' })).status, 401);
   const guest = (await browser().call('GET', '/api/profiles')).data.profiles.find((p) => p.name === 'Guest');
+  assert.equal((await alice.call('DELETE', `/api/profiles/${guest.id}`, { confirmName: 'Guest' })).status, 401); // the Owner's PIN stands in the way
   assert.equal((await alice.call('DELETE', `/api/profiles/${guest.id}`, { pin: '7777', confirmName: 'Guest' })).status, 200);
   assert.equal((await alice.call('DELETE', `/api/profiles/${aId}/pin`, { currentPin: '7777' })).status, 200);
   // Removing the Owner's PIN also turns the requirement off.
@@ -297,14 +320,40 @@ test('the Owner can require their PIN before anyone adds a profile', async () =>
 const A_LESSON = 'lesson-of-alice';
 const B_LESSON = 'lesson-of-bob';
 
+const A_AUDIO = 'audio-of-alice';
+
+/** Alice's lessons, with every file a read route could serve, so that her own access is proven and not only Bob's refusal. */
+function seedAlice() {
+  const root = path.join(videoDir, 'projects', A_LESSON);
+  const put = (rel, body) => {
+    fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+    fs.writeFileSync(path.join(root, rel), body);
+  };
+  put('project.json', JSON.stringify({ voice: 'af_zed', scenes: ['Intro'] }));
+  put('script.txt', '[intro]\nHi there.\n');
+  put('scenes.py', 'class Intro: pass\n');
+  put('notes/x.png', 'PNG');
+  put('outline.json', JSON.stringify({ title: 'Outline', chapters: [{ id: '01-a', title: 'A', minutes: 1 }] }));
+  const board = { version: 1, duration: 3, unplayed: [], scenes: [{ name: 'Intro', error: null, end: 'x.png', issues: [], blocks: [{ id: 'intro', text: 'Hi.', duration: 3, start: 0, marks: {}, wav: 'audio/intro.wav', stills: [{ block: 'intro', mark: null, file: 'x.png', at: 1 }], issues: [] }] }] };
+  put('build/check/storyboard.json', JSON.stringify(board));
+  put('build/check/frames/x.png', 'PNG');
+  put('build/manifest.json', JSON.stringify({ order: ['intro'], blocks: { intro: { wav: 'audio/intro.wav' } } }));
+  put('build/audio/intro.wav', 'RIFF');
+  put('versions/001/script.txt', 'v1');
+  put('versions/001/scenes.py', 'v1');
+  store.versions.insert({ generation_id: A_LESSON, n: 1, source: 'written', created_at: Date.now() });
+  for (const ext of ['mp4', 'srt', 'vtt', 'jpg', 'chapters.vtt']) fs.writeFileSync(store.videoPath(A_LESSON, ext), ext);
+  fs.writeFileSync(store.videoPath(A_LESSON, 'words.json'), JSON.stringify({ blocks: [] }));
+  fs.writeFileSync(store.audioPath(A_AUDIO), 'MP3');
+}
+
 test('seeding: each profile has a lesson, and sees only its own', async () => {
-  store.insert(lessonRow(aId, A_LESSON, 'Alice quaternion lesson'));
+  const withNotes = JSON.stringify({ project: A_LESSON, quality: 'low', scenes: ['Intro'], lesson: { topic: 'Alice', review: 'render', attachments: [{ name: 'x.png', file: 'notes/x.png', kind: 'image' }] } });
+  store.insert(lessonRow(aId, A_LESSON, 'Alice quaternion lesson', { settings_json: withNotes, built_version: 1, version: 1 }));
+  store.insert(lessonRow(aId, A_AUDIO, 'Alice spoken piece', { kind: 'audio', source_name: null }, 'harmonics'));
   store.insert(lessonRow(bId, B_LESSON, 'Bob tensor lesson', { tags: 'bobs-tag' }, 'manifolds'));
-  // A lesson's files, so a read that works would have something to return.
-  fs.writeFileSync(store.videoPath(A_LESSON), 'MP4');
-  fs.writeFileSync(store.videoPath(A_LESSON, 'vtt'), 'WEBVTT');
-  fs.mkdirSync(path.join(videoDir, 'projects', A_LESSON), { recursive: true });
-  assert.equal((await alice.call('GET', '/api/generations')).data.items.map((g) => g.id).join(), A_LESSON);
+  seedAlice();
+  assert.deepEqual((await alice.call('GET', '/api/generations')).data.items.map((g) => g.id).sort(), [A_AUDIO, A_LESSON]);
   assert.equal((await bob.call('GET', '/api/generations')).data.items.map((g) => g.id).join(), B_LESSON);
 });
 
@@ -380,17 +429,23 @@ test('every route that takes a lesson id answers profile B exactly as it would f
     const nothing = await bob.call(r.method, `/api${fill(r.path, 'no-such-lesson')}`, bodyFor(r.method));
     assert.equal(theirs.status, 404, `${label} answered ${theirs.status} for someone else's lesson`);
     assert.equal(theirs.text, nothing.text, `${label} answers differently for a lesson that exists`);
+    const theirAudio = await bob.call(r.method, `/api${fill(r.path, A_AUDIO)}`, bodyFor(r.method));
+    assert.equal(theirAudio.status, 404, `${label} answered ${theirAudio.status} for someone else's audio`);
+    // Positive control: every read route does answer Alice, so Bob's 404 is the ownership check and
+    // not just a file that was never there.
+    if (r.method === 'GET') {
+      const ids = [A_LESSON, A_AUDIO];
+      const answers = await Promise.all(ids.map((id) => alice.call('GET', `/api${fill(r.path, id)}`)));
+      assert.ok(answers.some((a) => a.status !== 404), `${label}: Alice gets 404 on her own lessons, so this route proves nothing about Bob`);
+    }
   }
-  // The walk changed nothing of Alice's.
+  // The walk changed nothing of Alice's, whose own fixtures it never touched.
   const still = (await alice.call('GET', `/api/generations/${A_LESSON}`)).data;
   assert.equal(still.title, 'Alice quaternion lesson');
   assert.deepEqual(still.tags, ['private-tag']);
   assert.equal(still.favorite, false);
   assert.ok(fs.existsSync(store.videoPath(A_LESSON)));
   // And she can still use every read route Bob could not.
-  for (const p of ['', '/video', '/captions.vtt', '/files', '/versions', '/script']) {
-    assert.notEqual((await alice.call('GET', `/api/generations/${A_LESSON}${p}`)).status, 404, `Alice lost ${p || 'the lesson'}`);
-  }
   assert.equal((await alice.call('GET', `/api/generations/${B_LESSON}`)).status, 404);
 });
 
@@ -435,9 +490,33 @@ test('live updates go only to the profile whose lesson changed', async () => {
 });
 
 test('spending is counted per profile', async () => {
-  store.versions.insert({ generation_id: A_LESSON, n: 1, source: 'written', created_at: Date.now(), cost_usd: 1.25 });
+  store.versions.insert({ generation_id: A_LESSON, n: 2, source: 'revised', created_at: Date.now(), cost_usd: 1.25 });
   assert.equal((await alice.call('GET', '/api/stats')).data.costThisMonthUsd, 1.25);
   assert.equal((await bob.call('GET', '/api/stats')).data.costThisMonthUsd, 0);
+  // The monthly cap is the house's one number, so it is held against everyone's spend together.
+  store.versions.insert({ generation_id: B_LESSON, n: 1, source: 'written', created_at: Date.now(), cost_usd: 0.5 });
+  assert.equal((await bob.call('GET', '/api/stats')).data.costThisMonthUsd, 0.5);
+  assert.equal(store.houseSpendThisMonth(), 1.75);
+});
+
+test('a live-updates stream ends when its session does', async () => {
+  const who = browser();
+  assert.equal((await who.call('POST', '/api/session', { profileId: bId })).status, 200);
+  const res = await fetch(`${base}/api/events`, { headers: { Cookie: who.cookie } });
+  let ended = false;
+  (async () => {
+    try {
+      for await (const chunk of res.body) void chunk;
+    } catch {
+      /* reset */
+    }
+    ended = true;
+  })();
+  await new Promise((r) => setTimeout(r, 50));
+  await who.call('DELETE', '/api/session');
+  store.update(B_LESSON, { title: 'Bob again' }); // the next change finds the session gone
+  await new Promise((r) => setTimeout(r, 450));
+  assert.equal(ended, true);
 });
 
 // ---------- deleting a profile ----------

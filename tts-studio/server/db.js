@@ -326,6 +326,18 @@ export function createStore(dataDir) {
     return { ...done, active, awaiting, voices, costThisMonthUsd: Math.round(claude.usd * 100) / 100 };
   }
 
+  /**
+   * What writing lessons has cost this month across every profile. The monthly cap is still one
+   * number for the house, so it is checked against this, or each new profile would bring its own allowance.
+   */
+  function houseSpendThisMonth() {
+    const month = new Date();
+    month.setDate(1);
+    month.setHours(0, 0, 0, 0);
+    const usd = db.prepare('SELECT COALESCE(SUM(cost_usd), 0) AS usd FROM versions WHERE created_at >= ?').get(month.getTime()).usd;
+    return Math.round(usd * 100) / 100;
+  }
+
   function tags(profileId) {
     const counts = new Map();
     for (const { tags: t } of db.prepare("SELECT tags FROM generations WHERE profile_id = ? AND tags != ''").all(need(profileId))) {
@@ -395,6 +407,7 @@ export function createStore(dataDir) {
     countBySource: (source) => db.prepare('SELECT COUNT(*) AS n FROM generations WHERE source_name = ?').get(source).n,
     list,
     stats,
+    houseSpendThisMonth,
     tags,
     markInterrupted,
     close: () => db.close(),

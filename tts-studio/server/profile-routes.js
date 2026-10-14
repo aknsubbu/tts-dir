@@ -127,11 +127,20 @@ export function profileRoutes({ profiles, removeProfileData }) {
     }),
   );
 
-  /** Changing or removing a PIN needs the current one; the Owner may reset anyone else's. */
+  /**
+   * Changing or removing a PIN needs the current one. The Owner may reset someone else's, but only
+   * by proving they are the Owner with their own PIN: a session on a PIN-less Owner is not proof,
+   * since anyone at the gate can have one. With no Owner PIN there is the host command instead.
+   */
   const authorisePinChange = (req, p) => {
+    const b = req.body || {};
     if (req.profile.id === p.id) {
-      if (p.locked) profiles.verifyPin(p.id, (req.body || {}).currentPin, { ip: ipOf(req) });
-    } else if (!(req.profile.isOwner && !p.isOwner)) {
+      if (p.locked) profiles.verifyPin(p.id, b.currentPin, { ip: ipOf(req) });
+    } else if (req.profile.isOwner && !p.isOwner) {
+      if (!p.locked) return; // nothing to get past
+      if (!req.profile.locked) throw httpError(409, 'Set a PIN on the Owner profile first, or run: npm run profiles -- reset-pin <name> on the machine that hosts this.');
+      profiles.verifyPin(req.profile.id, b.ownerPin, { ip: ipOf(req) });
+    } else {
       throw httpError(403, 'Only the Owner can reset another profile\'s PIN.');
     }
   };
@@ -167,8 +176,10 @@ export function profileRoutes({ profiles, removeProfileData }) {
       if (p.isOwner) throw httpError(403, 'The Owner profile cannot be deleted.');
       ownerOrSelf(req, p);
       const b = req.body || {};
-      // The PIN of whoever is deleting: the profile's own, or the Owner's for someone else's.
-      profiles.verifyPin(req.profile.id, b.pin, { ip: ipOf(req) });
+      // A PIN stands in the way of deleting a profile: its own, or the Owner's when the Owner has one.
+      // A locked profile with a PIN-less Owner can only be deleted by someone who knows its PIN.
+      const gate = req.profile.id === p.id || req.profile.locked ? req.profile : p;
+      profiles.verifyPin(gate.id, b.pin, { ip: ipOf(req) });
       if (String(b.confirmName ?? '').trim().toLowerCase() !== p.name.toLowerCase()) throw httpError(400, `Type the profile name (“${p.name}”) to confirm.`);
       await removeProfileData(p.id);
       profiles.remove(p.id);

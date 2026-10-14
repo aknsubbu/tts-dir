@@ -49,14 +49,14 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
    * Who writes each step, and what the lesson may still spend, from Settings as they are now.
    * A retry gets them afresh, so a raised cap or a newly set up provider applies.
    */
-  async function writerFor(lesson = {}, profileId) {
+  async function writerFor(lesson = {}) {
     if (!settings) return {};
     const writer = settings.resolveWriter(lesson.origin || lesson.profile || 'page', lesson.writer || null);
     await settings.checkWriter(writer);
     const { lessonCapUsd, monthCapUsd } = settings.costs();
     let capUsd = lessonCapUsd;
     if (monthCapUsd != null) {
-      const left = Math.round((monthCapUsd - store.stats(profileId).costThisMonthUsd) * 100) / 100;
+      const left = Math.round((monthCapUsd - store.houseSpendThisMonth()) * 100) / 100;
       if (left <= 0) throw new Error(`This month's lessons have reached the monthly cap of $${monthCapUsd.toFixed(2)}. Raise it in Settings → Costs, then press Retry.`);
       capUsd = capUsd == null ? left : Math.min(capUsd, left);
     }
@@ -76,7 +76,7 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
     });
     let plan;
     try {
-      plan = await writerFor(lesson, row.profile_id);
+      plan = await writerFor(lesson);
     } catch (e) {
       return fail(id, e.message);
     }
@@ -289,7 +289,7 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
     store.update(id, { status: 'processing', stage: 'Waiting for the lesson writer', error: null, progress_done: 0, progress_total: 0 });
     let job;
     try {
-      const plan = await writerFor(settings.lesson, row.profile_id);
+      const plan = await writerFor(settings.lesson);
       job = jobs.submit({ project: settings.project, kind: 'revise', request, scope, attachments, history, ...(chapter ? { chapter } : {}), ...plan });
     } catch (e) {
       store.update(id, prior);

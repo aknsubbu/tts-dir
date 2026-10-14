@@ -145,8 +145,11 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
     res.flushHeaders();
     res.write('retry: 3000\n\n');
     const due = new Map(); // id -> timer
+    // A stream lasts long: it ends when its session does (sign-out, a PIN reset, a deleted profile).
+    const stillMe = () => profiles.whoIs(req.sessionToken).profile?.id === req.profile.id;
     const send = (id) => {
       due.delete(id);
+      if (!stillMe()) return res.end();
       const g = store.getOwned(id, req.profile.id);
       res.write(`event: generation\ndata: ${JSON.stringify(g || { id, deleted: true })}\n\n`);
     };
@@ -155,7 +158,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
       if (owner !== req.profile.id) return;
       if (!due.has(id)) due.set(id, setTimeout(() => send(id), 200));
     };
-    const ping = setInterval(() => res.write(': ping\n\n'), 25_000);
+    const ping = setInterval(() => (stillMe() ? res.write(': ping\n\n') : res.end()), 25_000);
     store.events.on('change', onChange);
     req.on('close', () => {
       store.events.off('change', onChange);
@@ -321,7 +324,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
         if (override && !settings.provider(override.provider)) throw new SettingsError(`There is no provider called “${override.provider}”.`);
         await settings.checkWriter(settings.resolveWriter(origin, override));
         const { monthCapUsd } = settings.costs();
-        if (monthCapUsd != null && store.stats(req.profile.id).costThisMonthUsd >= monthCapUsd) {
+        if (monthCapUsd != null && store.houseSpendThisMonth() >= monthCapUsd) {
           throw new SettingsError(`This month's lessons have reached the monthly cap of $${monthCapUsd.toFixed(2)}. Raise it in Settings → Costs, or choose a free writer.`);
         }
       } catch (e) {

@@ -63,7 +63,7 @@ const sha = (v) => crypto.createHash('sha256').update(v).digest('hex');
 const newId = () => crypto.randomBytes(9).toString('base64url');
 
 /** `getMax` is read on every use, so TTS_MAX_PROFILES can change with a restart of nothing but the .env. */
-export function createProfiles({ db, dataDir, getMax = () => 5, now = () => Date.now() }) {
+export function createProfiles({ db, dataDir, getMax = () => 5, now = () => Date.now(), ipMax = IP_MAX_ATTEMPTS }) {
   db.exec(SCHEMA);
 
   // ---------- the pepper ----------
@@ -166,7 +166,7 @@ export function createProfiles({ db, dataDir, getMax = () => 5, now = () => Date
     if (!ip) return;
     const t = now();
     const recent = (ipHits.get(ip) || []).filter((x) => t - x < IP_WINDOW_MS);
-    if (recent.length >= IP_MAX_ATTEMPTS) {
+    if (recent.length >= ipMax) {
       ipHits.set(ip, recent);
       throw new ProfileError('Too many tries from this device. Wait a few minutes.', 429, { retryAfterSec: Math.ceil((IP_WINDOW_MS - (t - recent[0])) / 1000) });
     }
