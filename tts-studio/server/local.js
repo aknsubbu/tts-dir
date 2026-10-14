@@ -13,8 +13,9 @@
  * With TTS_LAN=1 the server listens on every interface and these checks also accept this
  * machine's own private-network names (192.168.x.x, 10.x.x.x, 172.16-31.x.x, 169.254.x.x, a bare
  * name or .local), and an Origin only when it is the page's own address. A public name in Host
- * is still refused, so a rebinding page cannot reach it. There is no login: use it on a network
- * you trust.
+ * is still refused, so a rebinding page cannot reach it. Profiles (server/profiles.js) keep one
+ * person's library from another's, with an optional PIN, but that is privacy between housemates:
+ * a LAN speaks plain HTTP. Use it on a network you trust.
  */
 const LOCAL = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 

@@ -43,22 +43,22 @@ export function settingsRoutes({ settings, secrets, getConfig, store, probe = pr
   const r = express.Router();
   const config = () => getConfig();
 
-  const page = async () => {
+  const page = async (req) => {
     const c = config();
     return {
       ...(await settings.view()),
-      costThisMonthUsd: store.stats().costThisMonthUsd,
+      costThisMonthUsd: store.stats(req.profile.id).costThisMonthUsd,
       storage: { dataDir: c.dataDir, projects: c.videoDir ? path.join(c.videoDir, 'projects') : null, envFile: c.envFile || null, keysKeptIn: secrets?.where || null },
     };
   };
 
-  r.get('/settings', wrap(async (req, res) => res.json(await page())));
+  r.get('/settings', wrap(async (req, res) => res.json(await page(req))));
 
   r.patch(
     '/settings',
     wrap(async (req, res) => {
       const changed = await settings.patch(req.body || {}, { by: actorOf(req) });
-      res.json({ changed, ...(await page()) });
+      res.json({ changed, ...(await page(req)) });
     }),
   );
 
@@ -68,7 +68,7 @@ export function settingsRoutes({ settings, secrets, getConfig, store, probe = pr
       if (actorOf(req) === 'claude') throw new SettingsError('Undo is done in the dashboard.', 403);
       const seq = req.body?.seq ? Number(req.body.seq) : null;
       settings.undo(seq);
-      res.json(await page());
+      res.json(await page(req));
     }),
   );
 
@@ -84,7 +84,7 @@ export function settingsRoutes({ settings, secrets, getConfig, store, probe = pr
     wrap(async (req, res) => {
       youOnly(req);
       const id = await settings.saveProvider(String(req.params.id), req.body || {});
-      res.json({ id, ...(await page()) });
+      res.json({ id, ...(await page(req)) });
     }),
   );
 
@@ -93,7 +93,7 @@ export function settingsRoutes({ settings, secrets, getConfig, store, probe = pr
     wrap(async (req, res) => {
       youOnly(req);
       await settings.removeProvider(String(req.params.id));
-      res.json(await page());
+      res.json(await page(req));
     }),
   );
 
@@ -104,7 +104,7 @@ export function settingsRoutes({ settings, secrets, getConfig, store, probe = pr
       const id = String(req.params.id);
       if (config().given?.[`${id.toUpperCase()}_API_KEY`]) throw new SettingsError(`${id.toUpperCase()}_API_KEY is set in the environment or .env, and that key is used. Remove it there to keep one here instead.`, 409);
       await settings.setKey(id, req.body?.key);
-      res.json(await page());
+      res.json(await page(req));
     }),
   );
 
@@ -113,7 +113,7 @@ export function settingsRoutes({ settings, secrets, getConfig, store, probe = pr
     wrap(async (req, res) => {
       youOnly(req);
       await settings.removeKey(String(req.params.id));
-      res.json(await page());
+      res.json(await page(req));
     }),
   );
 

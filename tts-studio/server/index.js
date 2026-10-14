@@ -36,7 +36,7 @@ function lanAddresses() {
 const server = app.listen(cfg.port, cfg.host, () => {
   console.log(`\n  Narrated Proofs  http://localhost:${cfg.port}`);
   if (cfg.lan) {
-    for (const a of lanAddresses()) console.log(`  On your network  http://${a}:${cfg.port}   (no login: trusted networks only)`);
+    for (const a of lanAddresses()) console.log(`  On your network  http://${a}:${cfg.port}   (profiles keep libraries apart; trusted networks only)`);
   }
   console.log(`  Dev UI (vite)    http://localhost:5173   (when running npm run dev)`);
   console.log(`  Library data     ${cfg.dataDir}`);
