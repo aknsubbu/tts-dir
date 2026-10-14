@@ -1,8 +1,9 @@
 import OpenAI from 'openai';
+import { guardedFetch } from './net.js';
 import { attachmentParts, openaiEffort, parseJsonAnswer, ProviderError, schemaInstructions, translateError } from './common.js';
 
 export const openaiClient = ({ key, writer, config }) =>
-  new OpenAI({ apiKey: key || 'not-needed', baseURL: writer.baseUrl, maxRetries: 3, timeout: config?.claudeTimeoutMs || 20 * 60_000 });
+  new OpenAI({ apiKey: key || 'not-needed', baseURL: writer.baseUrl, fetch: guardedFetch, maxRetries: 3, timeout: config?.claudeTimeoutMs || 20 * 60_000 });
 
 /**
  * Anything that speaks OpenAI's chat completions: OpenAI itself, Groq, LM Studio, llama.cpp,

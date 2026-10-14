@@ -57,6 +57,13 @@ CREATE TRIGGER IF NOT EXISTS gen_au AFTER UPDATE OF title, text, tags ON generat
   INSERT INTO gen_fts(rowid, title, text, tags) VALUES (new.seq, new.title, new.text, new.tags);
 END;
 
+-- What deleted lessons cost, kept so deleting a lesson (or a profile) cannot reset the month's cap.
+CREATE TABLE IF NOT EXISTS cost_ledger (
+  profile_id  TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  cost_usd    REAL NOT NULL
+);
+
 -- Each version of a lesson: what made it, what it cost, and whether it was built.
 -- Its files are a snapshot in the project's versions/NNN/ folder.
 CREATE TABLE IF NOT EXISTS versions (
@@ -87,6 +94,8 @@ const MIGRATIONS = [
   // rebuilt keeps playing the built one.
   ['version', 'ALTER TABLE generations ADD COLUMN version INTEGER NOT NULL DEFAULT 0'],
   ['built_version', 'ALTER TABLE generations ADD COLUMN built_version INTEGER NOT NULL DEFAULT 0'],
+  // Whose lesson it is. Rows from before profiles are '' until the Owner profile exists and takes them.
+  ['profile_id', "ALTER TABLE generations ADD COLUMN profile_id TEXT NOT NULL DEFAULT ''"],
 ];
 
 const UPDATABLE = new Set([
@@ -177,13 +186,14 @@ export function createStore(dataDir) {
   db.exec(SCHEMA);
   const columns = new Set(db.prepare('PRAGMA table_info(generations)').all().map((c) => c.name));
   for (const [column, sql] of MIGRATIONS) if (!columns.has(column)) db.exec(sql);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_gen_profile ON generations(profile_id, created_at DESC)');
 
   const insertStmt = db.prepare(`
     INSERT INTO generations (
-      id, kind, title, source_name, text, text_hash, config_hash, char_count, word_count,
+      id, profile_id, kind, title, source_name, text, text_hash, config_hash, char_count, word_count,
       voice_id, voice_name, model_id, settings_json, status, tags, created_at
     ) VALUES (
-      @id, @kind, @title, @source_name, @text, @text_hash, @config_hash, @char_count, @word_count,
+      @id, @profile_id, @kind, @title, @source_name, @text, @text_hash, @config_hash, @char_count, @word_count,
       @voice_id, @voice_name, @model_id, @settings_json, @status, @tags, @created_at
     )`);
   const getStmt = db.prepare('SELECT * FROM generations WHERE id = ?');
@@ -191,9 +201,10 @@ export function createStore(dataDir) {
   const events = new EventEmitter();
   events.setMaxListeners(0);
   const deleteStmt = db.prepare('DELETE FROM generations WHERE id = ?');
+  const ownerStmt = db.prepare('SELECT profile_id FROM generations WHERE id = ?');
   const findByConfigStmt = db.prepare(
     `SELECT * FROM generations
-     WHERE config_hash = ? AND status IN ('queued','processing','done')
+     WHERE profile_id = ? AND config_hash = ? AND status IN ('queued','processing','done')
      ORDER BY created_at DESC LIMIT 1`,
   );
 
@@ -207,15 +218,18 @@ export function createStore(dataDir) {
     if (!keys.length) return;
     const set = keys.map((k) => `${k} = @${k}`).join(', ');
     db.prepare(`UPDATE generations SET ${set} WHERE id = @id`).run({ ...patch, id });
-    events.emit('change', id);
+    events.emit('change', id, ownerStmt.get(id)?.profile_id);
   }
 
   // What a revision asked for and changed, on versions made before it existed too.
   const versionColumns = new Set(db.prepare('PRAGMA table_info(versions)').all().map((c) => c.name));
   if (!versionColumns.has('details_json')) db.exec('ALTER TABLE versions ADD COLUMN details_json TEXT');
+  // How much of a version's cost the host's own Claude sign-in or keys paid, which the Owner may limit per profile.
+  if (!versionColumns.has('host_usd')) db.exec('ALTER TABLE versions ADD COLUMN host_usd REAL');
+  if (!db.prepare('PRAGMA table_info(cost_ledger)').all().some((c) => c.name === 'host_usd')) db.exec('ALTER TABLE cost_ledger ADD COLUMN host_usd REAL');
   const versionStmts = {
-    insert: db.prepare(`INSERT INTO versions (generation_id, n, source, note, created_at, cost_usd, usage_json, check_ok, warnings, details_json)
-                        VALUES (@generation_id, @n, @source, @note, @created_at, @cost_usd, @usage_json, @check_ok, @warnings, @details_json)`),
+    insert: db.prepare(`INSERT INTO versions (generation_id, n, source, note, created_at, cost_usd, host_usd, usage_json, check_ok, warnings, details_json)
+                        VALUES (@generation_id, @n, @source, @note, @created_at, @cost_usd, @host_usd, @usage_json, @check_ok, @warnings, @details_json)`),
     list: db.prepare('SELECT * FROM versions WHERE generation_id = ? ORDER BY n DESC'),
     get: db.prepare('SELECT * FROM versions WHERE generation_id = ? AND n = ?'),
     next: db.prepare('SELECT COALESCE(MAX(n), 0) + 1 AS n FROM versions WHERE generation_id = ?'),
@@ -224,7 +238,7 @@ export function createStore(dataDir) {
   const VERSION_FIELDS = new Set(['built_at', 'quality', 'duration_sec', 'video_bytes', 'render_kept', 'note']);
   const versions = {
     next: (id) => versionStmts.next.get(id).n,
-    insert: (row) => versionStmts.insert.run({ note: null, cost_usd: null, usage_json: null, check_ok: null, warnings: null, details_json: null, ...row }),
+    insert: (row) => versionStmts.insert.run({ note: null, cost_usd: null, host_usd: null, usage_json: null, check_ok: null, warnings: null, details_json: null, ...row }),
     list: (id) => versionStmts.list.all(id),
     get: (id, n) => versionStmts.get.get(id, n),
     update(id, n, patch) {
@@ -235,10 +249,16 @@ export function createStore(dataDir) {
     removeAll: (id) => versionStmts.remove.run(id),
   };
 
-  function list({ q, status, voiceId, favorite, tag, kind, sort, limit = 30, offset = 0 } = {}) {
+  /** Every read that returns many lessons takes the profile whose library it is: never optional. */
+  const need = (profileId) => {
+    if (!profileId) throw new Error('A library read needs a profile.');
+    return profileId;
+  };
+
+  function list(profileId, { q, status, voiceId, favorite, tag, kind, sort, limit = 30, offset = 0 } = {}) {
     const fts = buildFtsQuery(q);
-    const where = [];
-    const args = [];
+    const where = ['g.profile_id = ?'];
+    const args = [need(profileId)];
     let from = 'generations g';
     let cols = 'g.*';
     if (fts) {
@@ -282,39 +302,76 @@ export function createStore(dataDir) {
     return { total, items: rows.map((r) => toApi(r)) };
   }
 
-  function stats() {
+  /**
+   * What a lesson has cost that no version holds yet: an outline or a narration waiting to be approved, and an
+   * attempt that failed. It is spent all the same, so the caps count it, and a deleted lesson leaves it in the ledger.
+   */
+  function unbilled(settingsJson, version) {
+    const l = JSON.parse(settingsJson || '{}').lesson || {};
+    const waiting = version ? 0 : 1; // once a version holds the earlier phases' cost, they are not counted twice
+    const [failedUsd, failedHost] = [Number(l.failedUsd) || 0, Number(l.failedHostUsd) || 0];
+    return {
+      usd: failedUsd + waiting * ((Number(l.scriptCostUsd) || 0) + (Number(l.outlineCostUsd) || 0)),
+      host: failedHost + waiting * ((Number(l.scriptHostUsd) || 0) + (Number(l.outlineHostUsd) || 0)),
+      failedUsd,
+      failedHost,
+    };
+  }
+
+  function stats(profileId, { excludeId = null } = {}) {
+    need(profileId);
     const done = db
       .prepare(
         `SELECT COUNT(*) AS files,
                 COALESCE(SUM(char_count), 0) AS chars,
                 COALESCE(SUM(duration_sec), 0) AS seconds,
                 COALESCE(SUM(audio_bytes), 0) AS bytes
-         FROM generations WHERE status = 'done'`,
+         FROM generations WHERE profile_id = ? AND status = 'done'`,
       )
-      .get();
+      .get(profileId);
     const active = db
-      .prepare(`SELECT COUNT(*) AS n FROM generations WHERE status IN ('queued','processing')`)
-      .get().n;
-    const awaiting = db.prepare(`SELECT COUNT(*) AS n FROM generations WHERE status = 'awaiting'`).get().n;
+      .prepare(`SELECT COUNT(*) AS n FROM generations WHERE profile_id = ? AND status IN ('queued','processing')`)
+      .get(profileId).n;
+    const awaiting = db.prepare(`SELECT COUNT(*) AS n FROM generations WHERE profile_id = ? AND status = 'awaiting'`).get(profileId).n;
     // What writing lessons cost this calendar month, from every version made in it.
     const month = new Date();
     month.setDate(1);
     month.setHours(0, 0, 0, 0);
     const claude = db
-      .prepare('SELECT COALESCE(SUM(cost_usd), 0) AS usd, COUNT(*) AS n FROM versions WHERE created_at >= ?')
-      .get(month.getTime());
+      .prepare(
+        `SELECT COALESCE(SUM(v.cost_usd), 0) AS usd, COUNT(*) AS n FROM versions v
+         JOIN generations g ON g.id = v.generation_id WHERE g.profile_id = ? AND v.created_at >= ?`,
+      )
+      .get(profileId, month.getTime());
+    const gone = db.prepare('SELECT COALESCE(SUM(cost_usd), 0) AS usd FROM cost_ledger WHERE profile_id = ? AND created_at >= ?').get(profileId, month.getTime()).usd;
+    claude.usd += gone;
+    let pendingUsd = 0;
+    let pendingHost = 0;
+    for (const r of db.prepare("SELECT id, version, settings_json FROM generations WHERE profile_id = ? AND settings_json LIKE '%\"lesson\"%'").all(profileId)) {
+      const u = unbilled(r.settings_json, r.version);
+      // A lesson being retried is held to its own caps with its failed attempts' spending counted by the job itself,
+      // so those alone are left out here: everything else it has spent still counts, once.
+      const mine = r.id === excludeId;
+      pendingUsd += u.usd - (mine ? u.failedUsd : 0);
+      pendingHost += u.host - (mine ? u.failedHost : 0);
+    }
+    claude.usd += pendingUsd;
+    const hostUsd =
+      db.prepare('SELECT COALESCE(SUM(v.host_usd), 0) AS usd FROM versions v JOIN generations g ON g.id = v.generation_id WHERE g.profile_id = ? AND v.created_at >= ?').get(profileId, month.getTime()).usd +
+      db.prepare('SELECT COALESCE(SUM(host_usd), 0) AS usd FROM cost_ledger WHERE profile_id = ? AND created_at >= ?').get(profileId, month.getTime()).usd +
+      pendingHost;
     const voices = db
       .prepare(
         `SELECT voice_id AS voiceId, COALESCE(MAX(voice_name), voice_id) AS name, COUNT(*) AS n
-         FROM generations GROUP BY voice_id ORDER BY n DESC`,
+         FROM generations WHERE profile_id = ? GROUP BY voice_id ORDER BY n DESC`,
       )
-      .all();
-    return { ...done, active, awaiting, voices, costThisMonthUsd: Math.round(claude.usd * 100) / 100 };
+      .all(profileId);
+    return { ...done, active, awaiting, voices, costThisMonthUsd: Math.round(claude.usd * 100) / 100, hostSpentThisMonthUsd: Math.round(hostUsd * 100) / 100 };
   }
 
-  function tags() {
+  function tags(profileId) {
     const counts = new Map();
-    for (const { tags: t } of db.prepare("SELECT tags FROM generations WHERE tags != ''").all()) {
+    for (const { tags: t } of db.prepare("SELECT tags FROM generations WHERE profile_id = ? AND tags != ''").all(need(profileId))) {
       for (const tag of t.split(',')) counts.set(tag, (counts.get(tag) || 0) + 1);
     }
     return [...counts.entries()]
@@ -334,26 +391,58 @@ export function createStore(dataDir) {
 
   return {
     db,
+    dataDir,
     audioPath,
     previewPath,
     videoPath,
     insert: (row) => {
+      if (!row.profile_id) throw new Error('A lesson is inserted for a profile.');
       const out = insertStmt.run({ kind: 'audio', ...row });
-      events.emit('change', row.id);
+      events.emit('change', row.id, row.profile_id);
       return out;
     },
     getRaw: (id) => getStmt.get(id),
     get: (id, opts) => toApi(getStmt.get(id), opts),
-    findByConfig: (hash) => findByConfigStmt.get(hash),
+    findByConfig: (profileId, hash) => findByConfigStmt.get(need(profileId), hash),
+    /** A lesson only if it is this profile's. Anyone else's is the same as none. */
+    getOwned: (id, profileId, opts) => {
+      const row = getStmt.get(id);
+      return row && row.profile_id === profileId ? toApi(row, opts) : null;
+    },
+    getRawOwned: (id, profileId) => {
+      const row = getStmt.get(id);
+      return row && row.profile_id === profileId ? row : null;
+    },
+    /** Every lesson a profile has, as rows. */
+    rowsOf: (profileId) => db.prepare('SELECT * FROM generations WHERE profile_id = ?').all(need(profileId)),
     update,
     remove: (id) => {
+      const owner = ownerStmt.get(id)?.profile_id;
+      if (owner !== undefined) {
+        db.prepare('INSERT INTO cost_ledger (profile_id, created_at, cost_usd, host_usd) SELECT ?, created_at, cost_usd, host_usd FROM versions WHERE generation_id = ? AND cost_usd > 0').run(owner, id);
+      }
+      const gone = getStmt.get(id);
+      if (gone) {
+        const u = unbilled(gone.settings_json, gone.version);
+        if (u.usd > 0) db.prepare('INSERT INTO cost_ledger (profile_id, created_at, cost_usd, host_usd) VALUES (?, ?, ?, ?)').run(gone.profile_id, Date.now(), u.usd, u.host);
+      }
       versions.removeAll(id);
       const n = deleteStmt.run(id).changes;
-      if (n) events.emit('change', id);
+      if (n) events.emit('change', id, owner);
       return n;
     },
     versions,
     events,
+    // Across every profile on purpose: a folder is removed only when nobody's lesson still uses it.
+    /** Which profiles have a lesson built from each project folder: name -> Set of profile ids. */
+    projectOwners: () => {
+      const owners = new Map();
+      for (const r of db.prepare("SELECT DISTINCT source_name, profile_id FROM generations WHERE source_name LIKE 'video/projects/%'").all()) {
+        const name = r.source_name.slice('video/projects/'.length);
+        owners.set(name, (owners.get(name) || new Set()).add(r.profile_id));
+      }
+      return owners;
+    },
     countBySource: (source) => db.prepare('SELECT COUNT(*) AS n FROM generations WHERE source_name = ?').get(source).n,
     list,
     stats,

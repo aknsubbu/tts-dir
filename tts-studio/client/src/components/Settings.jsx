@@ -29,7 +29,7 @@ function Lock({ env }) {
 }
 
 /** A provider: its key or address, its Test, and what the Test found. */
-function ProviderCard({ p, act, busy }) {
+function ProviderCard({ p, act, busy, host }) {
   const kind = PROVIDER_KINDS[p.kind];
   const [key, setKey] = useState('');
   const [address, setAddress] = useState(p.baseUrl || '');
@@ -47,17 +47,22 @@ function ProviderCard({ p, act, busy }) {
         <span className={`status ${p.configured ? 'ok' : ''}`}>{p.configured ? 'Set up' : 'Not set up'}</span>
       </div>
       <p className="hint">{kind?.note}</p>
+      {p.kind === 'claude-code' && host && !host.claude && (
+        <p className="hint warn-text">The Owner has not allowed your profile to use the Claude Code sign-in on this computer. Choose another writer, such as Ollama, or ask the Owner.</p>
+      )}
 
       {p.needsKey && (
         <div className="row wrap">
           {p.key?.from === 'env' ? (
-            <span className="hint">Key from {p.key.env}, ending {p.key.hint}.</span>
+            <span className="hint">The host’s key ({p.key.env}), ending {p.key.hint}. The Owner shares it with you; a key of your own would be used first.</span>
           ) : p.key?.set ? (
             <>
               <span className="hint">Key {p.key.hint}, kept in {p.key.from === 'keychain' ? 'the Keychain' : 'a private file'}.</span>
               <button className="link" onClick={() => act('removeKey', p.id)}>Remove key</button>
             </>
           ) : (
+            <>
+            {p.key?.hostKey && !p.key.hostKeyAllowed && <span className="hint">This computer has a key for {p.label} in its environment, which the Owner has not shared with you. Add your own.</span>}
             <form
               className="row grow"
               onSubmit={(e) => {
@@ -68,6 +73,7 @@ function ProviderCard({ p, act, busy }) {
               <input className="input" type="password" autoComplete="off" aria-label={`${p.label} key`} placeholder={p.needsKey === 'optional' ? 'Key, if it needs one' : 'Paste the key'} value={key} onChange={(e) => setKey(e.target.value)} />
               <button className="btn" disabled={!key.trim()}>Save key</button>
             </form>
+            </>
           )}
         </div>
       )}
@@ -347,19 +353,43 @@ function Rates({ data, onSave }) {
  * what Claude may change from a conversation, costs, how to connect Claude, and where things are.
  * Every change applies to the next request and is kept with who made it, so it can be undone.
  */
-export default function Settings({ section, voices, onClose, onChanged, toast }) {
+export default function Settings({ profile = null, section: asked, voices, onClose, onChanged, toast }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(null);
   const [connect, setConnect] = useState(null);
+  const [tokens, setTokens] = useState(null);
+  const [tokenLabel, setTokenLabel] = useState('Claude');
+  const [fresh, setFresh] = useState(null); // a token just made: shown once, then gone
   const [newProvider, setNewProvider] = useState({ label: '', baseUrl: '' });
 
   useEffect(() => {
     api.settings().then(setData, (e) => setError(e.message));
   }, []);
   useEffect(() => {
-    if (section === 'connect' && !connect) api.connect().then(setConnect).catch(() => {});
-  }, [section, connect]);
+    if (asked === 'connect' && !connect) api.connect().then(setConnect).catch(() => {});
+    if (asked === 'connect' && !tokens) api.connectorTokens().then((r) => setTokens(r.tokens)).catch(() => {});
+  }, [asked, connect, tokens]);
+  const makeToken = async (e) => {
+    e.preventDefault();
+    try {
+      const made = await api.makeConnectorToken(tokenLabel);
+      setFresh(made);
+      setTokens((await api.connectorTokens()).tokens);
+    } catch (err) {
+      toast?.({ kind: 'error', text: err.message });
+    }
+  };
+  const revokeToken = async (t) => {
+    try {
+      await api.revokeConnectorToken(t.id);
+      if (fresh?.id === t.id) setFresh(null);
+      setTokens((await api.connectorTokens()).tokens);
+      toast?.({ kind: 'success', text: `Revoked “${t.label}”. Claude can no longer use it.` });
+    } catch (err) {
+      toast?.({ kind: 'error', text: err.message });
+    }
+  };
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === 'Escape' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) onClose();
@@ -420,6 +450,8 @@ export default function Settings({ section, voices, onClose, onChanged, toast })
       </div>
     );
   }
+  // The House section is the Owner's: anyone else who opens its address is shown the first one.
+  const section = asked === 'house' && !data.house ? 'writer' : asked;
   const v = data.values;
   const locks = data.locks || {};
   const pageLocks = Object.fromEntries(Object.entries(locks).map(([k, e]) => [k.replace(/^lesson\.defaults\./, 'page.'), e]));
@@ -430,13 +462,13 @@ export default function Settings({ section, voices, onClose, onChanged, toast })
         <header className="ws-head">
           <div className="ws-row">
             <button className="link ws-back" onClick={onClose}>← Library</button>
-            <h2 className="settings-title">Settings</h2>
+            <h2 className="settings-title">{profile ? 'Your settings' : 'Settings'}</h2>
             <span className="grow" />
             {anyUndoable && <button className="btn" onClick={() => undo()}>Undo last change</button>}
           </div>
         </header>
         <nav className="ws-tabs" role="tablist" aria-label="Settings sections">
-          {SETTINGS_SECTIONS.map(([id, label]) => (
+          {SETTINGS_SECTIONS.filter(([id]) => id !== 'house' || data.house).map(([id, label]) => (
             <a key={id} role="tab" aria-selected={section === id} className={section === id ? 'on' : ''} href={`#settings/${id}`}>{label}</a>
           ))}
         </nav>
@@ -456,7 +488,7 @@ export default function Settings({ section, voices, onClose, onChanged, toast })
               <h3>Providers</h3>
               <p className="hint">Set up any you want to use. Keys are kept in {data.keysKeptIn === 'the macOS Keychain' ? "your Mac's Keychain" : 'a file only you can read'} and never shown again.</p>
               <ul className="providers">
-                {data.providers.map((p) => <ProviderCard key={p.id} p={p} act={act} busy={busy} />)}
+                {data.providers.map((p) => <ProviderCard key={p.id} p={p} act={act} busy={busy} host={data.host} />)}
               </ul>
               <form
                 className="row wrap add-provider"
@@ -533,6 +565,11 @@ export default function Settings({ section, voices, onClose, onChanged, toast })
             <section className="block">
               <h3>Spending</h3>
               <p><strong>{fmtUsd(data.costThisMonthUsd)}</strong> on lessons this month, from every version written.</p>
+              {data.hostAllowance && (
+                <p className="hint">
+                  The Owner lets you spend up to <strong>{fmtUsd(data.hostAllowance.capUsd)}</strong> a month with this computer’s Claude sign-in and keys. You have used <strong>{fmtUsd(data.hostAllowance.spentUsd)}</strong>. A writer with a key of your own, or a model on this Mac, is not counted.
+                </p>
+              )}
               <div className="row wrap">
                 <label className="field">
                   <span>Cap per lesson <Lock env={locks['costs.lessonCapUsd']} /></span>
@@ -577,6 +614,35 @@ export default function Settings({ section, voices, onClose, onChanged, toast })
             <p className="hint">Claude can start a lesson from a conversation, follow its stages, search your library and fetch the video. Lessons it starts use the settings under Claude (MCP).</p>
             {!connect ? <p className="hint">Loading…</p> : (
               <>
+                <h4>{profile ? `Connect Claude as ${profile.name}` : 'Connect Claude to you'}</h4>
+                <p className="hint">A token lets Claude act as this profile and no one else: it sees only this library, and uses this profile’s Claude settings. It is needed when more than one person uses this dashboard, and it works whether or not the profile has a PIN, so keep it private. Revoke it here and it stops working at once.</p>
+                {tokens && tokens.length > 0 && (
+                  <ul className="tokens">
+                    {tokens.map((t) => (
+                      <li key={t.id} className="row">
+                        <strong>{t.label}</strong>
+                        <span className="hint">made {timeAgo(t.createdAt)}, {t.lastUsed ? `last used ${timeAgo(t.lastUsed)}` : 'not used yet'}</span>
+                        <span className="grow" />
+                        <button className="link danger" onClick={() => revokeToken(t)} aria-label={`Revoke ${t.label}`}>Revoke</button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <form className="row" onSubmit={makeToken}>
+                  <input className="input" aria-label="What this token is for" maxLength={40} value={tokenLabel} onChange={(e) => setTokenLabel(e.target.value)} />
+                  <button className="btn">Make a token</button>
+                </form>
+                {fresh && (
+                  <div className="banner notice" role="status">
+                    <p><strong>Copy this now. It is shown once and cannot be found again.</strong></p>
+                    <Copyable label="Claude Code over HTTP:" text={connect.http.claudeCodeToken.replace('<token>', fresh.token)} />
+                    <Copyable label="Or started by Claude Code itself:" text={connect.stdio.claudeCodeToken.replace('<token>', fresh.token)} />
+                    <Copyable label={`Claude desktop app, in ${connect.desktop.configFile}:`} text={JSON.stringify(connect.desktop.entryToken, null, 2).replace('<token>', fresh.token)} />
+                    <button className="link" onClick={() => setFresh(null)}>I have copied it</button>
+                  </div>
+                )}
+                <h4>Without a token</h4>
+                <p className="hint">If only one person uses this dashboard and it has no PIN, these work as they are:</p>
                 <h4>Claude Code</h4>
                 <Copyable label="Over HTTP, while this dashboard is running:" text={connect.http.claudeCode} />
                 <Copyable label="Or started by Claude Code itself:" text={connect.stdio.claudeCode} />
@@ -586,6 +652,23 @@ export default function Settings({ section, voices, onClose, onChanged, toast })
                 <p className="hint">Then ask: “make a 3-minute lesson on what we just worked through”. The dashboard must be running; with <code>TTS_MCP_AUTOSTART=1</code> in the connector’s environment it starts on its own.</p>
               </>
             )}
+          </section>
+        )}
+
+        {section === 'house' && data.house && (
+          <section className="block">
+            <h3>This install</h3>
+            <dl className="details">
+              <dt>Profiles</dt><dd>{data.house.profileCount} of {data.house.maxProfiles} <span className="hint">(set TTS_MAX_PROFILES in .env to change)</span></dd>
+              <dt>On your network</dt><dd>{data.house.lan ? 'Yes. Others on your network can open this page and choose a profile.' : 'No. Only this computer can open it (TTS_LAN=1 changes that).'}</dd>
+            </dl>
+            {!data.house.sandboxed && data.house.profileCount > 1 && (
+              <p className="banner notice" role="note">
+                <strong>No sandbox on this computer.</strong> Scenes run as the server does, so they could read every profile’s library and keys. Other profiles cannot save, check or build code here, but lessons Claude writes from anyone’s notes still run. Only share this install with people you trust, or use a Mac.
+              </p>
+            )}
+            <p className="hint">Profiles keep housemates’ lessons, settings and keys apart. A PIN is privacy between people sharing a computer, not strong security: a home network speaks plain HTTP, and anyone who can use this computer can read the data folder.</p>
+            <p><a className="btn" href="#profile">Manage profiles</a></p>
           </section>
         )}
 

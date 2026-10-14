@@ -16,6 +16,9 @@ vi.mock('../api.js', () => ({
     removeProvider: vi.fn(),
     testProvider: vi.fn(),
     connect: vi.fn(),
+    connectorTokens: vi.fn(),
+    makeConnectorToken: vi.fn(),
+    revokeConnectorToken: vi.fn(),
   },
 }));
 
@@ -67,10 +70,11 @@ beforeEach(() => {
   api.undoSettings.mockResolvedValue(DATA());
   api.testProvider.mockResolvedValue({ result: { ok: true, model: 'llama-4' } });
   api.connect.mockResolvedValue({
-    http: { url: 'http://localhost:8787/mcp', claudeCode: 'claude mcp add --transport http narrated-proofs http://localhost:8787/mcp' },
-    stdio: { command: '/usr/bin/node', args: ['/x/mcp/stdio.js'], claudeCode: 'claude mcp add narrated-proofs -- "/usr/bin/node" "/x/mcp/stdio.js"' },
-    desktop: { configFile: '~/Library/Application Support/Claude/claude_desktop_config.json', entry: { mcpServers: { 'narrated-proofs': { command: '/usr/bin/node', args: ['/x/mcp/stdio.js'] } } }, pack: 'npm run mcp:pack' },
+    http: { url: 'http://localhost:8787/mcp', claudeCode: 'claude mcp add --transport http narrated-proofs http://localhost:8787/mcp', claudeCodeToken: 'claude mcp add --transport http narrated-proofs http://localhost:8787/mcp --header "Authorization: Bearer <token>"' },
+    stdio: { command: '/usr/bin/node', args: ['/x/mcp/stdio.js'], claudeCode: 'claude mcp add narrated-proofs -- "/usr/bin/node" "/x/mcp/stdio.js"', claudeCodeToken: 'claude mcp add narrated-proofs -e NARRATED_PROOFS_TOKEN=<token> -- "/usr/bin/node" "/x/mcp/stdio.js"' },
+    desktop: { configFile: '~/Library/Application Support/Claude/claude_desktop_config.json', entry: { mcpServers: { 'narrated-proofs': { command: '/usr/bin/node', args: ['/x/mcp/stdio.js'] } } }, entryToken: { mcpServers: { 'narrated-proofs': { command: '/usr/bin/node', args: ['/x/mcp/stdio.js'], env: { NARRATED_PROOFS_TOKEN: '<token>' } } } }, pack: 'npm run mcp:pack' },
   });
+  api.connectorTokens.mockResolvedValue({ tokens: [{ id: 't1', label: 'Claude Code', createdAt: Date.now() - 60000, lastUsed: null }] });
 });
 afterEach(cleanup);
 
@@ -128,6 +132,32 @@ describe('Settings', () => {
     await show('connect');
     await waitFor(() => expect(screen.getByText('claude mcp add --transport http narrated-proofs http://localhost:8787/mcp')).toBeTruthy());
     expect(screen.getByText('claude mcp add narrated-proofs -- "/usr/bin/node" "/x/mcp/stdio.js"')).toBeTruthy();
+  });
+
+  it('makes a connector token, shows it once with the commands, and revokes one', async () => {
+    api.makeConnectorToken.mockResolvedValue({ id: 't2', label: 'Laptop', token: 'npc_secret_token_value' });
+    await show('connect');
+    expect(await screen.findByRole('button', { name: 'Revoke Claude Code' })).toBeTruthy(); // the token already made, by name
+    expect(screen.queryByText(/npc_secret/)).toBeNull();
+    fireEvent.change(screen.getByLabelText('What this token is for'), { target: { value: 'Laptop' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Make a token' }));
+    await waitFor(() => expect(api.makeConnectorToken).toHaveBeenCalledWith('Laptop'));
+    expect(await screen.findByText(/Copy this now/)).toBeTruthy();
+    expect(screen.getByText('claude mcp add --transport http narrated-proofs http://localhost:8787/mcp --header "Authorization: Bearer npc_secret_token_value"')).toBeTruthy();
+    expect(screen.getByText(/NARRATED_PROOFS_TOKEN=npc_secret_token_value/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'I have copied it' }));
+    expect(screen.queryByText(/npc_secret/)).toBeNull();
+    api.revokeConnectorToken.mockResolvedValue({ ok: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke Claude Code' }));
+    await waitFor(() => expect(api.revokeConnectorToken).toHaveBeenCalledWith('t1'));
+  });
+
+  it('tells a profile its allowance for the host’s sign-in and keys', async () => {
+    api.settings.mockResolvedValue({ ...DATA(), hostAllowance: { capUsd: 5, spentUsd: 1.5 } });
+    await show('costs');
+    expect(await screen.findByText(/The Owner lets you spend up to/)).toBeTruthy();
+    expect(screen.getByText('$5.00')).toBeTruthy();
+    expect(screen.getByText('$1.50')).toBeTruthy();
   });
 
   it('sets the spending caps', async () => {

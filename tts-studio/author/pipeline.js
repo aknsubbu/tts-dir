@@ -266,14 +266,25 @@ export function createAuthor({ getConfig, ask = askWriter, check = runCheck, aut
     const system = guide();
     const plan = normalizeWriter(job.writer, config);
     const capUsd = Number(job.capUsd) > 0 ? Number(job.capUsd) : null;
+    // What the Owner lets this profile still spend with the host's own sign-in and keys, whichever writer ends up using them.
+    const hostCapUsd = job.hostCapUsd != null && Number.isFinite(Number(job.hostCapUsd)) ? Math.max(0, Number(job.hostCapUsd)) : null;
     const needsKeys = Object.values(plan.steps).some((w) => !['claude-code', 'ollama', 'local'].includes(w.kind));
     const keys = secrets || (needsKeys && config.dataDir ? createSecrets({ dataDir: config.dataDir, useKeychain: config.useKeychain }) : null);
     // What earlier attempts at this job spent: a retry continues, and so does its cap.
     const spentFile = path.join(log, 'spent.json');
     const spentBefore = Number(readJson(spentFile)?.usd) || 0;
+    const hostBefore = Number(readJson(spentFile)?.hostUsd) || 0;
     const requests = [];
     const spent = () => spentBefore + requests.reduce((n, r) => n + (Number(r.costUsd) || 0), 0);
+    const hostSpent = () => hostBefore + requests.reduce((n, r) => n + (r.hostFunded ? Number(r.costUsd) || 0 : 0), 0);
     const overCap = () => {
+      // hostCapUsd is what was left of the allowance without this lesson's own earlier attempts, which hostSpent() includes.
+      if (hostCapUsd != null && hostSpent() >= hostCapUsd) {
+        throw new AuthorError(
+          'This lesson reached the allowance the Owner set for what this computer’s Claude sign-in and keys may cost you this month. Choose a writer with a key of your own, or a model on this Mac, in Settings → Lesson writer, or ask the Owner to raise it, and press Retry: it continues from where it stopped.',
+          'cap',
+        );
+      }
       if (!capUsd || spent() < capUsd) return;
       throw new AuthorError(
         `This lesson reached its spending cap of $${capUsd.toFixed(2)} ($${spent().toFixed(2)} so far). Raise the cap in Settings → Costs and press Retry: it continues from where it stopped.`,
@@ -295,7 +306,7 @@ export function createAuthor({ getConfig, ask = askWriter, check = runCheck, aut
         const used = { step: name, provider: w.provider, label: w.label, effort: w.effort || null, ...(usage || {}), model: usage?.model || w.model || null, costUsd: Number(usage?.costUsd) || 0, ...extra };
         requests.push(used);
         fs.writeFileSync(path.join(log, `${tag}-usage.json`), JSON.stringify(used, null, 2));
-        fs.writeFileSync(spentFile, JSON.stringify({ usd: spent() }));
+        fs.writeFileSync(spentFile, JSON.stringify({ usd: spent(), hostUsd: hostSpent() }));
       };
       let out;
       try {
@@ -467,6 +478,7 @@ export function createAuthor({ getConfig, ask = askWriter, check = runCheck, aut
       const usage = totalUsage(requests);
       if (spentBefore) usage.earlierAttemptsUsd = Math.round(spentBefore * 1000) / 1000;
       usage.costUsd = Math.round(spent() * 1000) / 1000;
+      usage.hostCostUsd = Math.round(hostSpent() * 1000) / 1000; // earlier attempts' share too, as costUsd has
       const result = { project: job.project, title: here.current().title, script: here.current().script, autofixed, costUsd: usage.costUsd, usage, writtenBy: writtenBy(requests), ...extra };
       fs.writeFileSync(path.join(root, 'author.json'), `${JSON.stringify({ ...result, script: undefined, finishedAt: new Date().toISOString() }, null, 2)}\n`);
       fs.rmSync(spentFile, { force: true });
@@ -843,6 +855,8 @@ export function totalUsage(requests) {
     cacheWriteTokens: sum('cacheWriteTokens'),
     outputTokens: sum('outputTokens'),
     costUsd: Math.round(sum('costUsd') * 1000) / 1000,
+    // What part of it the computer's own sign-in or keys paid for: the Owner can limit that for other profiles.
+    hostCostUsd: Math.round(requests.reduce((n, r) => n + (r.hostFunded ? Number(r.costUsd) || 0 : 0), 0) * 1000) / 1000,
   };
 }
 

@@ -16,6 +16,7 @@
     "build": "vite build",
     "start": "node server/index.js",
     "mcp": "node mcp/stdio.js",
+    "profiles": "node scripts/profiles.js",
     "mcp:pack": "node scripts/mcp-pack.js",
     "bakeoff": "node scripts/bakeoff.js",
     "app": "vite build && node server/index.js",
@@ -43,6 +44,7 @@
     "openai": "^7.30.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "undici": "^7.30.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {

@@ -1,3 +1,4 @@
+import { guardedFetch } from './net.js';
 import fs from 'node:fs';
 import { parseJsonAnswer, ProviderError, schemaInstructions, translateError } from './common.js';
 
@@ -23,7 +24,7 @@ async function call(writer, route, body, signal, timeoutMs) {
   const signals = [signal, timeoutMs ? AbortSignal.timeout(timeoutMs) : null].filter(Boolean);
   let res;
   try {
-    res = await fetch(url(writer, route), {
+    res = await guardedFetch(url(writer, route), {
       method: body ? 'POST' : 'GET',
       headers: body ? { 'Content-Type': 'application/json' } : undefined,
       body: body ? JSON.stringify(body) : undefined,

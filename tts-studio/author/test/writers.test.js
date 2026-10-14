@@ -21,6 +21,9 @@ const SCHEMA = {
 let fake, dir, secrets;
 const config = { claudeTimeoutMs: 20_000, keys: {} };
 const writer = (kind, model, extra = {}) => ({
+  profileId: 'p1', // keys are kept per profile: account p-p1-<provider>
+  hostKeys: true,
+  hostClaude: true,
   provider: kind,
   kind,
   label: { openai: 'OpenAI', groq: 'Groq', ollama: 'This Mac: Ollama', anthropic: 'Claude API', local: 'This Mac' }[kind],
@@ -38,7 +41,7 @@ before(async () => {
   fake = await fakeProviders({ answer: (seen) => (/ready/.test(seen.text) ? { word: 'ready' } : LESSON) });
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'np-writers-'));
   const keys = { openai: 'sk-test-openai-1234', groq: 'gsk_test_12345678', anthropic: 'sk-ant-test-1234' };
-  secrets = { get: async (id) => keys[id] || null, kind: 'file' };
+  secrets = { get: async (account) => keys[account.replace(/^p-p1-/, '')] || null, kind: 'file' };
 });
 after(async () => {
   await fake.close();
@@ -150,4 +153,20 @@ test('answers are read out of fences and thinking', () => {
   assert.deepEqual(parseJsonAnswer('<think>hmm {not this}</think>\n```json\n{"a": "b"}\n```'), { a: 'b' });
   assert.throws(() => parseJsonAnswer('no json here'), (e) => e.kind === 'format');
   assert.ok(textPdf('HELLO').toString('latin1').startsWith('%PDF-1.4'));
+});
+
+test('a request is marked as paid by the host when it used the environment key, and not when it used the profile’s own', async () => {
+  const w = (profileId) => writer('openai', 'gpt-test', { profileId, hostKeys: true, rate: { input: 1, output: 4 } });
+  const withEnv = { ...config, keys: { openai: 'sk-host-env-0000' } };
+  const own = await askWriter({ writer: w('p1'), secrets, config: withEnv, system: 's', prompt: 'p', schema: SCHEMA });
+  assert.equal(own.usage.hostFunded, false, 'its own key came first');
+  const host = await askWriter({ writer: w('nobody'), secrets, config: withEnv, system: 's', prompt: 'p', schema: SCHEMA });
+  assert.equal(host.usage.hostFunded, true);
+  assert.equal(last('/v1/chat/completions').headers.authorization, 'Bearer sk-host-env-0000');
+  const local = await askWriter({ writer: writer('ollama', 'qwen3', { hostKeys: true }), secrets, config: withEnv, system: 's', prompt: 'p', schema: SCHEMA });
+  assert.equal(local.usage.hostFunded, false);
+  const { totalUsage } = await import('../pipeline.js');
+  const totals = totalUsage([host.usage, own.usage, { ...host.usage, costUsd: 0.5 }]);
+  assert.equal(totals.hostCostUsd, Math.round((host.usage.costUsd + 0.5) * 1000) / 1000, 'only the host-paid requests count');
+  assert.ok(totals.costUsd > totals.hostCostUsd);
 });

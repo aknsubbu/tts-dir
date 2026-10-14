@@ -64,9 +64,11 @@ function makeProject(name) {
   return root;
 }
 
+const ownerId = () => store.db.prepare('SELECT id FROM profiles WHERE is_owner = 1').get().id;
+
 function insertLesson(id, project, status = 'queued') {
   store.insert({
-    id, kind: 'video', title: project, source_name: `video/projects/${project}`, text: 'x', text_hash: 'h', config_hash: `c-${id}`,
+    id, profile_id: ownerId(), kind: 'video', title: project, source_name: `video/projects/${project}`, text: 'x', text_hash: 'h', config_hash: `c-${id}`,
     char_count: 1, word_count: 1, voice_id: 'af_heart', voice_name: null, model_id: 'm',
     settings_json: JSON.stringify({ project, quality: 'low', scenes: ['Intro'], lesson: { topic: 't', review: 'render' } }),
     status, tags: 'lesson', created_at: Date.now(),
@@ -117,7 +119,7 @@ test('a version is a snapshot of the files and the storyboard, numbered in order
   assert.ok(fs.existsSync(path.join(v, 'storyboard', 'frames', 'Intro-intro--slope.png')));
   assert.equal(versions.snapshot('snap-id', { source: 'edited' }), 2);
   assert.deepEqual(store.versions.list('snap-id').map((x) => [x.n, x.source]), [[2, 'edited'], [1, 'written']]);
-  assert.equal(store.stats().costThisMonthUsd, 0.4);
+  assert.equal(store.stats(ownerId()).costThisMonthUsd, 0.4);
 });
 
 test('a newer version keeps playing the last one while it builds, and only the last renders are kept', async () => {
@@ -206,8 +208,8 @@ test('the storyboard, its stills and each block\'s narration are served, and not
 test('a lesson waiting on its storyboard is rendered on approval, or cancelled', async () => {
   makeProject('wait');
   insertLesson('wait-id', 'wait', 'awaiting');
-  assert.ok(store.list({ status: 'awaiting' }).items.some((g) => g.id === 'wait-id'));
-  assert.equal(store.stats().awaiting, store.list({ status: 'awaiting' }).total);
+  assert.ok(store.list(ownerId(), { status: 'awaiting' }).items.some((g) => g.id === 'wait-id'));
+  assert.equal(store.stats(ownerId()).awaiting, store.list(ownerId(), { status: 'awaiting' }).total);
   const approved = await j('POST', '/api/generations/wait-id/approve', { action: 'render', quality: 'hd' });
   assert.equal(approved.status, 200);
   assert.equal(approved.data.settings.quality, 'hd');

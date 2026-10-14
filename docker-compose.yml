@@ -11,7 +11,8 @@ services:
   app:
     build: .
     image: narrated-proofs:latest
-    # AR: 127.0.0.1 only: the dashboard has no login, so it is never published to your network.
+    # AR: 127.0.0.1 only, so it is never published to your network unless you change this. Profiles and PINs keep housemates
+    # apart but are not strong security; see "Sharing with housemates" in the README.
     ports:
       - "127.0.0.1:${PORT:-8787}:8787"
     # AR: Optional settings and keys, as for `npm start`; see tts-studio/.env.example.

@@ -16,10 +16,41 @@ import { chapterDir } from './versions.js';
  */
 export function createLessons({ store, runner, getConfig, jobs, versions = null, settings = null, pollMs = 1500 }) {
   const watching = new Map(); // generation id -> { jobId, timer }
+  // What the Owner's allowance for the host's sign-in and keys is held back for lessons that are running, so lessons
+  // started together cannot each be given all of it. Set in the same step as it is read, released when the lesson stops.
+  const reservations = new Map(); // generation id -> { profileId, hostUsd, monthUsd }
+
+  function unwatch(id) {
+    watching.delete(id);
+    reservations.delete(id);
+  }
+
+  /** What the attempt that just stopped had spent, from the log it keeps while it works. */
+  function readSpent(settings) {
+    try {
+      const spent = JSON.parse(fs.readFileSync(path.join(getConfig().videoDir, 'projects', settings.project, 'build', 'author', 'spent.json'), 'utf8'));
+      return { failedUsd: Number(spent.usd) || 0, failedHostUsd: Number(spent.hostUsd) || 0 };
+    } catch {
+      return { failedUsd: 0, failedHostUsd: 0 }; // an attempt that did not get as far as asking
+    }
+  }
+
+  /** What a lesson has spent that no version holds yet, kept on it so the caps and the Owner's limit count it. */
+  function noteSpent(id) {
+    const row = store.getRaw(id);
+    if (!row) return {};
+    const settings = JSON.parse(row.settings_json);
+    if (!settings.lesson || !settings.project) return {};
+    settings.lesson = { ...settings.lesson, ...readSpent(settings) };
+    return { settings_json: JSON.stringify(settings) };
+  }
+
+  // A finished attempt has put what it spent into the lesson's own figures: nothing is left over.
+  const SETTLED = { failedUsd: 0, failedHostUsd: 0 };
 
   function fail(id, message) {
-    watching.delete(id);
-    store.update(id, { status: 'error', error: message, stage: null, finished_at: Date.now() });
+    unwatch(id);
+    store.update(id, { status: 'error', error: message, stage: null, finished_at: Date.now(), ...noteSpent(id) });
   }
 
   /**
@@ -49,18 +80,45 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
    * Who writes each step, and what the lesson may still spend, from Settings as they are now.
    * A retry gets them afresh, so a raised cap or a newly set up provider applies.
    */
-  async function writerFor(lesson = {}) {
+  async function writerFor(lesson = {}, profileId, lessonId = null) {
     if (!settings) return {};
-    const writer = settings.resolveWriter(lesson.profile || 'page', lesson.writer || null);
-    await settings.checkWriter(writer);
-    const { lessonCapUsd, monthCapUsd } = settings.costs();
+    const mine = settings.for(profileId); // the lesson's owner's writer, keys and caps
+    const writer = mine.resolveWriter(lesson.origin || lesson.profile || 'page', lesson.writer || null);
+    await mine.checkWriter(writer);
+    const { lessonCapUsd, monthCapUsd } = mine.costs();
+    // The one thing that waits (a key lookup) comes first. From here to the reservation nothing awaits, so lessons
+    // started together are decided one after another and cannot each be given the whole of what is left.
+    const allowance = await mine.hostAllowance(writer, 0);
+    // Without this lesson's own failed attempts: the job counts those itself.
+    const spentNow = store.stats(profileId, { excludeId: lessonId });
+    const others = [...reservations].filter(([rid, hold]) => rid !== lessonId && hold.profileId === profileId).map(([, hold]) => hold);
+    const held = (field) => others.reduce((n, hold) => n + (hold[field] || 0), 0);
     let capUsd = lessonCapUsd;
+    let monthLeft = null;
     if (monthCapUsd != null) {
-      const left = Math.round((monthCapUsd - store.stats().costThisMonthUsd) * 100) / 100;
-      if (left <= 0) throw new Error(`This month's lessons have reached the monthly cap of $${monthCapUsd.toFixed(2)}. Raise it in Settings → Costs, then press Retry.`);
-      capUsd = capUsd == null ? left : Math.min(capUsd, left);
+      const left = Math.round((monthCapUsd - spentNow.costThisMonthUsd) * 100) / 100;
+      monthLeft = Math.round((left - held('monthUsd')) * 100) / 100;
+      if (monthLeft <= 0) {
+        throw new Error(left > 0
+          ? 'Your other lessons may spend what is left of this month’s cap. Press Retry when they have finished.'
+          : `This month's lessons have reached the monthly cap of $${monthCapUsd.toFixed(2)}. Raise it in Settings → Costs, then press Retry.`);
+      }
+      capUsd = capUsd == null ? monthLeft : Math.min(capUsd, monthLeft);
     }
-    return { writer, capUsd };
+    // The Owner's limit on what this profile spends with the host's own sign-in and keys. The job is held to what is
+    // left of it (less what its other running lessons may still spend), whichever writer it starts with.
+    let hostCapUsd = null;
+    if (allowance) {
+      const left = Math.max(0, Math.round((allowance.capUsd - spentNow.hostSpentThisMonthUsd) * 100) / 100);
+      hostCapUsd = Math.max(0, Math.round((left - held('hostUsd')) * 100) / 100);
+      if (allowance.usesHost && hostCapUsd <= 0) {
+        throw new Error(left > 0
+          ? 'Your other lessons are using the allowance the Owner set for this computer’s Claude sign-in and keys. Press Retry when they have finished.'
+          : `${mine.hostAllowanceMessage({ ...allowance, leftUsd: left })} Then press Retry.`);
+      }
+    }
+    if (lessonId && (hostCapUsd != null || monthLeft != null)) reservations.set(lessonId, { profileId, hostUsd: hostCapUsd || 0, monthUsd: capUsd ?? 0 });
+    return { writer, capUsd, hostCapUsd };
   }
 
   /**
@@ -76,7 +134,7 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
     });
     let plan;
     try {
-      plan = await writerFor(lesson);
+      plan = await writerFor(lesson, row.profile_id, id);
     } catch (e) {
       return fail(id, e.message);
     }
@@ -116,7 +174,7 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
     if (job.status === 'done') return finish(id, job.result);
     if (job.status === 'error') return fail(id, job.error || 'The lesson could not be written.');
     if (job.status === 'cancelled') {
-      watching.delete(id);
+      unwatch(id);
       return store.update(id, { status: 'cancelled', error: 'Cancelled', stage: null, finished_at: Date.now() });
     }
     if (store.getRaw(id)?.stage !== job.stage) store.update(id, { stage: job.stage });
@@ -128,7 +186,7 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
    * build, or stop at the storyboard when the person asked to see it first.
    */
   function finish(id, result) {
-    watching.delete(id);
+    unwatch(id);
     const row = store.getRaw(id);
     if (!row) return;
     const settings = JSON.parse(row.settings_json);
@@ -141,7 +199,9 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
       settings.lesson = {
         ...settings.lesson,
         phase: 'outline',
+        ...SETTLED,
         outlineCostUsd: Math.round(((settings.lesson.outlineCostUsd || 0) + (result.costUsd || 0)) * 1000) / 1000,
+        outlineHostUsd: Math.round(((settings.lesson.outlineHostUsd || 0) + (result.usage?.hostCostUsd || 0)) * 1000) / 1000,
         chapters: o.chapters.map(({ id, title, minutes: m }) => ({ id, title, minutes: m })),
       };
       return store.update(id, {
@@ -156,7 +216,7 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
     if (usage) delete usage.requests;
     if (result.phase === 'script') {
       // The narration waits for the person; the scenes are written once it is approved.
-      settings.lesson = { ...settings.lesson, phase: 'script', scriptCostUsd: result.costUsd ?? 0, writtenBy: result.writtenBy || [] };
+      settings.lesson = { ...settings.lesson, phase: 'script', ...SETTLED, scriptCostUsd: result.costUsd ?? 0, scriptHostUsd: result.usage?.hostCostUsd ?? 0, writtenBy: result.writtenBy || [] };
       return store.update(id, {
         ...(settings.lesson.ownTitle ? {} : { title: String(result.title || row.title).slice(0, 120) }),
         text: script,
@@ -170,6 +230,8 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
     // A narration approved first, or an outline, cost something too.
     const before = (settings.lesson.scriptCostUsd || 0) + (settings.lesson.outlineCostUsd || 0);
     const costUsd = result.costUsd == null ? null : Math.round((result.costUsd + before) * 1000) / 1000;
+    // And how much of it the host's own sign-in or keys paid, for the Owner's limit on others.
+    const hostCostUsd = Math.round(((result.usage?.hostCostUsd || 0) + (settings.lesson.scriptHostUsd || 0) + (settings.lesson.outlineHostUsd || 0)) * 1000) / 1000;
     Object.assign(settings, {
       scenes: result.scenes,
       lesson: {
@@ -181,6 +243,7 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
         costUsd,
         usage,
         phase: null,
+        ...SETTLED,
         ...(result.chapters ? { chapters: result.chapters } : {}),
         ...(result.writtenBy ? { writtenBy: [...(settings.lesson.writtenBy || []).filter((w) => w.step === 'write' && settings.lesson.phase === 'script'), ...result.writtenBy] } : {}),
       },
@@ -201,6 +264,7 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
         source: 'written',
         usage: result.usage || null,
         costUsd,
+        hostCostUsd,
         check: { ok: true, warnings: result.warnings?.length || 0 },
       });
     } catch (e) {
@@ -224,6 +288,7 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
     try {
       job = jobs.submit({ project, kind: 'check', ...(chapter ? { chapter } : {}) });
     } catch (e) {
+      reservations.delete(id); // it never started, so it holds nothing
       store.update(id, prior);
       throw Object.assign(new Error(e.message), { status: e.status || 400 });
     }
@@ -248,7 +313,7 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
 
   /** The check finished: keep its report, then build the edit as the next version or go back to where it was. */
   function finishCheck(id, report, watch) {
-    watching.delete(id);
+    unwatch(id);
     const saved = saveCheck(id, report, { ok: !!report.ok, errors: report.errors?.length || 0, warnings: report.warnings?.length || 0 }, watch.chapter);
     if (!saved) return;
     const { settings, root, lessonRoot } = saved;
@@ -272,7 +337,7 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
   }
 
   function endCheck(id, watch, failure) {
-    watching.delete(id);
+    unwatch(id);
     const saved = failure ? saveCheck(id, null, failure, watch.chapter) : null;
     store.update(id, { ...(saved ? { settings_json: JSON.stringify(saved.settings) } : {}), ...watch.prior });
   }
@@ -289,9 +354,10 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
     store.update(id, { status: 'processing', stage: 'Waiting for the lesson writer', error: null, progress_done: 0, progress_total: 0 });
     let job;
     try {
-      const plan = await writerFor(settings.lesson);
+      const plan = await writerFor(settings.lesson, row.profile_id, id);
       job = jobs.submit({ project: settings.project, kind: 'revise', request, scope, attachments, history, ...(chapter ? { chapter } : {}), ...plan });
     } catch (e) {
+      reservations.delete(id); // it never started, so it holds nothing
       store.update(id, prior);
       throw Object.assign(new Error(e.message), { status: e.status || 400 });
     }
@@ -301,7 +367,7 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
 
   /** The revision is written and checked: it becomes the next version, then renders or waits at its storyboard. */
   function finishRevise(id, result, watch) {
-    watching.delete(id);
+    unwatch(id);
     const row = store.getRaw(id);
     if (!row) return;
     const settings = JSON.parse(row.settings_json);
@@ -311,6 +377,7 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
     if (usage) delete usage.requests;
     if (!watch.chapter) settings.scenes = result.scenes || settings.scenes;
     settings.lastRevision = { request: watch.request, summary: result.summary || '', at: Date.now(), ok: true };
+    settings.lesson = { ...settings.lesson, ...SETTLED };
     store.update(id, { text: script, char_count: script.length, word_count: countWords(script), settings_json: JSON.stringify(settings) });
     try {
       versions?.snapshot(id, {
@@ -318,6 +385,7 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
         note: watch.request,
         usage: result.usage || null,
         costUsd: result.costUsd ?? null,
+        hostCostUsd: result.usage?.hostCostUsd ?? null,
         check: { ok: true, warnings: result.warnings?.length || 0 },
         details: {
           request: watch.request,
@@ -340,12 +408,13 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
   }
 
   function endRevise(id, watch, error) {
-    watching.delete(id);
+    unwatch(id);
     const row = store.getRaw(id);
     if (!row) return;
     if (row.version) versions?.resetTo(id, row.version);
     const settings = JSON.parse(row.settings_json);
     settings.lastRevision = { request: watch.request, error: error || 'Cancelled', at: Date.now(), ok: false };
+    if (settings.lesson) settings.lesson = { ...settings.lesson, ...readSpent(settings) };
     store.update(id, { settings_json: JSON.stringify(settings), ...watch.prior });
   }
 
@@ -363,8 +432,8 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
       endRevise(id, watch, null); // so does a cancelled revision, files included
       return true;
     }
-    watching.delete(id);
-    store.update(id, { status: 'cancelled', error: 'Cancelled', stage: null, finished_at: Date.now() });
+    unwatch(id);
+    store.update(id, { status: 'cancelled', error: 'Cancelled', stage: null, finished_at: Date.now(), ...noteSpent(id) });
     return true;
   }
 
@@ -373,5 +442,18 @@ export function createLessons({ store, runner, getConfig, jobs, versions = null,
     watching.clear();
   }
 
-  return { start, checkEdit, revise, cancel, stop, isWritten, isActive: (id) => watching.has(id) };
+  /**
+   * Lessons the server was stopped under left what they had spent in their logs. Keep it on them, so a restart
+   * does not give the money back to the caps and the Owner's limit. Safe to run again.
+   */
+  function settleInterrupted() {
+    const rows = store.db.prepare("SELECT id FROM generations WHERE status = 'error' AND error LIKE 'Interrupted by a server restart%'").all();
+    for (const { id } of rows) {
+      const patch = noteSpent(id);
+      if (patch.settings_json) store.update(id, patch);
+    }
+    return rows.length;
+  }
+
+  return { start, checkEdit, revise, cancel, stop, settleInterrupted, isWritten, isActive: (id) => watching.has(id) };
 }

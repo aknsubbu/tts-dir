@@ -11,6 +11,8 @@ import { localOnly } from './local.js';
 import { RENDER_EXTS, stillsOf } from './versions.js';
 import { createEdits, EditError } from './edits.js';
 import { actorOf, settingsRoutes } from './settings-routes.js';
+import { createProfiles } from './profiles.js';
+import { attachProfile, connectorScope, profileRoutes, requireProfile } from './profile-routes.js';
 import { SettingsError } from './settings.js';
 import { CHAPTERS_FROM, LESSON_MINUTES, MAX_NOTES, VIDEO_QUALITIES } from '../shared/limits.js';
 import { normalizeOutline } from '../author/pipeline.js';
@@ -48,7 +50,7 @@ function deriveTitle(text) {
   return first.length > 60 ? `${first.slice(0, 57).trimEnd()}…` : first || 'Untitled script';
 }
 
-export function createApp({ getConfig, store, runner, engine, lessons, versions = null, settings = null, secrets = null, mcp = null, distDir }) {
+export function createApp({ getConfig, store, runner, engine, lessons, versions = null, settings = null, secrets = null, mcp = null, profiles = null, distDir }) {
   const app = express();
   app.disable('x-powered-by');
   app.use(localOnly({ lan: () => getConfig().lan }));
@@ -58,6 +60,17 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
   app.use((req, res, next) => (req.path === '/api/lessons' ? lessonJson : smallJson)(req, res, next));
 
   const api = express.Router();
+  profiles ||= createProfiles({ db: store.db, dataDir: store.dataDir, getMax: () => getConfig().maxProfiles || 5 });
+  api.use(attachProfile(profiles));
+  api.use(connectorScope);
+
+  /** A waiting job shows how many are ahead of it: the render queue is shared by every profile. */
+  const withQueue = (g) => {
+    const n = g && runner.ahead?.(g.id);
+    return n ? { ...g, queuedBehind: n } : g;
+  };
+  /** A lesson of the signed-in profile, or null: someone else's is the same as none, so it answers 404 like a missing one. */
+  const findOwned = (req, id = req.params.id) => store.getRawOwned(id, req.profile.id);
 
   /** Reject voices Kokoro cannot speak. Returns the catalog entry once the engine has loaded. */
   function checkVoice(voiceId) {
@@ -92,6 +105,16 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
     });
   });
 
+  // Choosing who is watching comes before everything else but this health check.
+  const people = profileRoutes({ profiles, hostSpent: (id) => store.stats(id).hostSpentThisMonthUsd, removeProfileData: async (profileId) => {
+      await removeProfileLessons(profileId);
+      await settings?.purge(profileId); // its settings, history and keys go with it
+    },
+  });
+  api.use(people.open);
+  api.use(requireProfile);
+  api.use(people.guarded);
+
   api.get('/voices', async (req, res) => {
     await engine.start();
     const { voices, languages } = engine.catalog();
@@ -123,7 +146,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
     res.sendFile(file, { dotfiles: 'allow' });
   });
 
-  api.get('/stats', (req, res) => res.json(store.stats()));
+  api.get('/stats', (req, res) => res.json(store.stats(req.profile.id)));
 
   // Live updates: every change to an item, as Server-Sent Events. Progress can change many times
   // a second, so each item is sent at most every 200 ms, with its latest state.
@@ -132,15 +155,20 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
     res.flushHeaders();
     res.write('retry: 3000\n\n');
     const due = new Map(); // id -> timer
+    // A stream lasts long: it ends when its session does (sign-out, a PIN reset, a deleted profile).
+    const stillMe = () => req.credential?.() === req.profile.id;
     const send = (id) => {
       due.delete(id);
-      const g = store.get(id);
+      if (!stillMe()) return res.end();
+      const g = withQueue(store.getOwned(id, req.profile.id));
       res.write(`event: generation\ndata: ${JSON.stringify(g || { id, deleted: true })}\n\n`);
     };
-    const onChange = (id) => {
+    // Only changes to this profile's own lessons are sent down this connection.
+    const onChange = (id, owner) => {
+      if (owner !== req.profile.id) return;
       if (!due.has(id)) due.set(id, setTimeout(() => send(id), 200));
     };
-    const ping = setInterval(() => res.write(': ping\n\n'), 25_000);
+    const ping = setInterval(() => (stillMe() ? res.write(': ping\n\n') : res.end()), 25_000);
     store.events.on('change', onChange);
     req.on('close', () => {
       store.events.off('change', onChange);
@@ -148,12 +176,11 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
       for (const t of due.values()) clearTimeout(t);
     });
   });
-  api.get('/tags', (req, res) => res.json({ tags: store.tags() }));
+  api.get('/tags', (req, res) => res.json({ tags: store.tags(req.profile.id) }));
 
   api.get('/generations', (req, res) => {
     const { q, status, voiceId, favorite, tag, sort, kind } = req.query;
-    res.json(
-      store.list({
+    const page = store.list(req.profile.id, {
         q: q ? String(q) : '',
         status: status ? String(status) : '',
         voiceId: voiceId ? String(voiceId) : '',
@@ -163,14 +190,14 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
         sort: sort ? String(sort) : '',
         limit: Number(req.query.limit) || 30,
         offset: Number(req.query.offset) || 0,
-      }),
-    );
+    });
+    res.json({ ...page, items: page.items.map(withQueue) });
   });
 
   api.get('/generations/:id', (req, res) => {
-    const g = store.get(req.params.id, { withText: true });
+    const g = store.getOwned(req.params.id, req.profile.id, { withText: true });
     if (!g) throw httpError(404, 'Not found');
-    res.json(g);
+    res.json(withQueue(g));
   });
 
   api.post('/generations', (req, res) => {
@@ -190,7 +217,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
 
     const configHash = sha(JSON.stringify([cleaned, voiceId, MODEL_ID, settings]));
     if (!b.force) {
-      const existing = store.findByConfig(configHash);
+      const existing = store.findByConfig(req.profile.id, configHash);
       if (existing) return res.json({ duplicate: true, generation: toApi(existing) });
     }
 
@@ -198,6 +225,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
     const title = String(b.title || '').trim().slice(0, 120) || deriveTitle(cleaned);
     store.insert({
       id,
+      profile_id: req.profile.id,
       title,
       source_name: b.sourceName ? String(b.sourceName).slice(0, 200) : null,
       text: rawText,
@@ -217,23 +245,34 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
     res.status(201).json({ duplicate: false, generation: store.get(id) });
   });
 
+  /**
+   * A project folder is one profile's when a lesson of theirs was written into it. A folder no
+   * lesson claims (one written by hand) is the Owner's. Projects stay where build.py expects them;
+   * who may see one lives in the database.
+   */
+  const canUseProject = (req, name) => {
+    const claimed = store.projectOwners().get(name);
+    return claimed ? claimed.has(req.profile.id) : req.profile.isOwner;
+  };
+
   // Narrated videos: video/projects/<name>, built by video/build.py through the same queue.
   api.get('/video/projects', (req, res) => {
     const { videoDir } = getConfig();
-    const projects = videoDir ? listProjects(videoDir) : [];
+    const projects = videoDir ? listProjects(videoDir).filter((p) => canUseProject(req, p.name)) : [];
     res.json({ projects: projects.map(({ name, voice, speed, scenes }) => ({ name, voice, speed, scenes })) });
   });
 
   api.post('/videos', (req, res) => {
     const b = req.body || {};
     const { videoDir } = getConfig();
-    const project = videoDir ? readProject(videoDir, String(b.project || '')) : null;
+    const project = videoDir && canUseProject(req, String(b.project || '')) ? readProject(videoDir, String(b.project || '')) : null;
     if (!project) throw httpError(404, `No video project called “${b.project}”.`);
     if (!project.scenes.length) throw httpError(400, `Project “${project.name}” lists no scenes in project.json.`);
     const quality = VIDEO_QUALITIES.includes(b.quality) ? b.quality : 'default';
     const id = crypto.randomUUID();
     store.insert({
       id,
+      profile_id: req.profile.id,
       kind: 'video',
       title: String(b.title || '').trim().slice(0, 120) || `${project.name} (video)`,
       source_name: `video/projects/${project.name}`,
@@ -258,13 +297,15 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
   // like any other video. The row exists from the start so the library shows each stage.
   // A lesson: Claude (or the writer chosen in Settings) writes the script and the scenes from a
   // topic and notes, then it is built like any other video. The row exists from the start so the
-  // library shows each stage. Lessons Claude starts through MCP use profile "claude": its own
+  // library shows each stage. Lessons Claude starts through MCP have origin "claude": its own
   // writer and defaults, when Settings gives it some.
   api.post('/lessons', async (req, res) => {
     if (!lessons) throw httpError(503, 'Lessons are not set up on this server.');
     const b = req.body || {};
-    const profile = b.profile === 'claude' || actorOf(req) === 'claude' ? 'claude' : 'page';
-    const defaults = settings ? settings.lessonDefaults(profile) : { minutes: 2, quality: 'default', review: getConfig().lessonReview || 'render', voiceId: getConfig().defaultVoiceId };
+    // `profile` is the name older MCP clients send for this.
+    const origin = (b.origin || b.profile) === 'claude' || actorOf(req) === 'claude' ? 'claude' : 'page';
+    const mine = settings ? settings.for(req.profile.id) : null;
+    const defaults = mine ? mine.lessonDefaults(origin) : { minutes: 2, quality: 'default', review: getConfig().lessonReview || 'render', voiceId: getConfig().defaultVoiceId };
     const topic = String(b.topic || '').replace(/\s+/g, ' ').trim().slice(0, 200);
     const goal = String(b.goal || '').trim().slice(0, 2000);
     const notes = String(b.notes || '').trim();
@@ -290,10 +331,12 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
     const override = b.writer?.provider ? { provider: String(b.writer.provider).slice(0, 40), model: String(b.writer.model || '').slice(0, 200) } : null;
     if (settings) {
       try {
-        if (override && !settings.provider(override.provider)) throw new SettingsError(`There is no provider called “${override.provider}”.`);
-        await settings.checkWriter(settings.resolveWriter(profile, override));
-        const { monthCapUsd } = settings.costs();
-        if (monthCapUsd != null && store.stats().costThisMonthUsd >= monthCapUsd) {
+        if (override && !mine.provider(override.provider)) throw new SettingsError(`There is no provider called “${override.provider}”.`);
+        await mine.checkWriter(mine.resolveWriter(origin, override));
+        const { monthCapUsd } = mine.costs();
+        const allowance = await mine.hostAllowance(mine.resolveWriter(origin, override), store.stats(req.profile.id).hostSpentThisMonthUsd);
+        if (allowance?.usesHost && allowance.leftUsd <= 0) throw new SettingsError(mine.hostAllowanceMessage(allowance));
+        if (monthCapUsd != null && store.stats(req.profile.id).costThisMonthUsd >= monthCapUsd) {
           throw new SettingsError(`This month's lessons have reached the monthly cap of $${monthCapUsd.toFixed(2)}. Raise it in Settings → Costs, or choose a free writer.`);
         }
       } catch (e) {
@@ -321,6 +364,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
     const brief = [topic, goal, allNotes].filter(Boolean).join('\n\n');
     store.insert({
       id,
+      profile_id: req.profile.id,
       kind: 'video',
       title: ownTitle || topic.slice(0, 120),
       source_name: `video/projects/${project}`,
@@ -337,7 +381,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
         lesson: {
           topic, goal, minutes, review, ownTitle: !!ownTitle,
           attachments: attached.files.map(({ name, file, kind, pages, asText }) => ({ name, file, kind, ...(pages ? { pages } : {}), ...(asText ? { asText } : {}) })),
-          ...(profile === 'claude' ? { profile } : {}),
+          ...(origin === 'claude' ? { origin } : {}),
           ...(override ? { writer: override } : {}),
           ...(chaptered ? { chaptered, outlineReview } : {}),
         },
@@ -351,7 +395,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
   });
 
   api.get('/generations/:id/video', (req, res) => {
-    const row = store.getRaw(req.params.id);
+    const row = findOwned(req);
     if (!row || row.kind !== 'video' || row.status !== 'done') throw httpError(404, 'Video not available');
     const file = store.videoPath(row.id);
     if (!fs.existsSync(file)) throw httpError(404, 'Video file is missing on disk');
@@ -364,7 +408,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
   // A still from the video, for its card. A video built before posters existed gets one
   // made the first time its card is shown.
   api.get('/generations/:id/poster', async (req, res) => {
-    const row = store.getRaw(req.params.id);
+    const row = findOwned(req);
     if (!row || row.kind !== 'video' || row.status !== 'done') throw httpError(404, 'No poster');
     const file = store.videoPath(row.id, 'jpg');
     if (!fs.existsSync(file)) {
@@ -381,7 +425,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
 
   // One of the images or PDFs attached to a lesson's notes.
   api.get('/generations/:id/notes/:file', (req, res) => {
-    const row = store.getRaw(req.params.id);
+    const row = findOwned(req);
     const settings = row ? JSON.parse(row.settings_json) : null;
     const wanted = settings?.lesson?.attachments?.find((a) => path.basename(a.file) === req.params.file);
     if (!wanted) throw httpError(404, 'No such file');
@@ -392,7 +436,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
   });
 
   api.get('/generations/:id/captions.:ext', (req, res) => {
-    const row = store.getRaw(req.params.id);
+    const row = findOwned(req);
     const ext = req.params.ext;
     if (!row || row.kind !== 'video' || row.status !== 'done' || !['srt', 'vtt'].includes(ext)) throw httpError(404, 'Captions not available');
     const file = store.videoPath(row.id, ext);
@@ -403,7 +447,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
   });
 
   api.patch('/generations/:id', (req, res) => {
-    if (!store.getRaw(req.params.id)) throw httpError(404, 'Not found');
+    if (!findOwned(req)) throw httpError(404, 'Not found');
     const b = req.body || {};
     const patch = {};
     if (b.title !== undefined) {
@@ -418,7 +462,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
   });
 
   api.post('/generations/:id/retry', async (req, res) => {
-    const row = store.getRaw(req.params.id);
+    const row = findOwned(req);
     if (!row) throw httpError(404, 'Not found');
     if (!['error', 'cancelled'].includes(row.status)) throw httpError(409, 'Only failed or cancelled items can be retried.');
     if (row.kind !== 'video') checkVoice(row.voice_id); // a video's voice is checked by its build
@@ -434,7 +478,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
   });
 
   api.post('/generations/:id/cancel', (req, res) => {
-    const row = store.getRaw(req.params.id);
+    const row = findOwned(req);
     if (!row) throw httpError(404, 'Not found');
     if (row.status === 'awaiting') {
       // Waiting on the person: cancelling means "don't render it". Retry renders it after all.
@@ -448,7 +492,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
   // A lesson waiting on you: { action: "render" } renders it after its storyboard, optionally at
   // another quality; { action: "scenes" } has the scenes written for a narration you approved.
   api.post('/generations/:id/approve', async (req, res) => {
-    const row = store.getRaw(req.params.id);
+    const row = findOwned(req);
     if (!row) throw httpError(404, 'Not found');
     if (row.status !== 'awaiting') throw httpError(409, 'This lesson is not waiting for approval.');
     const b = req.body || {};
@@ -508,7 +552,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
   };
 
   api.get('/generations/:id/outline', (req, res) => {
-    const row = store.getRaw(req.params.id);
+    const row = findOwned(req);
     if (!row) throw httpError(404, 'Not found');
     let outline;
     try {
@@ -525,13 +569,13 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
   });
 
   api.put('/generations/:id/outline', (req, res) => {
-    const row = store.getRaw(req.params.id);
+    const row = findOwned(req);
     waitingOnOutline(row);
     res.json({ outline: saveOutline(row, req.body?.outline || req.body), generation: store.get(row.id) });
   });
 
   api.post('/generations/:id/outline/redo', async (req, res) => {
-    const row = store.getRaw(req.params.id);
+    const row = findOwned(req);
     waitingOnOutline(row);
     const request = String(req.body?.request || '').trim();
     if (!request) throw httpError(400, 'Say what to change in the outline.');
@@ -542,7 +586,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
   // Ask for a change to a written lesson. The writer answers with only what changes; the result is
   // checked, becomes the next version, and renders (or waits at its storyboard with review).
   api.post('/generations/:id/revise', async (req, res) => {
-    const row = store.getRaw(req.params.id);
+    const row = findOwned(req);
     if (!row) throw httpError(404, 'Not found');
     const settings = JSON.parse(row.settings_json);
     if (!settings.lesson || !lessons) throw httpError(403, 'Only lessons can be revised. A project written by hand is edited in its folder.');
@@ -614,7 +658,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
   // The storyboard: per scene and block, the narration and the stills the check took. The
   // working copy's by default (the last check), or a version's with ?version=n.
   const storyboardOf = (req) => {
-    const row = store.getRaw(req.params.id);
+    const row = findOwned(req);
     if (!row || row.kind !== 'video' || !versions) throw httpError(404, 'Not found');
     const version = req.query.version ? Number(req.query.version) : 0;
     if (req.query.version && !(Number.isInteger(version) && version > 0)) throw httpError(400, 'A version is a whole number.');
@@ -657,7 +701,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
 
   // One block's narration, as the check spoke it.
   api.get('/generations/:id/narration/:block', (req, res) => {
-    const row = store.getRaw(req.params.id);
+    const row = findOwned(req);
     const chapter = req.query.chapter ? String(req.query.chapter) : null;
     if (chapter && !/^\d{2}-[a-z0-9-]{1,48}$/.test(chapter)) throw httpError(404, 'Not found');
     const lessonRoot = row && versions?.projectRoot(row);
@@ -681,10 +725,20 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
   // Editing a lesson: its working copy, saved with a quick check, checked in full, rendered as the
   // next version, discarded, or an earlier version restored. See edits.js.
   const edits = versions ? createEdits({ store, versions, getConfig, runner, lessons }) : null;
-  const editing = (fn) => async (req, res) => {
+  /**
+   * Saving, checking and building run the Python in a lesson's scenes.py. With the macOS sandbox that code is confined;
+   * without it (Linux, Docker) it runs as this server, which can read every profile's library and keys. So where
+   * people share an install, only the Owner may run code they wrote. Lessons the writer makes are still checked.
+   */
+  const unconfinedForYou = (req) => !req.profile.isOwner && !getConfig().sandboxed && profiles.list().length > 1;
+  const editing = (fn, { runsCode = false } = {}) => async (req, res) => {
     if (!edits) throw httpError(404, 'Not found');
     try {
-      res.json(await fn(store.getRaw(req.params.id), req.body || {}, req));
+      const row = findOwned(req);
+      if (runsCode && row && unconfinedForYou(req)) {
+        throw new EditError('On this computer a lesson’s scenes run with no sandbox, so only the Owner can save, check or build code here while others share this install. Ask for a change instead, or ask the Owner.', 403);
+      }
+      res.json(await fn(row, req.body || {}, req));
     } catch (e) {
       if (e instanceof EditError) {
         res.status(e.status).json({ error: e.message, ...(e.current ? { current: e.current } : {}) });
@@ -694,20 +748,20 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
     }
   };
   api.get('/generations/:id/source', editing((row, b, req) => edits.source(row, req.query.chapter ? String(req.query.chapter) : null)));
-  api.put('/generations/:id/source', editing((row, b) => edits.save(row, b)));
-  api.post('/generations/:id/check', editing((row, b) => edits.check(row, { chapter: b.chapter || null })));
-  api.post('/generations/:id/build', editing((row, b) => edits.check(row, { build: true, quality: VIDEO_QUALITIES.includes(b.quality) ? b.quality : null, chapter: b.chapter || null })));
+  api.put('/generations/:id/source', editing((row, b) => edits.save(row, b), { runsCode: true }));
+  api.post('/generations/:id/check', editing((row, b) => edits.check(row, { chapter: b.chapter || null }), { runsCode: true }));
+  api.post('/generations/:id/build', editing((row, b) => edits.check(row, { build: true, quality: VIDEO_QUALITIES.includes(b.quality) ? b.quality : null, chapter: b.chapter || null }), { runsCode: true }));
   api.post('/generations/:id/discard', editing((row) => edits.discard(row)));
   api.post('/generations/:id/restore', editing((row, b) => {
     const n = Number(b.version);
     if (!Number.isInteger(n) || n < 1) throw new EditError('Say which version to restore: { version: n }.');
     return edits.restore(row, n);
-  }));
+  }, { runsCode: true }));
   api.get('/generations/:id/versions/:n/source', editing((row, b, req) => edits.versionSource(row, Number(req.params.n), req.query.chapter ? String(req.query.chapter) : null)));
 
   // A long lesson's chapters as WebVTT, for the player's chapter list.
   api.get('/generations/:id/chapters.vtt', (req, res) => {
-    const row = store.getRaw(req.params.id);
+    const row = findOwned(req);
     const file = row && store.videoPath(row.id, 'chapters.vtt');
     if (!file || !fs.existsSync(file)) throw httpError(404, 'This video has no chapters.');
     res.type('text/vtt; charset=utf-8').sendFile(file, { dotfiles: 'allow' });
@@ -715,7 +769,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
 
   // Every spoken word of the built video with its time, for the transcript beside the player.
   api.get('/generations/:id/transcript', (req, res) => {
-    const row = store.getRaw(req.params.id);
+    const row = findOwned(req);
     const file = row && store.videoPath(row.id, 'words.json');
     if (!row || row.kind !== 'video' || (!row.built_version && row.status !== 'done') || !fs.existsSync(file)) throw httpError(404, 'No transcript for this video. Lessons built from now on have one.');
     res.set('Cache-Control', 'private, max-age=60');
@@ -724,7 +778,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
 
   // Where a lesson's files are on this machine, for the MCP connector and anything else local.
   api.get('/generations/:id/files', (req, res) => {
-    const row = store.getRaw(req.params.id);
+    const row = findOwned(req);
     if (!row) throw httpError(404, 'Not found');
     const has = (f) => (fs.existsSync(f) ? f : null);
     const settings = JSON.parse(row.settings_json);
@@ -739,7 +793,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
 
   // A lesson's versions, newest first.
   api.get('/generations/:id/versions', (req, res) => {
-    const row = store.getRaw(req.params.id);
+    const row = findOwned(req);
     if (!row) throw httpError(404, 'Not found');
     res.json({
       current: row.version || 0,
@@ -762,17 +816,18 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
     });
   });
 
-  api.delete('/generations/:id', (req, res) => {
-    const row = store.getRaw(req.params.id);
-    if (!row) throw httpError(404, 'Not found');
+  /**
+   * Take a lesson out of the library with its files. `project` also removes the folder a lesson was
+   * written into: its script, scenes, notes and attached files. Only for lessons, whose folder this
+   * server made; a project you wrote by hand is never touched. Skipped while another library item
+   * (of anyone) was built from the same folder.
+   */
+  function removeLesson(row, { project = false } = {}) {
     if (!runner.cancel(row.id)) lessons?.cancel(row.id);
     store.remove(row.id);
-    // ?project=1 also removes the folder a lesson was written into: its script, scenes, notes
-    // and attached files. Only for lessons, whose folder this server made; a project you wrote
-    // by hand is never touched. Skipped while another library item was built from the same folder.
     const settings = JSON.parse(row.settings_json);
     let projectRemoved = false;
-    if (['1', 'true'].includes(String(req.query.project)) && settings.lesson && PROJECT_NAME.test(String(settings.project))) {
+    if (project && settings.lesson && PROJECT_NAME.test(String(settings.project))) {
       if (!store.countBySource(row.source_name)) {
         fs.rmSync(path.join(getConfig().videoDir, 'projects', settings.project), { recursive: true, force: true });
         projectRemoved = true;
@@ -787,11 +842,23 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
         /* no file to remove */
       }
     }
+    return projectRemoved;
+  }
+
+  /** Everything a profile made: its lessons, their projects and files. */
+  async function removeProfileLessons(profileId) {
+    for (const row of store.rowsOf(profileId)) removeLesson(row, { project: true });
+  }
+
+  api.delete('/generations/:id', (req, res) => {
+    const row = findOwned(req);
+    if (!row) throw httpError(404, 'Not found');
+    const projectRemoved = removeLesson(row, { project: ['1', 'true'].includes(String(req.query.project)) });
     res.json({ ok: true, projectRemoved });
   });
 
   api.get('/generations/:id/audio', (req, res) => {
-    const row = store.getRaw(req.params.id);
+    const row = findOwned(req);
     if (!row || row.status !== 'done' || row.kind === 'video') throw httpError(404, 'Audio not available');
     const file = store.audioPath(row.id);
     if (!fs.existsSync(file)) throw httpError(404, 'Audio file is missing on disk');
@@ -804,13 +871,13 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
   });
 
   api.get('/generations/:id/script', (req, res) => {
-    const row = store.getRaw(req.params.id);
+    const row = findOwned(req);
     if (!row) throw httpError(404, 'Not found');
     if (req.query.download) res.attachment(`${slugify(row.title, 'script')}.txt`);
     res.type('text/plain; charset=utf-8').send(row.text);
   });
 
-  if (settings) api.use(settingsRoutes({ settings, secrets, getConfig, store }));
+  if (settings) api.use(settingsRoutes({ settings, secrets, getConfig, store, profiles }));
 
   api.use((req, res) => res.status(404).json({ error: 'Unknown API route' }));
   app.use('/api', api);
@@ -836,7 +903,8 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
   app.use((err, req, res, next) => {
     const status = err.status || (err instanceof EngineError ? 503 : 500);
     if (status === 500) console.error(err);
-    res.status(status).json({ error: err.message || 'Server error' });
+    if (err.retryAfterSec) res.set('Retry-After', String(err.retryAfterSec));
+    res.status(status).json({ error: err.message || 'Server error', ...(err.retryAfterSec ? { retryAfterSec: err.retryAfterSec } : {}) });
   });
 
   return app;

@@ -11,6 +11,7 @@ async function req(path, { method = 'GET', body } = {}) {
   } catch {
     /* empty or non-JSON body */
   }
+  if (res.status === 401 && data?.signIn) window.dispatchEvent(new Event('tts:signin')); // the session ended: back to "Who's watching?"
   if (!res.ok) {
     throw Object.assign(new Error(data?.error || `Request failed (${res.status})`), {
       status: res.status,
@@ -30,6 +31,17 @@ const query = (params) => {
 };
 
 export const api = {
+  // Profiles: who is watching, and what each may change about themselves.
+  session: () => req('/session'),
+  profiles: () => req('/profiles'),
+  allProfiles: () => req('/profiles/all'), // the Owner's view, with what each may borrow from the host
+  signIn: (profileId, pin) => req('/session', { method: 'POST', body: { profileId, ...(pin ? { pin } : {}) } }),
+  signOut: () => req('/session', { method: 'DELETE' }),
+  addProfile: (body) => req('/profiles', { method: 'POST', body }),
+  patchProfile: (id, body) => req(`/profiles/${id}`, { method: 'PATCH', body }),
+  setPin: (id, body) => req(`/profiles/${id}/pin`, { method: 'PUT', body }),
+  removePin: (id, body = {}) => req(`/profiles/${id}/pin`, { method: 'DELETE', body }),
+  deleteProfile: (id, body) => req(`/profiles/${id}`, { method: 'DELETE', body }),
   health: () => req('/health'),
   voices: () => req('/voices'),
   stats: () => req('/stats'),
@@ -74,4 +86,8 @@ export const api = {
   providerModels: (id) => req(`/providers/${encodeURIComponent(id)}/models`),
   estimate: (body) => req('/estimate', { method: 'POST', body }),
   connect: () => req('/connect'),
+  // What lets Claude act as this profile alone. The token itself comes back once, when it is made.
+  connectorTokens: () => req('/connector/tokens'),
+  makeConnectorToken: (label) => req('/connector/tokens', { method: 'POST', body: { label } }),
+  revokeConnectorToken: (id) => req(`/connector/tokens/${id}`, { method: 'DELETE' }),
 };

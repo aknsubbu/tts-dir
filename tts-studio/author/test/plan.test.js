@@ -114,3 +114,33 @@ test('a lesson stops at its spending cap, and a retry continues with what was sp
   assert.equal(retry.usage.earlierAttemptsUsd, 1);
   assert.ok(!fs.existsSync(path.join(box.project('p-cap'), 'build', 'author', 'spent.json')));
 });
+
+test('a lesson stops at the Owner’s allowance for the host’s own sign-in and keys, counting only what the host paid, and a retry keeps the count', async () => {
+  // The fake marks a request as the host's only for the steps named: the write and the first fix.
+  const calls = [];
+  const ask = (answers) => async ({ writer, prompt, schema }) => {
+    const step = schema.required.includes('notes') ? 'read' : /does not build yet|builds, but/.test(prompt) ? 'fix' : 'write';
+    calls.push(step);
+    const next = answers[step]?.shift();
+    const hostFunded = writer.provider === 'claude-code';
+    return { answer: next, costUsd: 0.5, usage: { model: 'm', inputTokens: 1, outputTokens: 1, costUsd: 0.5, provider: writer.provider, hostFunded } };
+  };
+  const OWN = w('openai', 'openai', 'gpt-x', { rate: { input: 1, output: 1 } }); // the profile's own key: not the host's
+  const mixed = plan({ fix: OWN });
+  // $0.60 of the host's allowance: the write ($0.50) is the host's, the fixes go to the profile's own key.
+  const job = { project: 'p-host', ...BRIEF, writer: mixed, capUsd: 50, hostCapUsd: 0.6 };
+  const first = ask({ write: [answer('# BROKEN')], fix: [answer('# BROKEN'), answer('# BROKEN'), answer('# BROKEN')] });
+  await assert.rejects(author(first).write(job), (e) => e.code !== 'cap' && /still fail/.test(e.message), 'the profile’s own key is not held to the Owner’s allowance');
+  const spent = JSON.parse(fs.readFileSync(path.join(box.project('p-host'), 'build', 'author', 'spent.json'), 'utf8'));
+  assert.deepEqual([spent.hostUsd, spent.usd], [0.5, 1.5], 'only the host-paid request counts toward the allowance, though the lesson spent three times as much');
+  // With the allowance at nothing, the first host-paid request is refused with the Owner's wording.
+  await assert.rejects(author(ask({ write: [answer()] })).write({ project: 'p-host0', ...BRIEF, writer: plan({}), hostCapUsd: 0 }), (e) => e.code === 'cap' && /allowance the Owner set/.test(e.message));
+  // The earlier attempt's host spending counts once, in the job: a retry whose allowance (without that attempt) equals it is refused at once.
+  const none = ask({ write: [], fix: [answer()] });
+  await assert.rejects(author(none).write({ project: 'p-host', writer: mixed, capUsd: 50, hostCapUsd: spent.hostUsd }), (e) => e.code === 'cap' && /allowance the Owner set/.test(e.message));
+  // A retry holds what the earlier attempt spent with the host: the result's share includes it.
+  const retry = await author(ask({ write: [], fix: [answer(), answer()] })).write({ project: 'p-host', writer: mixed, capUsd: 50, hostCapUsd: 5 });
+  assert.equal(retry.usage.hostCostUsd, Math.round((spent.hostUsd + retry.usage.requests.filter((r) => r.hostFunded).reduce((n, r) => n + r.costUsd, 0)) * 1000) / 1000);
+  assert.ok(retry.usage.hostCostUsd >= spent.hostUsd);
+  assert.ok(!fs.existsSync(path.join(box.project('p-host'), 'build', 'author', 'spent.json')));
+});

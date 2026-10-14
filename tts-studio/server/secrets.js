@@ -14,15 +14,20 @@ export class SecretError extends Error {}
 /** Environment variables that hold a built-in provider's key. They win over a stored key. */
 export const ENV_KEYS = { anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', groq: 'GROQ_API_KEY' };
 
+/** Where a profile keeps a provider's key: one account per profile and provider. */
+export const keyAccount = (profileId, providerId) => `p-${profileId}-${providerId}`;
+
 /**
  * A provider's key and where it came from ('env', 'keychain' or 'file'), or { key: null }.
+ * The profile's own key comes first. The host's environment key (ANTHROPIC_API_KEY and the like)
+ * is used only when the profile may use the host's keys; otherwise there is none.
  * Keys are looked up when a request is made, never passed between processes.
  */
-export async function keyFor(providerId, { config, secrets }) {
-  const fromEnv = ENV_KEYS[providerId] && config.keys?.[providerId];
-  if (fromEnv) return { key: fromEnv, from: 'env' };
-  const stored = secrets ? await secrets.get(providerId) : null;
-  return stored ? { key: stored, from: secrets.kind } : { key: null, from: null };
+export async function keyFor(providerId, { config, secrets, profileId, allowEnv = false }) {
+  const stored = secrets && profileId ? await secrets.get(keyAccount(profileId, providerId)) : null;
+  if (stored) return { key: stored, from: secrets.kind };
+  const fromEnv = allowEnv && ENV_KEYS[providerId] && config.keys?.[providerId];
+  return fromEnv ? { key: fromEnv, from: 'env' } : { key: null, from: null };
 }
 
 /**
@@ -69,9 +74,9 @@ export function createSecrets({ dataDir, useKeychain = true }) {
       execFile(SECURITY, ['find-generic-password', '-s', SERVICE, '-a', account, '-w'], { timeout: 10_000 }, (e, stdout) => resolve(e ? null : stdout.trim() || null));
     });
 
-  // An account is a provider's id: letters, digits and dashes, so it is safe inside the command too.
+  // An account is p-<profile>-<provider>: lowercase letters, digits and dashes, so it is safe inside the command too.
   const checkAccount = (account) => {
-    if (!/^[a-z0-9-]{1,40}$/.test(account)) throw new SecretError('That provider id is not usable.');
+    if (!/^[a-z0-9-]{1,100}$/.test(account)) throw new SecretError('That provider id is not usable.');
   };
 
   async function set(account, value) {

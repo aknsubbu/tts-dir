@@ -18,11 +18,17 @@ export function createRunner({ store, engine, video, versions = null }) {
     pump();
   }
 
+  /** Everyone's jobs share this queue, so each one waiting is told its place moved. */
+  function announceQueue() {
+    for (const id of queue) store.events.emit('change', id, store.getRaw(id)?.profile_id);
+  }
+
   function pump() {
     if (active) return;
     const id = queue.shift();
     if (!id) return;
     active = id;
+    announceQueue();
     run(id)
       .catch(() => {})
       .finally(() => {
@@ -157,6 +163,7 @@ export function createRunner({ store, engine, video, versions = null }) {
     if (at !== -1) {
       queue.splice(at, 1);
       store.update(id, { status: 'cancelled', error: 'Cancelled', finished_at: Date.now() });
+      announceQueue(); // those behind it moved up
       return true;
     }
     if (active === id) {
@@ -171,6 +178,11 @@ export function createRunner({ store, engine, video, versions = null }) {
     enqueue,
     cancel,
     stop,
+    /** How many jobs (of anyone) must finish before this one starts, or null if it is not waiting. */
+    ahead: (id) => {
+      const at = queue.indexOf(id);
+      return at < 0 ? null : at + (active ? 1 : 0);
+    },
     isActive: (id) => active === id || queue.includes(id),
     get queued() {
       return queue.length + (active ? 1 : 0);

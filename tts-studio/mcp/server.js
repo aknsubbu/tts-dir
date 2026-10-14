@@ -21,11 +21,12 @@ export class DashboardDown extends Error {}
  * conversation, follow it, search the library, fetch the video, and change the settings it is
  * allowed to. Every request is marked as Claude's, so the dashboard applies Claude's limits.
  *
+ *   token      a connector token (Settings → Connect Claude): Claude then acts as that profile alone
  *   baseUrl    where the dashboard answers (http://127.0.0.1:8787)
  *   linkBase   what links in answers point at (http://localhost:8787)
  *   onDown     called once when the dashboard does not answer; may start it (TTS_MCP_AUTOSTART)
  */
-export function createMcpServer({ baseUrl = DEFAULT_URL, linkBase = baseUrl.replace('127.0.0.1', 'localhost'), cwd = process.cwd(), onDown = null, waitMs = WAIT_MS, pollMs = 1000 } = {}) {
+export function createMcpServer({ token = null, baseUrl = DEFAULT_URL, linkBase = baseUrl.replace('127.0.0.1', 'localhost'), cwd = process.cwd(), onDown = null, waitMs = WAIT_MS, pollMs = 1000 } = {}) {
   const server = new McpServer(
     { name: 'narrated-proofs', title: 'Narrated Proofs', version: VERSION },
     {
@@ -46,7 +47,7 @@ export function createMcpServer({ baseUrl = DEFAULT_URL, linkBase = baseUrl.repl
       try {
         res = await fetch(baseUrl + route, {
           method,
-          headers: { ...ACTOR, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+          headers: { ...ACTOR, ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) },
           body: body ? JSON.stringify(body) : undefined,
         });
         break;
@@ -65,6 +66,11 @@ export function createMcpServer({ baseUrl = DEFAULT_URL, linkBase = baseUrl.repl
       return Buffer.from(await res.arrayBuffer());
     }
     const data = await res.json().catch(() => null);
+    if (res.status === 401) {
+      throw Object.assign(new Error(token
+        ? 'The dashboard does not accept this connector’s token: it was revoked, or the profile was deleted. Make a new one in the dashboard under Settings → Connect Claude.'
+        : 'Several people use this dashboard, so Claude has to be connected to one profile. In the dashboard, open Settings → Connect Claude, make a token and add it to the connector.'), { status: 401 });
+    }
     if (!res.ok) throw Object.assign(new Error(data?.error || `The dashboard answered ${res.status}.`), { status: res.status });
     return data;
   }
@@ -165,7 +171,7 @@ export function createMcpServer({ baseUrl = DEFAULT_URL, linkBase = baseUrl.repl
       const files = readNoteFiles(a.files || [], { cwd });
       const notes = [a.notes, files.notes].filter(Boolean).join('\n\n');
       const body = {
-        profile: 'claude',
+        origin: 'claude',
         topic: a.topic,
         goal: a.goal,
         notes,
@@ -181,7 +187,7 @@ export function createMcpServer({ baseUrl = DEFAULT_URL, linkBase = baseUrl.repl
         ...(a.writer ? { writer: a.writer } : {}),
       };
       const estimate = await api('POST', '/api/estimate', {
-        profile: 'claude',
+        origin: 'claude',
         minutes: a.minutes,
         notesChars: notes.length,
         images: files.attachments.filter((f) => !/\.(pdf|docx?|rtf|odt)$/i.test(f.name)).length,

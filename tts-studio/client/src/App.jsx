@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api.js';
-import { isActive, needsYou, routeHash, stripExt, useDebounced, useLocalStorage, useRoute, useSettingsRoute } from './utils.js';
+import { isActive, needsYou, routeHash, stripExt, useDebounced, useLocalStorage, usePeopleRoute, useRoute, useSettingsRoute } from './utils.js';
 import Header from './components/Header.jsx';
 import Composer from './components/Composer.jsx';
 import Library from './components/Library.jsx';
@@ -10,6 +10,7 @@ import LessonPanel from './components/LessonPanel.jsx';
 import Workspace from './components/Workspace.jsx';
 import Settings from './components/Settings.jsx';
 import Toasts from './components/Toasts.jsx';
+import { ManageProfile } from './components/Profiles.jsx';
 
 export const DEFAULT_SETTINGS = {
   voiceId: '',
@@ -20,7 +21,10 @@ export const DEFAULT_SETTINGS = {
 const uid = () => Math.random().toString(36).slice(2, 10);
 const TEXT_FILE = /\.(txt|md|markdown|text)$/i;
 
-export default function App() {
+export default function App({ profile = null, onProfileChanged = () => {} }) {
+  // What this browser remembers is per profile, so housemates on one computer do not share a voice or a mode.
+  // The Owner keeps the names used before profiles existed.
+  const scope = profile && !profile.isOwner ? `.${profile.id}` : '';
   const [health, setHealth] = useState(null);
   const [voices, setVoices] = useState([]);
   const [languages, setLanguages] = useState([]);
@@ -28,11 +32,11 @@ export default function App() {
   const [stats, setStats] = useState(null);
   const [tags, setTags] = useState([]);
 
-  const [settings, setSettings] = useLocalStorage('tts-studio.kokoro-settings', DEFAULT_SETTINGS);
-  const [autoGenerate, setAutoGenerate] = useLocalStorage('tts-studio.auto', true);
+  const [settings, setSettings] = useLocalStorage(`tts-studio.kokoro-settings${scope}`, DEFAULT_SETTINGS);
+  const [autoGenerate, setAutoGenerate] = useLocalStorage(`tts-studio.auto${scope}`, true);
   // Lessons (narrated videos made from notes) or plain audio. It decides what the left column
   // offers, what a dropped file is for, and which half of the library is shown.
-  const [mode, setMode] = useLocalStorage('tts-studio.mode', 'lessons');
+  const [mode, setMode] = useLocalStorage(`tts-studio.mode${scope}`, 'lessons');
   const kind = mode === 'audio' ? 'audio' : 'video';
   const [drafts, setDrafts] = useState([]);
   const [dragging, setDragging] = useState(false);
@@ -43,6 +47,7 @@ export default function App() {
   const [selected, setSelected] = useState(null); // { id, autoplay } for an audio file's panel
   const route = useRoute(); // a lesson's workspace, from #lesson/<id>/<tab>
   const settingsRoute = useSettingsRoute(); // the Settings page, from #settings/<section>
+  const people = usePeopleRoute(); // #profile: managing the signed-in profile
   const [studio, setStudio] = useState(null); // the server's Settings: writers, defaults, providers
   const [autoplay, setAutoplay] = useState(false);
   const [live, setLive] = useState(false); // the server's event stream is connected
@@ -159,7 +164,11 @@ export default function App() {
     };
     const es = new EventSource('/api/events');
     es.onopen = () => setLive(true);
-    es.onerror = () => setLive(false); // the browser reconnects; until then the page polls
+    es.onerror = () => {
+      setLive(false); // the browser reconnects; until then the page polls
+      // A stream that ends may mean the session did: ask, and the gate comes back if it did.
+      api.session().then((s) => !s.profile && s.needsGate && window.dispatchEvent(new Event('tts:signin'))).catch(() => {});
+    };
     es.addEventListener('generation', (e) => {
       const g = JSON.parse(e.data);
       setList((l) => {
@@ -428,6 +437,7 @@ export default function App() {
       )}
 
       <Header
+        profile={profile}
         health={health}
         stats={stats}
         mode={mode}
@@ -447,6 +457,13 @@ export default function App() {
           ) : (
             <>{health.engine.error} This page picks it up on its own once it is fixed.</>
           )}
+        </div>
+      )}
+
+      {mode === 'lessons' && studio?.writerProblem && (
+        <div className="banner notice" role="status">
+          <strong>Choose who writes your lessons.</strong> {studio.writerProblem}{' '}
+          <a href="#settings/writer">Open Lesson writer</a>. A model on this Mac, such as Ollama, is free.
         </div>
       )}
 
@@ -485,6 +502,7 @@ export default function App() {
           />
         </div>
         <Library
+          profile={profile}
           mode={mode}
           list={list}
           filters={filters}
@@ -506,6 +524,7 @@ export default function App() {
 
       {settingsRoute && (
         <Settings
+          profile={profile}
           section={settingsRoute.section}
           voices={voices}
           onClose={() => {
@@ -516,7 +535,21 @@ export default function App() {
         />
       )}
 
-      {route && !settingsRoute && (
+      {people === 'profile' && profile && (
+        <ManageProfile
+          profile={profile}
+          onClose={() => {
+            window.location.hash = '';
+          }}
+          onChanged={() => {
+            onProfileChanged();
+            loadStudio();
+          }}
+          toast={toast}
+        />
+      )}
+
+      {route && !settingsRoute && people !== 'profile' && (
         <Workspace
           key={route.id}
           id={route.id}
@@ -534,7 +567,7 @@ export default function App() {
         />
       )}
 
-      {selected && !route && !settingsRoute && (
+      {selected && !route && !settingsRoute && people !== 'profile' && (
         <Drawer
           id={selected.id}
           autoplay={selected.autoplay}

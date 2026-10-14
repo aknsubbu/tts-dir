@@ -122,9 +122,20 @@ The lesson writer in `author/` runs inside the dashboard's process as a job queu
 - A provider's rate limit is retried after the time it asks for; a daily limit fails with a message naming it.
 - Each version is kept with its storyboard, and the renders of the last three are kept in `data/video/<id>/`.
 
+## Profiles: sharing one install
+
+The avatar in the header opens **Switch profile**, **Manage profile** and **Sign out**. With more than one profile, or a PIN, the page opens on **Who's watching?** (`#who`); with one profile and no PIN there is no gate. The user-facing description, and what a PIN is and is not, is in the [main README](../README.md#sharing-with-housemates). For developers:
+
+- **Sessions.** Choosing a profile (and its PIN) sets an opaque 256-bit cookie, `HttpOnly`, `SameSite=Strict`, `Secure` over HTTPS. Only its hash is stored (`sessions`). One active profile per browser; devices are independent. A locked profile's session ends after 7 days unused, on switching, and whenever its PIN is changed (other sessions only).
+- **PINs.** Exactly 4 digits, kept as `scrypt(HMAC(pepper, pin), salt)`; the pepper is `data/pin-pepper`, mode 0600. Compared in constant time. Five wrong tries lock the profile for 30 s, doubling to 15 min, and a locked profile refuses even the right PIN; a device is also limited across profiles. A wrong PIN says nothing else.
+- **Ownership.** Every lesson has a `profile_id`. Every list, search, tag, stat and event is scoped to the signed-in profile; any `:id` route for someone else's lesson answers 404, the same as a missing one. `server/test/profiles.test.js` walks every route in the router against another profile's lesson id and fails on any route that is not classified, so a new route cannot skip the check. Spending is counted per profile, and a deleted lesson's cost stays in a ledger. Each request is marked as paid by the host when it used Claude Code or an environment key (`usage.hostFunded`); a version keeps that share as `host_usd`, and the Owner's per-profile monthly limit (`hostCapUsd`) is checked when a lesson starts and held inside the running job (`job.hostCapUsd`), so it cannot run past it. A lesson's cap and the monthly cap are reserved while it runs, so lessons started together share what is left; spend no version holds yet (a waiting outline or narration, a failed, cancelled or interrupted attempt, a deleted lesson) is kept on the lesson or in the ledger and counted once. Provider requests go through `author/writers/net.js`: addresses that lead to link-local or cloud-metadata addresses are refused, whatever the name, and redirects are not followed.
+- **Settings and keys** are per profile (`settings.for(profileId)`); undo only touches your own history. A key is kept as `p-<profile>-<provider>`; the profile's own key comes first, then the host's environment key only if the Owner allowed it. The Claude Code sign-in is refused for every step unless allowed: at the start check, in the provider Test and again inside the writer, which fails closed.
+- **Migration** runs on start and is safe to repeat: rows without an owner, old settings and history, and old keys (kept under the provider's name) go to the Owner.
+- **The host command**: `npm run profiles -- list` and `npm run profiles -- reset-pin <name>`.
+
 ## Settings: who writes your lessons
 
-The gear in the header opens **Settings** (`#settings`).
+The gear in the header opens **Settings** (`#settings`), which are yours: each profile has its own writer, defaults, caps, providers and keys. The Owner also sees **House**: how many profiles there are against the limit, and whether the dashboard is on the network.
 
 | Provider | Connects through | Pictures | PDFs | Cost shown |
 | --- | --- | --- | --- | --- |
@@ -160,6 +171,8 @@ Claude Code and the desktop app can make lessons from a conversation: "make a 3-
 claude mcp add --transport http narrated-proofs http://localhost:8787/mcp   # while the dashboard runs
 claude mcp add narrated-proofs -- node /path/to/tts-studio/mcp/stdio.js    # started by Claude Code
 ```
+
+**With more than one profile**, Claude must be connected to one of them with a token: **Settings → Connect Claude → Make a token**, shown once, stored hashed, up to 10 per profile, revocable. It goes in an `Authorization: Bearer <token>` header (HTTP) or `NARRATED_PROOFS_TOKEN` (stdio, or `"env"` in the desktop entry below). Anything that arrives with a token acts as that profile and as Claude, with Claude's limits. It is held to an explicit list of routes, the ones the tools above use (`connectorAllows` in `server/profile-routes.js`; a test fails if the list changes without it being updated): it cannot delete a lesson, edit its files, build, change a key or provider, open the event stream, or manage profiles or tokens. A wrong, blank or revoked token is refused with a single profile too. Tokens are revoked when someone else resets the profile's PIN, when its first PIN is set, and when it is deleted, and one unused for 90 days stops working. `npm run mcp:pack` writes a 0.3 manifest whose `user_config` asks for the token on install and passes it as `NARRATED_PROOFS_TOKEN`.
 
 For the desktop app, add this to `~/Library/Application Support/Claude/claude_desktop_config.json` (use the full path of `node` and of your clone), then restart it. Or run `npm run mcp:pack` and open `extension/narrated-proofs.mcpb`.
 
@@ -197,8 +210,9 @@ In `data/` (override with `TTS_DATA_DIR`); back it up by copying the folder:
 
 ```
 data/
-  studio.db        scripts, status, search index, Settings and their history
-  secrets.json     provider keys, off macOS or with TTS_KEYCHAIN=0
+  studio.db        scripts, status, search index, profiles, Settings and their history
+  pin-pepper       the secret PINs are hashed with (keep it private; mode 0600)
+  secrets.json     provider keys per profile, off macOS or with TTS_KEYCHAIN=0
   audio/<id>.mp3
   video/<id>.*     the .mp4, .srt, .vtt and a .jpg still; earlier renders in video/<id>/v<n>.*
   previews/        cached voice samples
@@ -214,7 +228,8 @@ All optional. Put them in `.env` here or one folder up, or in the environment. C
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PORT` | `8787` | Port for `npm start` |
-| `TTS_LAN` | `0` | `1` serves the dashboard on your network too (phone, other computer), at the address printed on start. There is no login, so use a network you trust |
+| `TTS_LAN` | `0` | `1` serves the dashboard on your network too (phone, other computer), at the address printed on start. Profiles keep housemates' libraries apart, but a LAN is plain HTTP and a PIN is not strong security, so use a network you trust |
+| `TTS_MAX_PROFILES` | `5` | People who can share this install, each with their own library, settings and keys (1 to 20) |
 | `TTS_HOST` | `127.0.0.1` | Address to listen on. Docker sets `0.0.0.0` and publishes the port on `127.0.0.1` only |
 | `TTS_DATA_DIR` | `./data` | Library location |
 | `TTS_VOICE` | `af_heart` | Voice preselected on first run |
@@ -251,7 +266,9 @@ python3 ../tts.py script.md -o out.wav --timings out.json    # plus word times (
 python3 ../tts.py --list-voices
 ```
 
-The dashboard has a JSON API, so you can push scripts and lessons from the command line:
+The dashboard has a JSON API, so you can push scripts and lessons from the command line. With more than one profile, add `-H "Authorization: Bearer <connector token>"`: the request then acts as that profile, with Claude's limits.
+
+For example:
 
 ```bash
 curl -s localhost:8787/api/generations -H 'Content-Type: application/json' \

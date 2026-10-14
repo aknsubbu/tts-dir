@@ -543,3 +543,59 @@ del { background: var(--err-soft); color: var(--err); border-radius: 3px; }
   .yt-main .player, .yt-main .player video { border-radius: 0; }
   .yt-info, .yt-main > .status-box, .yt-desc, .yt-side { margin: 0 12px; }
 }
+
+/* ---------- Profiles: who is watching ---------- */
+.tokens { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.banner.notice { background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); }
+.warn-text { color: var(--warn); }
+.avatar { display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; color: #fff; font-weight: 700; flex: none; user-select: none; }
+.avatar.sm { width: 26px; height: 26px; font-size: 13px; }
+.avatar.md { width: 36px; height: 36px; font-size: 17px; }
+.avatar.lg { width: 56px; height: 56px; font-size: 26px; }
+.avatar.xl { width: 128px; height: 128px; font-size: 56px; border-radius: 22px; }
+.avatar.add-avatar { background: var(--panel-2); color: var(--muted); border: 2px dashed var(--border); }
+.who { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px; padding: 32px 16px; position: relative; }
+.who h1 { font-size: 32px; font-weight: 600; text-align: center; }
+.who-back { position: absolute; top: 20px; left: 20px; }
+.who-grid { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; justify-content: center; gap: 26px; max-width: 900px; }
+.tile { display: flex; flex-direction: column; align-items: center; gap: 10px; background: none; border: none; padding: 8px; border-radius: 18px; color: var(--muted); width: 160px; }
+.tile:hover, .tile:focus-visible { color: var(--text); }
+.tile:hover .avatar, .tile:focus-visible .avatar { outline: 3px solid var(--text); outline-offset: 3px; }
+.tile-avatar { position: relative; display: inline-flex; }
+.tile-name { font-size: 16px; overflow-wrap: anywhere; text-align: center; }
+.lock-badge { position: absolute; right: -6px; bottom: -6px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 50%; width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; box-shadow: var(--shadow); }
+.pencil { position: absolute; inset: 0; border-radius: 22px; background: rgb(0 0 0 / 0.5); color: #fff; font-size: 44px; display: inline-flex; align-items: center; justify-content: center; }
+.people-backdrop { position: fixed; inset: 0; z-index: 80; background: rgb(0 0 0 / 0.5); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.people-modal { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 24px; width: min(420px, 100%); max-height: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
+.people-modal h2 { font-size: 20px; }
+.pin-head { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; }
+.pin-boxes { display: flex; gap: 10px; justify-content: center; }
+.pin-box { width: 52px; height: 60px; text-align: center; font-size: 26px; border: 2px solid var(--border); border-radius: 12px; background: var(--panel-2); color: var(--text); }
+.pin-box:focus { border-color: var(--accent); outline: none; }
+.pin-status { min-height: 1.4em; text-align: center; color: var(--err); font-size: 14px; }
+.pin-shake.shake { animation: shake 0.4s; }
+@keyframes shake { 20%, 60% { transform: translateX(-8px); } 40%, 80% { transform: translateX(8px); } }
+.forgot { background: var(--panel-2); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.people-form { display: flex; flex-direction: column; gap: 12px; max-width: 420px; }
+.swatches { display: flex; gap: 8px; flex-wrap: wrap; }
+.swatch { width: 30px; height: 30px; border-radius: 50%; border: 3px solid transparent; padding: 0; }
+.swatch.on { border-color: var(--text); }
+.glyph-input { width: 6em; }
+.pin-cap { width: 9em; }
+.pin-field { width: 7em; letter-spacing: 0.3em; text-align: center; }
+.field-error { color: var(--err); font-size: 14px; }
+.check { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.other-profiles { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.other-profile { border: 1px solid var(--border); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 10px; background: var(--panel); }
+.danger-zone { border: 1px solid color-mix(in srgb, var(--err) 40%, var(--border)); border-radius: 12px; padding: 12px; }
+.profile-menu { position: relative; }
+.profile-btn { display: inline-flex; align-items: center; gap: 8px; background: transparent; border: 1px solid var(--border); border-radius: 999px; padding: 3px 12px 3px 4px; }
+.profile-btn:hover { border-color: var(--accent); }
+.profile-name { font-size: 13px; max-width: 9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 60; min-width: 180px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); padding: 6px; display: flex; flex-direction: column; }
+.menu button { text-align: left; background: none; border: none; border-radius: 8px; padding: 8px 12px; }
+.menu button:hover, .menu button:focus-visible { background: var(--panel-2); }
+@media (prefers-reduced-motion: reduce) { .pin-shake.shake { animation: none; } }
+
+/* A PIN is typed in a plain field and masked here, so the browser's password manager stays out of it. */
+.pin-box, .pin-field { -webkit-text-security: disc; text-security: disc; }

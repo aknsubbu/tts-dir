@@ -16,6 +16,7 @@ import { createVideoBuilder } from '../../server/video.js';
 import { createVersions } from '../../server/versions.js';
 import { createSecrets } from '../../server/secrets.js';
 import { createSettings } from '../../server/settings.js';
+import { createProfiles } from '../../server/profiles.js';
 import { createAuthorJobs } from '../../author/jobs.js';
 import { answer, sandbox, SCRIPT, scenes, until } from '../../author/test/fakes.js';
 import { squarePng } from '../../author/writers/probe.js';
@@ -59,16 +60,20 @@ before(async () => {
   store = createStore(config.dataDir);
   const versions = createVersions({ store, getConfig });
   const secrets = createSecrets({ dataDir: config.dataDir, useKeychain: false });
-  settings = createSettings({ db: store.db, getConfig, secrets });
+  const profiles = createProfiles({ db: store.db, dataDir: config.dataDir });
+  const factory = createSettings({ db: store.db, getConfig, secrets, profiles });
+  settings = factory.for(profiles.owner().id); // the Owner's, whose lessons these are (one profile, no gate)
   const runner = createRunner({ store, engine, video: createVideoBuilder({ getConfig }), versions });
-  lessons = createLessons({ store, runner, getConfig, jobs: authorJobs, versions, settings, pollMs: 20 });
-  const app = createApp({ getConfig, store, runner, engine, lessons, versions, settings, secrets, mcp: mcpHandler() });
+  lessons = createLessons({ store, runner, getConfig, jobs: authorJobs, versions, settings: factory, pollMs: 20 });
+  const app = createApp({ getConfig, store, runner, engine, lessons, versions, settings: factory, secrets, profiles, mcp: mcpHandler() });
   await new Promise((resolve) => {
     server = app.listen(0, '127.0.0.1', resolve);
   });
   base = `http://127.0.0.1:${server.address().port}`;
 
-  const mcp = createMcpServer({ baseUrl: base, cwd: dir, waitMs: 3000, pollMs: 20 });
+  // The connector under test carries a token, so every tool is also proven to work within what a token may do.
+  const token = profiles.createToken(profiles.owner().id, 'test').token;
+  const mcp = createMcpServer({ token, baseUrl: base, cwd: dir, waitMs: 3000, pollMs: 20 });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await mcp.connect(b);
   client = new Client({ name: 'test', version: '1' });
@@ -107,7 +112,7 @@ test('make a lesson from notes and a photo, follow it, and get the video', async
   assert.match(made.structuredContent.link, /\/#lesson\//);
 
   const g = (await (await fetch(`${base}/api/generations/${id}`)).json());
-  assert.equal(g.settings.lesson.profile, 'claude', "a lesson Claude starts uses Claude's settings");
+  assert.equal(g.settings.lesson.origin, 'claude', "a lesson Claude starts uses Claude's settings");
   assert.deepEqual(g.settings.lesson.attachments.map((a) => a.kind), ['image']);
 
   let last = made.structuredContent;

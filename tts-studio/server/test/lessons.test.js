@@ -165,6 +165,7 @@ test('a lesson can stop at its storyboard, and is version 1 with what it cost', 
   assert.equal(await (await fetch(base + g.videoUrl)).text(), 'MP4medium', 'built at the quality chosen on approval');
   const { versions: list } = (await j('GET', `/api/generations/${id}/versions`)).data;
   assert.deepEqual(list.map((v) => [v.n, v.source, v.costUsd, v.quality]), [[1, 'written', 0.25, 'medium']]);
+  assert.equal(store.versions.get(id, 1).host_usd, 0.25, "Claude Code is the host's own sign-in, so its cost is kept as host-paid");
   assert.ok(box.exists(g.settings.project, 'versions/001/storyboard/storyboard.json'));
 });
 
