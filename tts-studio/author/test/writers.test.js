@@ -22,6 +22,8 @@ let fake, dir, secrets;
 const config = { claudeTimeoutMs: 20_000, keys: {} };
 const writer = (kind, model, extra = {}) => ({
   profileId: 'p1', // keys are kept per profile: account p-p1-<provider>
+  hostKeys: true,
+  hostClaude: true,
   provider: kind,
   kind,
   label: { openai: 'OpenAI', groq: 'Groq', ollama: 'This Mac: Ollama', anthropic: 'Claude API', local: 'This Mac' }[kind],

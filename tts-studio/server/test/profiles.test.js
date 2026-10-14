@@ -574,6 +574,7 @@ test('a waiting job says how many are ahead of it, whoever they belong to', asyn
   assert.equal(runner.ahead('q1'), null, 'running, not waiting');
   assert.equal(runner.ahead('q2'), 1);
   assert.equal(runner.ahead('q3'), 2);
+  seen.length = 0; // what the inserts and enqueues announced does not count
   runner.cancel('q2');
   assert.equal(runner.ahead('q3'), 1);
   assert.ok(seen.includes('q3'), 'the job whose place moved is announced');

@@ -163,6 +163,7 @@ export function createRunner({ store, engine, video, versions = null }) {
     if (at !== -1) {
       queue.splice(at, 1);
       store.update(id, { status: 'cancelled', error: 'Cancelled', finished_at: Date.now() });
+      announceQueue(); // those behind it moved up
       return true;
     }
     if (active === id) {

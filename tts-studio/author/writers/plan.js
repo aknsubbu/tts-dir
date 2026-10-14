@@ -3,9 +3,12 @@ import { AuthorError } from '../proc.js';
 
 export const STEPS = ['read', 'write', 'fix', 'polish', 'outline'];
 
-/** The plan when the dashboard sends none: Claude Code for every step, as before there were choices. */
+/**
+ * The plan when the dashboard sends none: Claude Code for every step, as before there were choices.
+ * Only a job started with no settings at all gets this, so there is no profile to ask.
+ */
 export function defaultWriter(config) {
-  const cc = (effort) => ({ provider: 'claude-code', kind: 'claude-code', label: 'Claude Code', baseUrl: null, model: config.claudeModel || '', effort: effort ?? '', caps: { ...KIND_CAPS['claude-code'] }, rate: null });
+  const cc = (effort) => ({ profileId: '', hostClaude: true, hostKeys: true, provider: 'claude-code', kind: 'claude-code', label: 'Claude Code', baseUrl: null, model: config.claudeModel || '', effort: effort ?? '', caps: { ...KIND_CAPS['claude-code'] }, rate: null });
   return {
     steps: {
       read: cc(config.claudeReadEffort ?? config.claudeEffort),
@@ -28,6 +31,10 @@ export function normalizeWriter(w, config) {
     const s = w.steps[step] || w.steps.write;
     if (!s || !PROVIDER_KINDS[s.kind]) throw new AuthorError(`The writer plan names no usable provider for “${step}”.`);
     steps[step] = {
+      // Whose writer this is and what the host lends them. Anything but an explicit yes is a no.
+      profileId: String(s.profileId || '').slice(0, 40),
+      hostClaude: s.hostClaude === true,
+      hostKeys: s.hostKeys === true,
       provider: String(s.provider || s.kind).slice(0, 40),
       kind: s.kind,
       label: String(s.label || PROVIDER_KINDS[s.kind].label).slice(0, 80),

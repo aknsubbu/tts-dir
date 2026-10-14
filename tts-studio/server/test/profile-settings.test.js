@@ -10,6 +10,7 @@ import { createProfiles } from '../profiles.js';
 import { createSecrets, keyAccount, keyFor } from '../secrets.js';
 import { createSettings } from '../settings.js';
 import { askWriter } from '../../author/writers/index.js';
+import { normalizeWriter } from '../../author/writers/plan.js';
 
 let dir, store, secrets, profiles, factory, config, server, base, ownerId, roomId;
 const engine = {
@@ -144,9 +145,23 @@ test("a profile cannot use the host's Claude Code sign-in until the Owner allows
   await assert.rejects(room.checkWriter(room.resolveWriter('page')), /Owner has not allowed it for your profile/);
   assert.match((await roommate.call('GET', '/api/settings')).data.writerProblem, /Owner has not allowed it/);
   assert.equal((await roommate.call('POST', '/api/providers/claude-code/test', {})).status, 403);
-  assert.equal(room.resolveWriter('page').steps.write.hostClaude, false);
+  for (const step of ['read', 'write', 'fix', 'polish', 'outline']) assert.equal(room.resolveWriter('page').steps[step].hostClaude, false, `${step} carries the refusal, so a hand-back writer does too`);
   // The writer itself refuses too, whatever called it.
-  await assert.rejects(askWriter({ writer: room.resolveWriter('page').steps.write, secrets, config, prompt: 'x', schema: {} }), /may not use the Claude Code sign-in/);
+  // The pipeline rebuilds the plan before using it (normalizeWriter): the refusal and whose keys these are must survive that.
+  const inPipeline = normalizeWriter(room.resolveWriter('page'), config);
+  assert.equal(inPipeline.steps.write.profileId, roomId);
+  assert.equal(inPipeline.steps.write.hostClaude, false);
+  assert.equal(inPipeline.steps.write.hostKeys, false);
+  await assert.rejects(askWriter({ writer: inPipeline.steps.write, secrets, config, prompt: 'x', schema: {} }), /may not use the Claude Code sign-in/);
+  await assert.rejects(askWriter({ writer: { ...inPipeline.steps.write, hostClaude: undefined }, secrets, config, prompt: 'x', schema: {} }), /may not use the Claude Code sign-in/, 'no flag is no');
+  await assert.rejects(askWriter({ secrets, config, prompt: 'x', schema: {} }), /no writer to ask/);
+  const ownerStep = normalizeWriter(factory.for(ownerId).resolveWriter('page'), config).steps.write;
+  assert.deepEqual([ownerStep.profileId, ownerStep.hostClaude, ownerStep.hostKeys], [ownerId, true, true]);
+  // And an environment key is not reached through a plan whose profile may not use it.
+  config.keys = { openai: 'sk-host-env-key-0000' };
+  assert.equal((await keyFor('openai', { config, secrets, profileId: inPipeline.steps.write.profileId, allowEnv: inPipeline.steps.write.hostKeys })).key, null);
+  assert.equal((await keyFor('openai', { config, secrets, profileId: ownerStep.profileId, allowEnv: ownerStep.hostKeys })).from, 'env');
+  config.keys = {};
   // A model on this Mac needs nothing from the host.
   await roommate.call('PATCH', '/api/settings', { 'writer.page': { all: { provider: 'ollama', model: 'qwen3' } } });
   assert.match((await roommate.call('GET', '/api/settings')).data.writerProblem, /has not passed its Test/);
@@ -159,6 +174,14 @@ test("a profile cannot use the host's Claude Code sign-in until the Owner allows
   assert.equal((await owner.call('PATCH', `/api/profiles/${roomId}`, { canUseHostClaude: true })).status, 200);
   await room.checkWriter(room.resolveWriter('page'));
   await owner.call('PATCH', `/api/profiles/${roomId}`, { canUseHostClaude: false });
+});
+
+test("the host's Claude Code is refused for every step, even one that is not checked for a key", async () => {
+  const room = factory.for(roomId);
+  await roommate.call('PATCH', '/api/settings', { 'writer.page': { mode: 'steps', all: { provider: 'ollama', model: 'qwen3' }, steps: { outline: { provider: 'claude-code', model: '' } } } });
+  pass(room, 'ollama', 'qwen3');
+  await assert.rejects(room.checkWriter(room.resolveWriter('page')), /Owner has not allowed it for your profile/);
+  await roommate.call('PATCH', '/api/settings', { 'writer.page': { mode: 'one', all: { provider: 'ollama', model: 'qwen3' } } });
 });
 
 test('the House section is the Owner\'s alone', async () => {
@@ -221,6 +244,7 @@ test("a profile's keys are never reachable by naming another profile's account",
 test("starting a lesson is checked against the profile's own writer, keys and spending", async () => {
   const start = (b) => b.call('POST', '/api/lessons', { topic: 'Dot products', minutes: 1 });
   // The roommate's writer is Claude Code, which the Owner has not lent them.
+  await roommate.call('PATCH', '/api/settings', { 'writer.page': { mode: 'one', all: { provider: 'claude-code', model: '' } } });
   const refused = await start(roommate);
   assert.equal(refused.status, 400);
   assert.match(refused.data.error, /Owner has not allowed it/);

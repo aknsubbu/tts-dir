@@ -519,11 +519,14 @@ export function createSettings({ db, getConfig, secrets, profiles = null }) {
 
     /** Throws, naming the step and what to do, when a writer cannot be used yet. */
     async function checkWriter(writer, steps = ['read', 'write', 'fix']) {
-      for (const step of steps) {
-        const w = writer.steps[step];
-        if (w.kind === 'claude-code' && !perms().claude) {
+      // The host's Claude Code sign-in is refused for every step, including the ones that are not checked for a key.
+      for (const step of ['read', 'write', 'fix', 'polish', 'outline']) {
+        if (writer.steps[step]?.kind === 'claude-code' && !perms().claude) {
           throw new SettingsError(`Claude Code uses the sign-in on the computer that hosts this, and the Owner has not allowed it for your profile. For “${STEP_LABEL[step]}”, choose another writer in Settings → Lesson writer (a model on this Mac, such as Ollama, is free), or ask the Owner.`);
         }
+      }
+      for (const step of steps) {
+        const w = writer.steps[step];
         if (!(await configured(w.provider))) {
           const p = provider(w.provider);
           const what = p.needsKey === true ? 'has no key' : 'has not passed its Test';
