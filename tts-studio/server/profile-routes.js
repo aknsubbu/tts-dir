@@ -36,9 +36,28 @@ export const attachProfile = (profiles) => (req, res, next) => {
   next();
 };
 
-/** A connector token may use the library and settings as Claude, but never manage people or mint tokens. */
-export const denyConnector = (req, res, next) => {
-  if (req.viaConnector) return res.status(403).json({ error: 'A connector token cannot manage profiles or tokens. That is done in the dashboard.' });
+/**
+ * What a connector token may do: what the MCP tools do, and no more. A token works whether or not its profile
+ * has a PIN, so it is limited to starting, following, changing and approving lessons, reading them, and the
+ * settings Claude is allowed. It cannot delete anything, edit a lesson's files, change a key or provider,
+ * manage profiles or make tokens. Add a route here only when a tool needs it.
+ */
+const CONNECTOR_ROUTES = [
+  ['GET', /^\/(health|voices|settings|generations)$/],
+  ['GET', /^\/generations\/[^/]+(\/(source|outline|storyboard|files|poster|captions\.[a-z]+))?$/],
+  ['GET', /^\/generations\/[^/]+\/storyboard\/[^/]+$/],
+  ['POST', /^\/(estimate|lessons)$/],
+  ['POST', /^\/generations\/[^/]+\/(cancel|retry|revise|approve)$/],
+  ['POST', /^\/generations\/[^/]+\/outline\/redo$/],
+  ['POST', /^\/providers\/[^/]+\/test$/],
+  ['PATCH', /^\/settings$/],
+];
+export const connectorAllows = (method, path) => CONNECTOR_ROUTES.some(([m, re]) => m === String(method).toUpperCase() && re.test(path));
+
+export const connectorScope = (req, res, next) => {
+  if (req.viaConnector && !connectorAllows(req.method, req.path)) {
+    return res.status(403).json({ error: 'A connector token can do what Claude’s tools do, and nothing else. That is done in the dashboard.' });
+  }
   next();
 };
 

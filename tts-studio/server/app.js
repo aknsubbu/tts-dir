@@ -12,7 +12,7 @@ import { RENDER_EXTS, stillsOf } from './versions.js';
 import { createEdits, EditError } from './edits.js';
 import { actorOf, settingsRoutes } from './settings-routes.js';
 import { createProfiles } from './profiles.js';
-import { attachProfile, denyConnector, profileRoutes, requireProfile } from './profile-routes.js';
+import { attachProfile, connectorScope, profileRoutes, requireProfile } from './profile-routes.js';
 import { SettingsError } from './settings.js';
 import { CHAPTERS_FROM, LESSON_MINUTES, MAX_NOTES, VIDEO_QUALITIES } from '../shared/limits.js';
 import { normalizeOutline } from '../author/pipeline.js';
@@ -62,6 +62,7 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
   const api = express.Router();
   profiles ||= createProfiles({ db: store.db, dataDir: store.dataDir, getMax: () => getConfig().maxProfiles || 5 });
   api.use(attachProfile(profiles));
+  api.use(connectorScope);
 
   /** A waiting job shows how many are ahead of it: the render queue is shared by every profile. */
   const withQueue = (g) => {
@@ -110,7 +111,6 @@ export function createApp({ getConfig, store, runner, engine, lessons, versions 
       await settings?.purge(profileId); // its settings, history and keys go with it
     },
   });
-  api.use(['/profiles', '/session', '/connector'], denyConnector);
   api.use(people.open);
   api.use(requireProfile);
   api.use(people.guarded);

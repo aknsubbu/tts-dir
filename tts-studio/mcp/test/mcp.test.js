@@ -71,7 +71,9 @@ before(async () => {
   });
   base = `http://127.0.0.1:${server.address().port}`;
 
-  const mcp = createMcpServer({ baseUrl: base, cwd: dir, waitMs: 3000, pollMs: 20 });
+  // The connector under test carries a token, so every tool is also proven to work within what a token may do.
+  const token = profiles.createToken(profiles.owner().id, 'test').token;
+  const mcp = createMcpServer({ token, baseUrl: base, cwd: dir, waitMs: 3000, pollMs: 20 });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await mcp.connect(b);
   client = new Client({ name: 'test', version: '1' });

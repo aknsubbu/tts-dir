@@ -271,6 +271,8 @@ export function createProfiles({ db, dataDir, getMax = () => 5, now = () => Date
 
   // ---------- connector tokens ----------
   const MAX_TOKENS = 10;
+  // A token that has not been used for this long stops working: a laptop sold, a forgotten bundle.
+  const TOKEN_IDLE_MS = 90 * 24 * 3600_000;
   /** A new token for a profile. The token itself is returned once, here, and never kept. */
   function createToken(profileId, label) {
     if (!raw(profileId)) throw new ProfileError('No such profile.', 404);
@@ -292,6 +294,10 @@ export function createProfiles({ db, dataDir, getMax = () => 5, now = () => Date
     const hash = sha(String(token ?? ''));
     const t = db.prepare('SELECT * FROM connector_tokens WHERE token_hash = ?').get(hash);
     if (!t) return null;
+    if (now() - (t.last_used || t.created_at) > TOKEN_IDLE_MS) {
+      db.prepare('DELETE FROM connector_tokens WHERE id = ?').run(t.id);
+      return null;
+    }
     if (!t.last_used || now() - t.last_used > 60_000) db.prepare('UPDATE connector_tokens SET last_used = ? WHERE id = ?').run(now(), t.id);
     return get(t.profile_id);
   }
