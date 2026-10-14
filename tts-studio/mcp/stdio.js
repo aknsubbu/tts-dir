@@ -28,5 +28,8 @@ async function startDashboard() {
   return false;
 }
 
-const server = createMcpServer({ baseUrl, token: process.env.NARRATED_PROOFS_TOKEN || null, onDown: startDashboard });
+// A blank field in the desktop extension arrives empty, or as the unfilled placeholder: both mean no token.
+const given = String(process.env.NARRATED_PROOFS_TOKEN || '').trim();
+const token = given && !given.startsWith('${') ? given : null;
+const server = createMcpServer({ baseUrl, token, onDown: startDashboard });
 await server.connect(new StdioServerTransport());
