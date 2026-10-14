@@ -497,6 +497,13 @@ test('spending is counted per profile', async () => {
   store.versions.insert({ generation_id: B_LESSON, n: 1, source: 'written', created_at: Date.now(), cost_usd: 0.5 });
   assert.equal((await bob.call('GET', '/api/stats')).data.costThisMonthUsd, 0.5);
   assert.equal(store.houseSpendThisMonth(), 1.75);
+  // Deleting a lesson does not give its cost back.
+  store.insert(lessonRow(aId, 'costly', 'Costly', {}, 'ledgers'));
+  store.versions.insert({ generation_id: 'costly', n: 1, source: 'written', created_at: Date.now(), cost_usd: 2 });
+  assert.equal(store.houseSpendThisMonth(), 3.75);
+  store.remove('costly');
+  assert.equal(store.houseSpendThisMonth(), 3.75);
+  assert.equal((await alice.call('GET', '/api/stats')).data.costThisMonthUsd, 3.25);
 });
 
 test('a live-updates stream ends when its session does', async () => {

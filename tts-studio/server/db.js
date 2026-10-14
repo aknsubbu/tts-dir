@@ -57,6 +57,13 @@ CREATE TRIGGER IF NOT EXISTS gen_au AFTER UPDATE OF title, text, tags ON generat
   INSERT INTO gen_fts(rowid, title, text, tags) VALUES (new.seq, new.title, new.text, new.tags);
 END;
 
+-- What deleted lessons cost, kept so deleting a lesson (or a profile) cannot reset the month's cap.
+CREATE TABLE IF NOT EXISTS cost_ledger (
+  profile_id  TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  cost_usd    REAL NOT NULL
+);
+
 -- Each version of a lesson: what made it, what it cost, and whether it was built.
 -- Its files are a snapshot in the project's versions/NNN/ folder.
 CREATE TABLE IF NOT EXISTS versions (
@@ -317,6 +324,8 @@ export function createStore(dataDir) {
          JOIN generations g ON g.id = v.generation_id WHERE g.profile_id = ? AND v.created_at >= ?`,
       )
       .get(profileId, month.getTime());
+    const gone = db.prepare('SELECT COALESCE(SUM(cost_usd), 0) AS usd FROM cost_ledger WHERE profile_id = ? AND created_at >= ?').get(profileId, month.getTime()).usd;
+    claude.usd += gone;
     const voices = db
       .prepare(
         `SELECT voice_id AS voiceId, COALESCE(MAX(voice_name), voice_id) AS name, COUNT(*) AS n
@@ -334,7 +343,10 @@ export function createStore(dataDir) {
     const month = new Date();
     month.setDate(1);
     month.setHours(0, 0, 0, 0);
-    const usd = db.prepare('SELECT COALESCE(SUM(cost_usd), 0) AS usd FROM versions WHERE created_at >= ?').get(month.getTime()).usd;
+    const since = month.getTime();
+    const usd =
+      db.prepare('SELECT COALESCE(SUM(cost_usd), 0) AS usd FROM versions WHERE created_at >= ?').get(since).usd +
+      db.prepare('SELECT COALESCE(SUM(cost_usd), 0) AS usd FROM cost_ledger WHERE created_at >= ?').get(since).usd;
     return Math.round(usd * 100) / 100;
   }
 
@@ -387,6 +399,9 @@ export function createStore(dataDir) {
     update,
     remove: (id) => {
       const owner = ownerStmt.get(id)?.profile_id;
+      if (owner !== undefined) {
+        db.prepare('INSERT INTO cost_ledger (profile_id, created_at, cost_usd) SELECT ?, created_at, cost_usd FROM versions WHERE generation_id = ? AND cost_usd > 0').run(owner, id);
+      }
       versions.removeAll(id);
       const n = deleteStmt.run(id).changes;
       if (n) events.emit('change', id, owner);
